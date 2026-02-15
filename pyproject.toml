@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dkmv"
+version = "0.1.0"
+description = "CLI tool that orchestrates AI agents to implement software features end-to-end"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.15.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "swe-rex>=1.4",
+    "rich>=13.0",
+]
+
+[project.scripts]
+dkmv = "dkmv.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=1.0",
+    "pytest-cov>=6.0",
+    "pytest-timeout>=2.3",
+    "syrupy>=4.0",
+    "polyfactory>=2.0",
+    "ruff>=0.8",
+    "mypy>=1.11",
+    "commitizen>=4.0",
+    "pre-commit>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["e2e: end-to-end tests requiring Docker and API key"]
+
+[tool.coverage.run]
+source = ["dkmv"]
+branch = true
+omit = ["*/tests/*", "dkmv/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    'if __name__ == "__main__":',
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.hatch.build.targets.wheel]
+packages = ["dkmv"]
+# NOTE: force-include for prompt.md files will be added in Phase 3
+# when component prompt templates are created.
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$version"
+major_version_zero = true
