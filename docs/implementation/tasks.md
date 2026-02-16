@@ -11,7 +11,7 @@
 ## Progress Summary
 
 - **Total tasks:** 90
-- **Completed:** 26
+- **Completed:** 54
 - **In progress:** 0
 - **Blocked:** 0
 
@@ -80,43 +80,43 @@
 
 ### Task 2.1: SandboxManager (F3)
 
-- [ ] T030 Create dkmv/core/models.py with SandboxConfig, BaseComponentConfig, BaseResult (depends: T019)
-- [ ] T031 Create dkmv/core/sandbox.py with SandboxManager class (depends: T030)
-- [ ] T032 Implement start() with SWE-ReX DockerDeployment (depends: T031)
-- [ ] T033 Implement execute() with run_in_session() (depends: T032)
-- [ ] T034 Implement stream_claude() — file-based streaming workaround (depends: T033)
-- [ ] T035 Implement stop() with keep_alive logic (depends: T032)
-- [ ] T036 [P] Implement write_file() and read_file() via SWE-ReX (depends: T032)
-- [ ] T037 [P] Implement env var forwarding and gh auth setup-git (depends: T032)
-- [ ] T038 Implement asyncio timeout wrapper (depends: T034)
-- [ ] T039 Write tests/unit/test_sandbox.py and tests/integration/test_sandbox.py (depends: T031-T038)
+- [x] T030 Create dkmv/core/models.py with SandboxConfig, BaseComponentConfig, BaseResult (depends: T019)
+- [x] T031 Create dkmv/core/sandbox.py with SandboxManager class (depends: T030)
+- [x] T032 Implement start() with SWE-ReX DockerDeployment (depends: T031)
+- [x] T033 Implement execute() with run_in_session() (depends: T032)
+- [x] T034 Implement stream_claude() — file-based streaming workaround (depends: T033)
+- [x] T035 Implement stop() with keep_alive logic (depends: T032)
+- [x] T036 [P] Implement write_file() and read_file() via SWE-ReX (depends: T032)
+- [x] T037 [P] Implement env var forwarding and gh auth setup-git (depends: T032)
+- [x] T038 Implement asyncio timeout wrapper (depends: T034)
+- [x] T039 Write tests/unit/test_sandbox.py and tests/integration/test_sandbox.py (depends: T031-T038)
 
 ### Task 2.2: RunManager (F4)
 
-- [ ] T040 Create dkmv/core/runner.py with RunManager class (depends: T030)
-- [ ] T041 Implement run ID generation and directory creation (depends: T040)
-- [ ] T042 Implement save_result(), append_stream() (depends: T041)
-- [ ] T043 Implement list_runs(), get_run() (depends: T041)
-- [ ] T044 Implement session_id tracking from stream-json result events (depends: T042)
-- [ ] T045 Write tests/unit/test_runner.py (depends: T040-T044)
+- [x] T040 Create dkmv/core/runner.py with RunManager class (depends: T030)
+- [x] T041 Implement run ID generation and directory creation (depends: T040)
+- [x] T042 Implement save_result(), append_stream() (depends: T041)
+- [x] T043 Implement list_runs(), get_run() (depends: T041)
+- [x] T044 Implement session_id tracking from stream-json result events (depends: T042)
+- [x] T045 Write tests/unit/test_runner.py (depends: T040-T044)
 
 ### Task 2.3: StreamParser (F5)
 
-- [ ] T046 Create dkmv/core/stream.py with StreamParser class (depends: T030)
-- [ ] T047 Implement line-by-line JSON parsing with event type handling (depends: T046)
-- [ ] T048 Implement terminal rendering with rich (depends: T047)
-- [ ] T049 Write tests/unit/test_stream.py (depends: T046-T048)
+- [x] T046 Create dkmv/core/stream.py with StreamParser class (depends: T030)
+- [x] T047 Implement line-by-line JSON parsing with event type handling (depends: T046)
+- [x] T048 Implement terminal rendering with rich (depends: T047)
+- [x] T049 Write tests/unit/test_stream.py (depends: T046-T048)
 
 ### Task 2.4: BaseComponent (F6)
 
-- [ ] T050 Create dkmv/components/__init__.py with component registry (depends: T030)
-- [ ] T051 Create dkmv/components/base.py with BaseComponent ABC (depends: T050, T031, T040, T046)
-- [ ] T052 Implement 12-step run() method (depends: T051)
-- [ ] T053 Implement _load_prompt_template() with importlib.resources (depends: T051)
-- [ ] T054 Implement workspace setup: clone, branch, gh auth, CLAUDE.md, .gitignore (depends: T052)
-- [ ] T055 Implement feedback synthesis transformation (depends: T052)
-- [ ] T056 Implement shared teardown: git add, commit, push (depends: T052)
-- [ ] T057 Write tests for BaseComponent lifecycle using mock component (depends: T050-T056)
+- [x] T050 Create dkmv/components/__init__.py with component registry (depends: T030)
+- [x] T051 Create dkmv/components/base.py with BaseComponent ABC (depends: T050, T031, T040, T046)
+- [x] T052 Implement 12-step run() method (depends: T051)
+- [x] T053 Implement _load_prompt_template() with importlib.resources (depends: T051)
+- [x] T054 Implement workspace setup: clone, branch, gh auth, CLAUDE.md, .gitignore (depends: T052)
+- [x] T055 Implement feedback synthesis transformation (depends: T052)
+- [x] T056 Implement shared teardown: git add, commit, push (depends: T052)
+- [x] T057 Write tests for BaseComponent lifecycle using mock component (depends: T050-T056)
 
 ---
 

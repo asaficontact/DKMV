@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
-# SWE-ReX API v1.4.0 types (not imported — runtime dep, not installed in Phase 0):
-#   swerex.deployment.docker.DockerDeployment
-#   swerex.runtime.abstract.BashAction, BashObservation, CreateBashSessionRequest
 
-
-# --- T005: SWE-ReX mock fixtures ---
+# --- T005/T031: SWE-ReX mock fixtures (aligned with actual API) ---
 
 
 @pytest.fixture
@@ -24,28 +20,31 @@ def mock_bash_observation() -> MagicMock:
 
 @pytest.fixture
 def mock_remote_runtime(mock_bash_observation: MagicMock) -> AsyncMock:
-    """Mock mirroring swerex RemoteRuntime interface.
-
-    TODO(T031): Align with actual RemoteRuntime API.
-    """
+    """Mock mirroring swerex RemoteRuntime interface."""
     runtime = AsyncMock()
     runtime.create_session = AsyncMock()
     runtime.run_in_session = AsyncMock(return_value=mock_bash_observation)
     runtime.write_file = AsyncMock()
-    runtime.read_file = AsyncMock(return_value="")
+
+    read_response = MagicMock()
+    read_response.content = ""
+    runtime.read_file = AsyncMock(return_value=read_response)
+
+    runtime.close_session = AsyncMock()
+    runtime.close = AsyncMock()
     return runtime
 
 
 @pytest.fixture
-def mock_docker_deployment(mock_remote_runtime: AsyncMock) -> AsyncMock:
-    """Mock mirroring swerex DockerDeployment with async context manager support.
-
-    TODO(T031): Align with actual DockerDeployment API.
-    """
-    deployment = AsyncMock()
-    deployment.__aenter__ = AsyncMock(return_value=deployment)
-    deployment.__aexit__ = AsyncMock(return_value=False)
+def mock_docker_deployment(mock_remote_runtime: AsyncMock) -> MagicMock:
+    """Mock mirroring swerex DockerDeployment with start/stop methods."""
+    deployment = MagicMock()
+    deployment.start = AsyncMock()
+    deployment.stop = AsyncMock()
     deployment.runtime = mock_remote_runtime
+
+    type(deployment).container_name = PropertyMock(return_value="dkmv-sandbox-abc123")
+
     return deployment
 
 

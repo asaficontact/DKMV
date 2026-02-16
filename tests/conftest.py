@@ -63,10 +63,7 @@ def make_config() -> Any:
 
 @pytest.fixture
 def mock_sandbox() -> AsyncMock:
-    """Mock sandbox with standard SandboxManager interface.
-
-    TODO(T031): Update to mock actual SandboxManager interface.
-    """
+    """Mock sandbox with standard SandboxManager interface."""
     sandbox = AsyncMock()
     sandbox.start = AsyncMock()
     sandbox.stop = AsyncMock()
