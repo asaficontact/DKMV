@@ -1,4 +1,5 @@
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -142,10 +143,6 @@ class TestBuildCommand:
 
 
 STUB_COMMANDS = [
-    ("dev", ["https://github.com/test/repo", "--prd", "prd.md"]),
-    ("qa", ["https://github.com/test/repo", "--branch", "feat", "--prd", "prd.md"]),
-    ("judge", ["https://github.com/test/repo", "--branch", "feat", "--prd", "prd.md"]),
-    ("docs", ["https://github.com/test/repo", "--branch", "feat"]),
     ("runs", []),
     ("show", ["run-123"]),
     ("attach", ["run-123"]),
@@ -159,3 +156,247 @@ class TestStubCommands:
         result = runner.invoke(app, [cmd, *args])
         assert result.exit_code == 0
         assert "Not yet implemented" in result.output
+
+
+class TestComponentCommandHelp:
+    """Verify the 4 component commands accept --help and show correct options."""
+
+    def test_dev_help(self) -> None:
+        result = runner.invoke(app, ["dev", "--help"])
+        assert result.exit_code == 0
+        assert "--prd" in result.output
+        assert "--branch" in result.output
+        assert "--feedback" in result.output
+        assert "--design-docs" in result.output
+        assert "--feature-name" in result.output
+
+    def test_qa_help(self) -> None:
+        result = runner.invoke(app, ["qa", "--help"])
+        assert result.exit_code == 0
+        assert "--branch" in result.output
+        assert "--prd" in result.output
+
+    def test_judge_help(self) -> None:
+        result = runner.invoke(app, ["judge", "--help"])
+        assert result.exit_code == 0
+        assert "--branch" in result.output
+        assert "--prd" in result.output
+
+    def test_docs_help(self) -> None:
+        result = runner.invoke(app, ["docs", "--help"])
+        assert result.exit_code == 0
+        assert "--branch" in result.output
+        assert "--create-pr" in result.output
+        assert "--pr-base" in result.output
+
+
+def _mock_config() -> MagicMock:
+    """Create a mock DKMVConfig with all needed attributes."""
+    cfg = MagicMock()
+    cfg.default_model = "claude-sonnet-4-20250514"
+    cfg.default_max_turns = 100
+    cfg.timeout_minutes = 30
+    cfg.max_budget_usd = None
+    cfg.output_dir = Path("./outputs")
+    cfg.anthropic_api_key = "sk-ant-test"
+    cfg.github_token = "ghp_test"
+    cfg.image_name = "dkmv-sandbox:latest"
+    cfg.memory_limit = "8g"
+    return cfg
+
+
+class TestNumericDefaults:
+    """Verify explicit zero values for numeric params are not swallowed by 'or' pattern."""
+
+    def test_dev_max_turns_zero_passes_through(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_component = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_component.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.components.dev.DevComponent", return_value=mock_component),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+        ):
+            result = runner.invoke(
+                app, ["dev", str(tmp_path), "--prd", str(prd), "--max-turns", "0"]
+            )
+
+        assert result.exit_code == 0
+        call_args = mock_component.run.call_args[0][0]
+        assert call_args.max_turns == 0
+
+    def test_qa_timeout_zero_passes_through(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_component = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_component.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.components.qa.QAComponent", return_value=mock_component),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+        ):
+            result = runner.invoke(
+                app,
+                ["qa", str(tmp_path), "--branch", "feat", "--prd", str(prd), "--timeout", "0"],
+            )
+
+        assert result.exit_code == 0
+        call_args = mock_component.run.call_args[0][0]
+        assert call_args.timeout_minutes == 0
+
+    def test_judge_max_budget_zero_passes_through(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_component = MagicMock()
+        mock_result = MagicMock(
+            run_id="r1",
+            status="completed",
+            error_message="",
+            verdict="pass",
+            reasoning="ok",
+            issues=[],
+            score=0,
+            confidence=0.0,
+        )
+        mock_component.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.components.judge.JudgeComponent", return_value=mock_component),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "judge",
+                    str(tmp_path),
+                    "--branch",
+                    "feat",
+                    "--prd",
+                    str(prd),
+                    "--max-budget-usd",
+                    "0",
+                ],
+            )
+
+        assert result.exit_code == 0
+        call_args = mock_component.run.call_args[0][0]
+        assert call_args.max_budget_usd == 0.0
+
+
+class TestComponentInvocations:
+    """Verify CLI commands wire up components correctly."""
+
+    def test_dev_invocation(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_component = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_component.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.components.dev.DevComponent", return_value=mock_component) as cls,
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+        ):
+            result = runner.invoke(app, ["dev", str(tmp_path), "--prd", str(prd)])
+
+        assert result.exit_code == 0
+        cls.assert_called_once()
+        mock_component.run.assert_awaited_once()
+
+    def test_qa_invocation(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_component = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_component.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.components.qa.QAComponent", return_value=mock_component) as cls,
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+        ):
+            result = runner.invoke(
+                app, ["qa", str(tmp_path), "--branch", "feat", "--prd", str(prd)]
+            )
+
+        assert result.exit_code == 0
+        cls.assert_called_once()
+        mock_component.run.assert_awaited_once()
+
+    def test_judge_invocation(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_component = MagicMock()
+        mock_result = MagicMock(
+            run_id="r1",
+            status="completed",
+            error_message="",
+            verdict="pass",
+            reasoning="All good",
+            issues=[],
+            score=90,
+            confidence=0.9,
+        )
+        mock_component.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.components.judge.JudgeComponent", return_value=mock_component) as cls,
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+        ):
+            result = runner.invoke(
+                app, ["judge", str(tmp_path), "--branch", "feat", "--prd", str(prd)]
+            )
+
+        assert result.exit_code == 0
+        cls.assert_called_once()
+        mock_component.run.assert_awaited_once()
+
+    def test_docs_invocation(self, tmp_path: Path) -> None:
+        mock_component = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="", pr_url="")
+        mock_component.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.components.docs.DocsComponent", return_value=mock_component) as cls,
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+        ):
+            result = runner.invoke(app, ["docs", str(tmp_path), "--branch", "feat"])
+
+        assert result.exit_code == 0
+        cls.assert_called_once()
+        mock_component.run.assert_awaited_once()

@@ -8,6 +8,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Generic, TypeVar
 
+from pydantic_core import PydanticUndefined
+
 from dkmv.config import DKMVConfig
 from dkmv.core.models import BaseComponentConfig, BaseResult, ComponentName, SandboxConfig
 from dkmv.core.runner import RunManager
@@ -45,8 +47,21 @@ class BaseComponent(ABC, Generic[C, R]):
     @abstractmethod
     def parse_result(self, raw_result: dict[str, Any], config: C) -> R: ...
 
+    async def pre_workspace_setup(self, session: SandboxSession, config: C) -> None:
+        """Hook called before branch checkout. Use to derive/modify config.branch."""
+
     async def setup_workspace(self, session: SandboxSession, config: C) -> None:
         """Hook for component-specific workspace setup. Default is no-op."""
+
+    async def collect_artifacts(
+        self, session: SandboxSession, config: C, result_event: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Hook to read artifacts from container after Claude completes.
+        Returns dict passed to parse_result() to populate component-specific fields."""
+        return {}
+
+    async def post_teardown(self, session: SandboxSession, config: C, result: R) -> None:
+        """Hook called after git teardown. Use for PR creation, artifact capture, etc."""
 
     def _load_prompt_template(self) -> str:
         package = f"dkmv.components.{self.name}"
@@ -88,6 +103,9 @@ class BaseComponent(ABC, Generic[C, R]):
         if clone_result.exit_code != 0:
             msg = f"git clone failed (exit {clone_result.exit_code}): {clone_result.output[:500]}"
             raise RuntimeError(msg)
+
+        # Pre-workspace hook (e.g., branch derivation)
+        await self.pre_workspace_setup(session, config)
 
         # Branch: checkout existing or create new
         if config.branch:
@@ -183,17 +201,34 @@ class BaseComponent(ABC, Generic[C, R]):
     @staticmethod
     def synthesize_feedback(verdict: dict[str, Any]) -> str:
         """Transform Judge verdict into developer feedback brief."""
-        items = verdict.get("items", [])
+        issues = verdict.get("issues", [])
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        sorted_items = sorted(items, key=lambda x: severity_order.get(x.get("severity", "low"), 99))
+        sorted_issues = sorted(
+            issues, key=lambda x: severity_order.get(x.get("severity", "low"), 99)
+        )
 
         lines = ["# Feedback from Judge\n"]
-        for item in sorted_items:
-            severity = item.get("severity", "unknown").upper()
-            message = item.get("message", "")
-            lines.append(f"- **[{severity}]** {message}")
+        for issue in sorted_issues:
+            severity = issue.get("severity", "unknown").upper()
+            description = issue.get("description", "")
+            lines.append(f"- **[{severity}]** {description}")
 
         return "\n".join(lines)
+
+    def _merge_artifact_fields(self, target: R, source: R) -> None:
+        """Merge component-specific fields from source into target.
+        Skips BaseResult fields (run_id, status, cost, etc.)."""
+        base_fields = set(BaseResult.model_fields.keys())
+        source_fields = type(source).model_fields
+        for field_name in source_fields:
+            if field_name not in base_fields:
+                value = getattr(source, field_name)
+                field_info = source_fields[field_name]
+                default = field_info.default
+                if default is PydanticUndefined and field_info.default_factory is not None:
+                    default = field_info.default_factory()  # type: ignore[call-arg]
+                if value != default:
+                    setattr(target, field_name, value)
 
     async def run(self, config: C) -> R:
         # 1. Validate inputs
@@ -261,8 +296,20 @@ class BaseComponent(ABC, Generic[C, R]):
             result.num_turns = result_event.get("num_turns", 0)
             result.session_id = result_event.get("session_id", "")
 
+            # 8.5. Collect container artifacts
+            raw_artifacts = await self.collect_artifacts(session, config, result_event)
+            if raw_artifacts:
+                enriched = self.parse_result(raw_artifacts, config)
+                self._merge_artifact_fields(result, enriched)
+
+            # Update branch on result (may have been derived in pre_workspace_setup)
+            result.branch = config.branch or ""
+
             # 9. Git teardown
             await self._teardown_git(session, config)
+
+            # 9.5. Post-teardown hook
+            await self.post_teardown(session, config, result)
 
             # 10. Mark completed
             result.status = "completed"

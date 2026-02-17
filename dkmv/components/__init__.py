@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -8,6 +9,26 @@ if TYPE_CHECKING:
     from dkmv.components.base import BaseComponent
 
 _REGISTRY: dict[str, type[BaseComponent]] = {}
+_DISCOVERED = False
+
+_COMPONENT_MODULES = [
+    "dkmv.components.dev",
+    "dkmv.components.qa",
+    "dkmv.components.judge",
+    "dkmv.components.docs",
+]
+
+
+def _discover() -> None:
+    global _DISCOVERED  # noqa: PLW0603
+    if _DISCOVERED:
+        return
+    for mod in _COMPONENT_MODULES:
+        try:
+            importlib.import_module(mod)
+        except ImportError:
+            pass
+    _DISCOVERED = True
 
 
 def register_component(name: str) -> Callable[[type[BaseComponent]], type[BaseComponent]]:
@@ -21,6 +42,7 @@ def register_component(name: str) -> Callable[[type[BaseComponent]], type[BaseCo
 
 
 def get_component(name: str) -> type[BaseComponent]:
+    _discover()
     try:
         return _REGISTRY[name]
     except KeyError:
@@ -30,4 +52,5 @@ def get_component(name: str) -> type[BaseComponent]:
 
 
 def list_components() -> list[str]:
+    _discover()
     return sorted(_REGISTRY)

@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.console import Console
 
 from dkmv.config import load_config
+from dkmv.utils import async_command
 
 app = typer.Typer(
     help="DKMV — AI agent orchestrator for software development.", no_args_is_help=True
@@ -13,6 +15,8 @@ app = typer.Typer(
 
 _verbose: bool = False
 _dry_run: bool = False
+
+console = Console()
 
 
 @app.callback()
@@ -76,52 +80,243 @@ def build(
 
 
 @app.command()
-def dev(
+@async_command
+async def dev(
     repo: Annotated[str, typer.Argument(help="GitHub repository URL or local path.")],
-    prd: Annotated[str, typer.Option("--prd", help="Path to the PRD file.")],
+    prd: Annotated[Path, typer.Option("--prd", help="Path to the PRD file.")],
     branch: Annotated[str | None, typer.Option("--branch", help="Branch name to use.")] = None,
+    feedback: Annotated[
+        Path | None, typer.Option("--feedback", help="Path to feedback JSON from previous run.")
+    ] = None,
+    design_docs: Annotated[
+        Path | None, typer.Option("--design-docs", help="Path to design documents directory.")
+    ] = None,
+    feature_name: Annotated[
+        str | None, typer.Option("--feature-name", help="Feature name for tracking.")
+    ] = None,
     model: Annotated[str | None, typer.Option("--model", help="Model to use for this run.")] = None,
     max_turns: Annotated[
         int | None, typer.Option("--max-turns", help="Maximum agent turns.")
     ] = None,
-    design_docs: Annotated[
-        list[str] | None, typer.Option("--design-doc", help="Design document paths.")
+    max_budget_usd: Annotated[
+        float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
     ] = None,
+    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    keep_alive: Annotated[
+        bool, typer.Option("--keep-alive", help="Keep container running after completion.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Dev agent to implement a feature."""
-    typer.echo("Not yet implemented.")
+    from dkmv.components.dev import DevComponent, DevConfig
+    from dkmv.core.runner import RunManager
+    from dkmv.core.sandbox import SandboxManager
+    from dkmv.core.stream import StreamParser
+
+    config_obj = load_config()
+    dev_config = DevConfig(
+        repo=repo,
+        prd_path=prd,
+        branch=branch,
+        feedback_path=feedback,
+        design_docs_path=design_docs,
+        feature_name=feature_name or "",
+        model=model or config_obj.default_model,
+        max_turns=max_turns if max_turns is not None else config_obj.default_max_turns,
+        timeout_minutes=timeout if timeout is not None else config_obj.timeout_minutes,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
+        max_budget_usd=max_budget_usd if max_budget_usd is not None else config_obj.max_budget_usd,
+    )
+    sandbox = SandboxManager()
+    run_mgr = RunManager(output_dir=config_obj.output_dir)
+    parser = StreamParser(verbose=verbose or _verbose)
+    component = DevComponent(
+        global_config=config_obj,
+        sandbox=sandbox,
+        run_manager=run_mgr,
+        stream_parser=parser,
+    )
+    result = await component.run(dev_config)
+    console.print(f"Run {result.run_id} completed with status: {result.status}")
+    if result.error_message:
+        console.print(f"Error: {result.error_message}", style="bold red")
 
 
 @app.command()
-def qa(
+@async_command
+async def qa(
     repo: Annotated[str, typer.Argument(help="GitHub repository URL or local path.")],
     branch: Annotated[str, typer.Option("--branch", help="Branch to QA.")],
-    prd: Annotated[str, typer.Option("--prd", help="Path to the PRD file.")],
-    model: Annotated[str | None, typer.Option("--model", help="Model to use for this run.")] = None,
+    prd: Annotated[Path, typer.Option("--prd", help="Path to the PRD file.")],
+    model: Annotated[str | None, typer.Option("--model", help="Model to use.")] = None,
+    max_turns: Annotated[
+        int | None, typer.Option("--max-turns", help="Maximum agent turns.")
+    ] = None,
+    max_budget_usd: Annotated[
+        float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
+    ] = None,
+    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    keep_alive: Annotated[
+        bool, typer.Option("--keep-alive", help="Keep container running after completion.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the QA agent to review and test a branch."""
-    typer.echo("Not yet implemented.")
+    from dkmv.components.qa import QAComponent, QAConfig
+    from dkmv.core.runner import RunManager
+    from dkmv.core.sandbox import SandboxManager
+    from dkmv.core.stream import StreamParser
+
+    config_obj = load_config()
+    qa_config = QAConfig(
+        repo=repo,
+        branch=branch,
+        prd_path=prd,
+        model=model or config_obj.default_model,
+        max_turns=max_turns if max_turns is not None else config_obj.default_max_turns,
+        timeout_minutes=timeout if timeout is not None else config_obj.timeout_minutes,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
+        max_budget_usd=max_budget_usd if max_budget_usd is not None else config_obj.max_budget_usd,
+    )
+    sandbox = SandboxManager()
+    run_mgr = RunManager(output_dir=config_obj.output_dir)
+    parser = StreamParser(verbose=verbose or _verbose)
+    component = QAComponent(
+        global_config=config_obj,
+        sandbox=sandbox,
+        run_manager=run_mgr,
+        stream_parser=parser,
+    )
+    result = await component.run(qa_config)
+    console.print(f"Run {result.run_id} completed with status: {result.status}")
+    if result.error_message:
+        console.print(f"Error: {result.error_message}", style="bold red")
 
 
 @app.command()
-def judge(
+@async_command
+async def judge(
     repo: Annotated[str, typer.Argument(help="GitHub repository URL or local path.")],
     branch: Annotated[str, typer.Option("--branch", help="Branch to judge.")],
-    prd: Annotated[str, typer.Option("--prd", help="Path to the PRD file.")],
-    model: Annotated[str | None, typer.Option("--model", help="Model to use for this run.")] = None,
+    prd: Annotated[Path, typer.Option("--prd", help="Path to the PRD file.")],
+    model: Annotated[str | None, typer.Option("--model", help="Model to use.")] = None,
+    max_turns: Annotated[
+        int | None, typer.Option("--max-turns", help="Maximum agent turns.")
+    ] = None,
+    max_budget_usd: Annotated[
+        float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
+    ] = None,
+    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    keep_alive: Annotated[
+        bool, typer.Option("--keep-alive", help="Keep container running after completion.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Judge agent to evaluate implementation quality."""
-    typer.echo("Not yet implemented.")
+    from dkmv.components.judge import JudgeComponent, JudgeConfig
+    from dkmv.core.runner import RunManager
+    from dkmv.core.sandbox import SandboxManager
+    from dkmv.core.stream import StreamParser
+
+    config_obj = load_config()
+    judge_config = JudgeConfig(
+        repo=repo,
+        branch=branch,
+        prd_path=prd,
+        model=model or config_obj.default_model,
+        max_turns=max_turns if max_turns is not None else config_obj.default_max_turns,
+        timeout_minutes=timeout if timeout is not None else config_obj.timeout_minutes,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
+        max_budget_usd=max_budget_usd if max_budget_usd is not None else config_obj.max_budget_usd,
+    )
+    sandbox = SandboxManager()
+    run_mgr = RunManager(output_dir=config_obj.output_dir)
+    parser = StreamParser(verbose=verbose or _verbose)
+    component = JudgeComponent(
+        global_config=config_obj,
+        sandbox=sandbox,
+        run_manager=run_mgr,
+        stream_parser=parser,
+    )
+    result = await component.run(judge_config)
+
+    # Verdict display
+    if result.verdict == "pass":
+        console.print("VERDICT: PASS", style="bold green")
+    else:
+        console.print("VERDICT: FAIL", style="bold red")
+    console.print(f"Reasoning: {result.reasoning}")
+    if result.score:
+        console.print(f"Score: {result.score}/100")
+    if result.confidence:
+        console.print(f"Confidence: {result.confidence:.0%}")
+    for issue in result.issues:
+        severity = issue.severity.upper()
+        console.print(f"  [{severity}] {issue.description}")
+
+    if result.error_message:
+        console.print(f"Error: {result.error_message}", style="bold red")
 
 
 @app.command()
-def docs(
+@async_command
+async def docs(
     repo: Annotated[str, typer.Argument(help="GitHub repository URL or local path.")],
     branch: Annotated[str, typer.Option("--branch", help="Branch to document.")],
-    model: Annotated[str | None, typer.Option("--model", help="Model to use for this run.")] = None,
+    create_pr: Annotated[
+        bool, typer.Option("--create-pr", help="Create a PR with documentation changes.")
+    ] = False,
+    pr_base: Annotated[str, typer.Option("--pr-base", help="Base branch for PR.")] = "main",
+    model: Annotated[str | None, typer.Option("--model", help="Model to use.")] = None,
+    max_turns: Annotated[
+        int | None, typer.Option("--max-turns", help="Maximum agent turns.")
+    ] = None,
+    max_budget_usd: Annotated[
+        float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
+    ] = None,
+    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    keep_alive: Annotated[
+        bool, typer.Option("--keep-alive", help="Keep container running after completion.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Docs agent to generate documentation."""
-    typer.echo("Not yet implemented.")
+    from dkmv.components.docs import DocsComponent, DocsConfig
+    from dkmv.core.runner import RunManager
+    from dkmv.core.sandbox import SandboxManager
+    from dkmv.core.stream import StreamParser
+
+    config_obj = load_config()
+    docs_config = DocsConfig(
+        repo=repo,
+        branch=branch,
+        create_pr=create_pr,
+        pr_base=pr_base,
+        model=model or config_obj.default_model,
+        max_turns=max_turns if max_turns is not None else config_obj.default_max_turns,
+        timeout_minutes=timeout if timeout is not None else config_obj.timeout_minutes,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
+        max_budget_usd=max_budget_usd if max_budget_usd is not None else config_obj.max_budget_usd,
+    )
+    sandbox = SandboxManager()
+    run_mgr = RunManager(output_dir=config_obj.output_dir)
+    parser = StreamParser(verbose=verbose or _verbose)
+    component = DocsComponent(
+        global_config=config_obj,
+        sandbox=sandbox,
+        run_manager=run_mgr,
+        stream_parser=parser,
+    )
+    result = await component.run(docs_config)
+    console.print(f"Run {result.run_id} completed with status: {result.status}")
+    if result.pr_url:
+        console.print(f"PR created: {result.pr_url}", style="bold green")
+    if result.error_message:
+        console.print(f"Error: {result.error_message}", style="bold red")
 
 
 @app.command()

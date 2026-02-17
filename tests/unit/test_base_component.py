@@ -154,7 +154,7 @@ class TestRunLifecycle:
         self, component: MockComponent, config: MockConfig
     ) -> None:
         result = await component.run(config)
-        run_dir = component.run_manager._runs_dir / result.run_id
+        run_dir = component.run_manager._run_dir(result.run_id)
         assert run_dir.exists()
         assert (run_dir / "config.json").exists()
 
@@ -168,7 +168,7 @@ class TestRunLifecycle:
         assert result.status == "failed"
         assert "Container failed" in result.error_message
         # Result should still be saved
-        result_file = component.run_manager._runs_dir / result.run_id / "result.json"
+        result_file = component.run_manager._run_dir(result.run_id) / "result.json"
         assert result_file.exists()
 
     async def test_timeout_saves_timed_out_result(
@@ -199,7 +199,7 @@ class TestRunLifecycle:
         self, component: MockComponent, config: MockConfig
     ) -> None:
         result = await component.run(config)
-        prompt_file = component.run_manager._runs_dir / result.run_id / "prompt.md"
+        prompt_file = component.run_manager._run_dir(result.run_id) / "prompt.md"
         assert prompt_file.exists()
         assert "user-auth" in prompt_file.read_text()
 
@@ -207,7 +207,7 @@ class TestRunLifecycle:
         self, component: MockComponent, config: MockConfig
     ) -> None:
         result = await component.run(config)
-        stream_file = component.run_manager._runs_dir / result.run_id / "stream.jsonl"
+        stream_file = component.run_manager._run_dir(result.run_id) / "stream.jsonl"
         assert stream_file.exists()
         lines = stream_file.read_text().strip().splitlines()
         assert len(lines) == 2  # assistant + result events
@@ -318,10 +318,10 @@ class TestGitTeardown:
 class TestFeedbackSynthesis:
     def test_sorts_by_severity(self) -> None:
         verdict = {
-            "items": [
-                {"severity": "low", "message": "Minor style issue"},
-                {"severity": "critical", "message": "Security vulnerability"},
-                {"severity": "medium", "message": "Missing tests"},
+            "issues": [
+                {"severity": "low", "description": "Minor style issue"},
+                {"severity": "critical", "description": "Security vulnerability"},
+                {"severity": "medium", "description": "Missing tests"},
             ]
         }
         feedback = BaseComponent.synthesize_feedback(verdict)
@@ -332,7 +332,7 @@ class TestFeedbackSynthesis:
         assert "LOW" in bullets[2]
 
     def test_empty_verdict(self) -> None:
-        feedback = BaseComponent.synthesize_feedback({"items": []})
+        feedback = BaseComponent.synthesize_feedback({"issues": []})
         assert "Feedback from Judge" in feedback
 
 
@@ -376,9 +376,49 @@ class TestComponentRegistry:
 
 
 class TestLoadPromptTemplate:
-    def test_missing_template_raises(self, component: MockComponent) -> None:
+    def test_existing_template_loads(self, component: MockComponent) -> None:
+        # MockComponent.name == "dev" which now has a real template
+        content = component._load_prompt_template()
+        assert "senior software engineer" in content
+
+    def test_missing_template_raises(
+        self,
+        global_config: DKMVConfig,
+        mock_sandbox: AsyncMock,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+    ) -> None:
+        import importlib.resources
+
+        class NoTemplateComponent(BaseComponent[MockConfig, MockResult]):
+            @property
+            def name(self) -> ComponentName:
+                return "dev"
+
+            def build_prompt(self, config: MockConfig) -> str:
+                return ""
+
+            def parse_result(self, raw_result: dict[str, Any], config: MockConfig) -> MockResult:
+                return MockResult(run_id="", component="dev")
+
+            def _load_prompt_template(self) -> str:
+                # Override to look in nonexistent package
+                try:
+                    files = importlib.resources.files("dkmv.components.nonexistent")
+                    prompt_file = files / "prompt.md"
+                    return prompt_file.read_text(encoding="utf-8")  # type: ignore[union-attr]
+                except (ModuleNotFoundError, FileNotFoundError, TypeError) as e:
+                    msg = "Prompt template not found for component 'nonexistent'"
+                    raise FileNotFoundError(msg) from e
+
+        comp = NoTemplateComponent(
+            global_config=global_config,
+            sandbox=mock_sandbox,
+            run_manager=run_manager,
+            stream_parser=stream_parser,
+        )
         with pytest.raises(FileNotFoundError, match="Prompt template not found"):
-            component._load_prompt_template()
+            comp._load_prompt_template()
 
 
 class TestBuildSandboxConfig:
@@ -629,3 +669,164 @@ class TestGitCloneExitCodeCheck:
         result = await component.run(config)
         assert result.status == "failed"
         assert "git commit failed" in result.error_message
+
+
+class TestPreWorkspaceSetup:
+    async def test_pre_workspace_setup_called_before_checkout(
+        self,
+        global_config: DKMVConfig,
+        mock_sandbox: AsyncMock,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+    ) -> None:
+        """Verify pre_workspace_setup runs before branch checkout."""
+        call_order: list[str] = []
+
+        class OrderTrackingComponent(MockComponent):
+            async def pre_workspace_setup(self, session: Any, config: Any) -> None:
+                call_order.append("pre_workspace_setup")
+                config.branch = "feature/derived"
+
+        async def tracking_execute(*args: Any, **kwargs: Any) -> CommandResult:
+            cmd = args[1] if len(args) > 1 else kwargs.get("command", "")
+            if "checkout" in str(cmd):
+                call_order.append("checkout")
+            return CommandResult(output="", exit_code=0)
+
+        mock_sandbox.execute = AsyncMock(side_effect=tracking_execute)
+
+        comp = OrderTrackingComponent(
+            global_config=global_config,
+            sandbox=mock_sandbox,
+            run_manager=run_manager,
+            stream_parser=stream_parser,
+        )
+        config = MockConfig(repo="https://github.com/test/repo.git", timeout_minutes=5)
+        await comp.run(config)
+
+        assert "pre_workspace_setup" in call_order
+        assert "checkout" in call_order
+        assert call_order.index("pre_workspace_setup") < call_order.index("checkout")
+
+    async def test_pre_workspace_setup_default_is_noop(
+        self, component: MockComponent, config: MockConfig
+    ) -> None:
+        result = await component.run(config)
+        assert result.status == "completed"
+
+
+class TestCollectArtifactsHook:
+    async def test_collect_artifacts_default_returns_empty(
+        self, component: MockComponent, config: MockConfig
+    ) -> None:
+        result = await component.run(config)
+        assert result.status == "completed"
+        # custom_data stays default since no artifacts
+        assert result.custom_data == ""
+
+    async def test_collect_artifacts_enriches_result(
+        self,
+        global_config: DKMVConfig,
+        mock_sandbox: AsyncMock,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+    ) -> None:
+        class ArtifactComponent(MockComponent):
+            async def collect_artifacts(
+                self, session: Any, config: Any, result_event: dict[str, Any]
+            ) -> dict[str, Any]:
+                return {"custom": "artifact-data"}
+
+        comp = ArtifactComponent(
+            global_config=global_config,
+            sandbox=mock_sandbox,
+            run_manager=run_manager,
+            stream_parser=stream_parser,
+        )
+        config = MockConfig(repo="https://github.com/test/repo.git", timeout_minutes=5)
+        result = await comp.run(config)
+        assert result.status == "completed"
+        assert result.custom_data == "artifact-data"
+
+
+class TestPostTeardownHook:
+    async def test_post_teardown_called_after_git_teardown(
+        self,
+        global_config: DKMVConfig,
+        mock_sandbox: AsyncMock,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+    ) -> None:
+        call_order: list[str] = []
+
+        class PostTeardownComponent(MockComponent):
+            async def post_teardown(self, session: Any, config: Any, result: Any) -> None:
+                call_order.append("post_teardown")
+
+        async def tracking_execute(*args: Any, **kwargs: Any) -> CommandResult:
+            cmd = args[1] if len(args) > 1 else kwargs.get("command", "")
+            if "git add -A" in str(cmd):
+                call_order.append("git_teardown")
+            return CommandResult(output="", exit_code=0)
+
+        mock_sandbox.execute = AsyncMock(side_effect=tracking_execute)
+
+        comp = PostTeardownComponent(
+            global_config=global_config,
+            sandbox=mock_sandbox,
+            run_manager=run_manager,
+            stream_parser=stream_parser,
+        )
+        config = MockConfig(repo="https://github.com/test/repo.git", timeout_minutes=5)
+        await comp.run(config)
+
+        assert "git_teardown" in call_order
+        assert "post_teardown" in call_order
+        assert call_order.index("git_teardown") < call_order.index("post_teardown")
+
+    async def test_post_teardown_default_is_noop(
+        self, component: MockComponent, config: MockConfig
+    ) -> None:
+        result = await component.run(config)
+        assert result.status == "completed"
+
+
+class TestMergeArtifactFields:
+    def test_merges_component_specific_fields(self, component: MockComponent) -> None:
+        target = MockResult(run_id="run1", component="dev", custom_data="")
+        source = MockResult(run_id="", component="dev", custom_data="merged-value")
+        component._merge_artifact_fields(target, source)
+        assert target.custom_data == "merged-value"
+        assert target.run_id == "run1"  # Base field not overwritten
+
+    def test_skips_default_values(self, component: MockComponent) -> None:
+        target = MockResult(run_id="run1", component="dev", custom_data="original")
+        source = MockResult(run_id="", component="dev", custom_data="")  # default
+        component._merge_artifact_fields(target, source)
+        assert target.custom_data == "original"  # Not overwritten with default
+
+
+class TestMergeArtifactFieldsDefaultFactory:
+    def test_empty_list_does_not_overwrite(self, component: MockComponent) -> None:
+        """default_factory=list fields: empty list should not overwrite existing."""
+        from pydantic import Field
+
+        class ListResult(BaseResult):
+            items: list[str] = Field(default_factory=list)
+
+        target = ListResult(run_id="run1", component="dev", items=["a", "b"])
+        source = ListResult(run_id="", component="dev", items=[])
+        component._merge_artifact_fields(target, source)
+        assert target.items == ["a", "b"]  # Not overwritten with empty list
+
+    def test_non_empty_list_overwrites(self, component: MockComponent) -> None:
+        """default_factory=list fields: non-empty list should overwrite."""
+        from pydantic import Field
+
+        class ListResult(BaseResult):
+            items: list[str] = Field(default_factory=list)
+
+        target = ListResult(run_id="run1", component="dev", items=[])
+        source = ListResult(run_id="", component="dev", items=["x", "y"])
+        component._merge_artifact_fields(target, source)
+        assert target.items == ["x", "y"]
