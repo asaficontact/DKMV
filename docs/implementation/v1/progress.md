@@ -2,11 +2,12 @@
 
 ## Current Status
 
-- **Phase:** 2 (complete)
-- **Tasks completed:** 54 / 90
+- **Phase:** 4 (complete) — all phases implemented
+- **Tasks completed:** 89 / 90
 <!-- Task count from tasks.md. Update when tasks are added/removed. -->
-- **Test coverage:** 93% (167 tests passing)
-- **Last session:** 2026-02-16
+- **Test coverage:** 93.89% (296 tests passing, 1 skipped)
+- **Last session:** 2026-02-17
+- **Remaining:** T029 (CI pipeline verification — requires push to GitHub)
 
 ## Session Log
 
@@ -146,6 +147,60 @@
 **Coverage:** 93.48% (167 tests, 644 statements, 154 branches)
 **Next:** Phase 3 — Components (T060-T089)
 
+### Session 9 — 2026-02-17
+
+**Goal:** Implement Phase 3 — Components (T060-T088)
+**Completed:** T060-T088 (29 tasks) — all 4 components + prompt snapshot tests
+**Blockers:** None
+**Changes:**
+- Created `dkmv/components/dev/` subpackage — DevComponent, DevConfig, DevResult, prompt.md
+  - Eval criteria stripping from PRD for Dev prompt
+  - Design docs handling (`--design-docs` flag)
+  - Feedback injection from synthesized brief
+  - Plan-first prompt approach (`.dkmv/plan.md`)
+  - Fresh branch vs existing branch logic
+- Created `dkmv/components/qa/` subpackage — QAComponent, QAConfig, QAResult, prompt.md
+  - Full PRD including eval criteria passed to QA
+  - QA report artifact collection from `.dkmv/qa_report.json`
+- Created `dkmv/components/judge/` subpackage — JudgeComponent, JudgeConfig, JudgeResult, prompt.md
+  - Full PRD including eval criteria passed to Judge
+  - Verdict artifact collection from `.dkmv/verdict.json`
+  - Structured result with PrdRequirement, JudgeIssue models
+  - Confidence score and pass/fail verdict
+- Created `dkmv/components/docs/` subpackage — DocsComponent, DocsConfig, DocsResult, prompt.md
+  - PR creation via `gh pr create` with shell injection protection
+  - No PRD required (documentation from codebase analysis)
+- Registered all 4 CLI commands in `dkmv/cli.py`: `dkmv dev`, `dkmv qa`, `dkmv judge`, `dkmv docs`
+- Created syrupy snapshot tests for all 4 prompt templates
+- Created unit tests for all 4 components: test_dev.py, test_qa.py, test_judge.py, test_docs.py
+- Updated `pyproject.toml` hatch force-include for all 4 prompt.md files
+**Coverage:** 93.56% (268 tests)
+**Next:** Phase 4 — Utilities (T090-T095)
+
+### Session 10 — 2026-02-17
+
+**Goal:** Implement Phase 4 — Utilities / Run Management Commands (T090-T095)
+**Completed:** T090-T095 (6 tasks)
+**Blockers:** None
+**Discoveries:**
+- CLI commands use lazy imports (`from dkmv.core.runner import RunManager` inside function body), so test mocking must patch at source (`dkmv.core.runner.RunManager`) not at import location
+- Adding container name persistence to `base.py` caused 48 test failures across all component test files because `AsyncMock(spec=SandboxManager)` returned MagicMock for `get_container_name()`, which was truthy and passed to `Path.write_text()` — fixed by adding explicit mock return values in all 5 mock_sandbox fixtures
+**Changes:**
+- `dkmv/core/runner.py` — Added `save_container_name()` and `get_container_name()` methods for container name persistence via `container.txt`; added `status` filter parameter to `list_runs()`
+- `dkmv/components/base.py` — Added container name persistence after sandbox start (step 3.5 in lifecycle)
+- `dkmv/cli.py` — Replaced 4 stub commands with full implementations:
+  - `dkmv runs` — Rich table output with `--component`, `--status`, `--limit` filters
+  - `dkmv show <run-id>` — Detailed run view with colored status, all RunDetail fields
+  - `dkmv attach <run-id>` — Docker container inspection + `docker exec -it` passthrough
+  - `dkmv stop <run-id>` — Idempotent container stop + remove with helpful messages
+- Added `_format_relative_time()` and `_format_duration()` formatting helpers
+- Created `tests/unit/test_run_commands.py` — 24 tests covering all 4 commands + formatting helpers
+- Updated `tests/unit/test_runner.py` — 4 new tests for container name persistence + status filter
+- Removed `TestStubCommands` from `tests/unit/test_cli.py`
+- Updated 5 mock_sandbox fixtures to include `get_container_name` mock
+**Coverage:** 93.89% (296 tests passing, 1 skipped)
+**Quality gates:** All green — ruff clean, mypy clean, 296 tests passing
+
 ## Metrics
 
 | Phase | Total Tasks | Done | % |
@@ -153,10 +208,15 @@
 | Phase 0 | 7 | 7 | 100% |
 | Phase 1 | 20 | 19 | 95% |
 | Phase 2 | 28 | 28 | 100% |
-| Phase 3 | 29 | 0 | 0% |
-| Phase 4 | 6 | 0 | 0% |
-| **Total** | **90** | **54** | **60%** |
+| Phase 3 | 29 | 29 | 100% |
+| Phase 4 | 6 | 6 | 100% |
+| **Total** | **90** | **89** | **99%** |
+
+**Note:** T029 (verify CI pipeline passes) is the only remaining task. It requires pushing to GitHub and verifying the CI workflow runs successfully. All code and tests are complete.
 
 ## Research Notes
 
-[Space for documenting research findings, library discoveries, alternative approaches considered]
+- Alpine-based Docker images cause subtle breakage with native Node modules (musl libc incompatibility) — node:20-bookworm chosen over Alpine for reliability
+- SWE-ReX `DockerDeployment` uses explicit `start()`/`stop()` methods, not async context managers
+- Claude Code native installer has an OOM bug in Docker (issue #22536) — npm install is more reliable
+- `pipx` is required for SWE-ReX installation to comply with PEP 668 (externally managed Python environments on Debian Bookworm)

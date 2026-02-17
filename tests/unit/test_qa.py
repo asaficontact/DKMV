@@ -45,6 +45,7 @@ def mock_sandbox() -> AsyncMock:
     sandbox.read_file = AsyncMock(return_value="")
     sandbox.stop = AsyncMock()
     sandbox.setup_git_auth = AsyncMock(return_value=CommandResult(output="", exit_code=0))
+    sandbox.get_container_name = MagicMock(return_value="test-container")
 
     async def mock_stream(**kwargs: Any) -> Any:
         yield {

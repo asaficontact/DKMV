@@ -1,10 +1,12 @@
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from dkmv.config import load_config
 from dkmv.utils import async_command
@@ -17,6 +19,26 @@ _verbose: bool = False
 _dry_run: bool = False
 
 console = Console()
+
+
+def _format_relative_time(dt: datetime) -> str:
+    delta = datetime.now(UTC) - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    return f"{seconds // 86400}d ago"
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    remaining = int(seconds % 60)
+    return f"{minutes}m {remaining}s"
 
 
 @app.callback()
@@ -320,9 +342,58 @@ async def docs(
 
 
 @app.command()
-def runs() -> None:
+def runs(
+    component: Annotated[
+        str | None, typer.Option("--component", help="Filter by component (dev|qa|judge|docs).")
+    ] = None,
+    status: Annotated[str | None, typer.Option("--status", help="Filter by status.")] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Max number of runs to show.")] = 20,
+) -> None:
     """List all DKMV runs."""
-    typer.echo("Not yet implemented.")
+    from dkmv.core.runner import RunManager
+
+    config = load_config(require_api_key=False)
+    run_mgr = RunManager(output_dir=config.output_dir)
+
+    summaries = run_mgr.list_runs(
+        component=component,  # type: ignore[arg-type]
+        status=status,  # type: ignore[arg-type]
+        limit=limit,
+    )
+
+    if not summaries:
+        console.print("No runs found.", style="dim")
+        return
+
+    table = Table(title="DKMV Runs")
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Component", style="magenta")
+    table.add_column("Status")
+    table.add_column("Feature")
+    table.add_column("Cost", justify="right")
+    table.add_column("Duration", justify="right")
+    table.add_column("When", justify="right")
+
+    for run in summaries:
+        status_style = {
+            "completed": "green",
+            "running": "yellow",
+            "failed": "red",
+            "timed_out": "red",
+            "pending": "dim",
+        }.get(run.status, "")
+
+        table.add_row(
+            run.run_id,
+            run.component,
+            f"[{status_style}]{run.status}[/{status_style}]" if status_style else run.status,
+            run.feature_name or "-",
+            f"${run.total_cost_usd:.2f}",
+            _format_duration(run.duration_seconds),
+            _format_relative_time(run.timestamp),
+        )
+
+    console.print(table)
 
 
 @app.command()
@@ -330,7 +401,46 @@ def show(
     run_id: Annotated[str, typer.Argument(help="Run ID to display.")],
 ) -> None:
     """Show details of a specific run."""
-    typer.echo("Not yet implemented.")
+    from dkmv.core.runner import RunManager
+
+    config = load_config(require_api_key=False)
+    run_mgr = RunManager(output_dir=config.output_dir)
+
+    try:
+        detail = run_mgr.get_run(run_id)
+    except FileNotFoundError:
+        console.print(f"Error: Run '{run_id}' not found.", style="bold red")
+        raise typer.Exit(code=1)
+
+    status_style = {
+        "completed": "green",
+        "running": "yellow",
+        "failed": "red",
+        "timed_out": "red",
+    }.get(detail.status, "")
+
+    console.print(f"[bold]Run {detail.run_id}[/bold]")
+    console.print(f"  Component:  {detail.component}")
+    console.print(
+        f"  Status:     [{status_style}]{detail.status}[/{status_style}]"
+        if status_style
+        else f"  Status:     {detail.status}"
+    )
+    console.print(f"  Repo:       {detail.repo or '-'}")
+    console.print(f"  Branch:     {detail.branch or '-'}")
+    console.print(f"  Model:      {detail.model or '-'}")
+    console.print(f"  Feature:    {detail.feature_name or '-'}")
+    console.print(f"  Cost:       ${detail.total_cost_usd:.2f}")
+    console.print(f"  Duration:   {_format_duration(detail.duration_seconds)}")
+    console.print(f"  Turns:      {detail.num_turns}")
+    if detail.session_id:
+        console.print(f"  Session ID: {detail.session_id}")
+    console.print(f"  Events:     {detail.stream_events_count}")
+    if detail.log_path:
+        console.print(f"  Log:        {detail.log_path}")
+
+    if detail.error_message:
+        console.print(f"\n  [bold red]Error:[/bold red] {detail.error_message}")
 
 
 @app.command()
@@ -338,7 +448,35 @@ def attach(
     run_id: Annotated[str, typer.Argument(help="Run ID to attach to.")],
 ) -> None:
     """Attach to a running container."""
-    typer.echo("Not yet implemented.")
+    from dkmv.core.runner import RunManager
+
+    config = load_config(require_api_key=False)
+    run_mgr = RunManager(output_dir=config.output_dir)
+
+    try:
+        run_mgr.get_run(run_id)
+    except FileNotFoundError:
+        console.print(f"Error: Run '{run_id}' not found.", style="bold red")
+        raise typer.Exit(code=1)
+
+    container_name = run_mgr.get_container_name(run_id)
+    if not container_name:
+        console.print("Error: No container name found for this run.", style="bold red")
+        console.print("The container may have been started without --keep-alive.")
+        raise typer.Exit(code=1)
+
+    inspect_result = subprocess.run(
+        ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
+        capture_output=True,
+        text=True,
+    )
+    if inspect_result.returncode != 0 or inspect_result.stdout.strip() != "true":
+        console.print(f"Error: Container '{container_name}' is not running.", style="bold red")
+        raise typer.Exit(code=1)
+
+    console.print(f"Attaching to container {container_name}...")
+    result = subprocess.run(["docker", "exec", "-it", container_name, "bash"])
+    raise typer.Exit(code=result.returncode)
 
 
 @app.command()
@@ -346,4 +484,35 @@ def stop(
     run_id: Annotated[str, typer.Argument(help="Run ID to stop.")],
 ) -> None:
     """Stop a running container."""
-    typer.echo("Not yet implemented.")
+    from dkmv.core.runner import RunManager
+
+    config = load_config(require_api_key=False)
+    run_mgr = RunManager(output_dir=config.output_dir)
+
+    try:
+        run_mgr.get_run(run_id)
+    except FileNotFoundError:
+        console.print(f"Error: Run '{run_id}' not found.", style="bold red")
+        raise typer.Exit(code=1)
+
+    container_name = run_mgr.get_container_name(run_id)
+    if not container_name:
+        console.print("Error: No container name found for this run.", style="bold red")
+        raise typer.Exit(code=1)
+
+    inspect_result = subprocess.run(
+        ["docker", "inspect", container_name],
+        capture_output=True,
+        text=True,
+    )
+    if inspect_result.returncode != 0:
+        console.print(f"Container '{container_name}' is already removed.", style="dim")
+        return
+
+    stop_result = subprocess.run(["docker", "stop", container_name], capture_output=True, text=True)
+    if stop_result.returncode != 0:
+        console.print(f"Container '{container_name}' is already stopped.", style="dim")
+
+    subprocess.run(["docker", "rm", container_name], capture_output=True, text=True)
+
+    console.print(f"Container '{container_name}' stopped and removed.", style="green")

@@ -14,6 +14,7 @@ from dkmv.core.models import (
     BaseResult,
     ComponentName,
     RunDetail,
+    RunStatus,
     RunSummary,
 )
 
@@ -52,6 +53,16 @@ class RunManager:
         with (run_dir / "stream.jsonl").open("a") as f:
             f.write(json.dumps(event) + "\n")
 
+    def save_container_name(self, run_id: str, container_name: str) -> None:
+        (self._run_dir(run_id) / "container.txt").write_text(container_name)
+
+    def get_container_name(self, run_id: str) -> str | None:
+        path = self._run_dir(run_id) / "container.txt"
+        if path.exists():
+            name = path.read_text().strip()
+            return name if name else None
+        return None
+
     def save_prompt(self, run_id: str, prompt: str) -> None:
         run_dir = self._run_dir(run_id)
         (run_dir / "prompt.md").write_text(prompt)
@@ -60,6 +71,7 @@ class RunManager:
         self,
         component: ComponentName | None = None,
         feature: str | None = None,
+        status: RunStatus | None = None,
         limit: int = 20,
     ) -> list[RunSummary]:
         summaries: list[RunSummary] = []
@@ -101,6 +113,8 @@ class RunManager:
                 continue
 
             if component and summary.component != component:
+                continue
+            if status and summary.status != status:
                 continue
             if feature and feature.lower() not in summary.feature_name.lower():
                 continue

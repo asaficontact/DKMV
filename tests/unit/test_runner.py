@@ -191,6 +191,45 @@ class TestListRuns:
         assert runs[0].status == "running"
 
 
+class TestContainerName:
+    def test_save_and_get_container_name(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        run_manager.save_container_name(run_id, "dkmv-dev-abc123")
+        assert run_manager.get_container_name(run_id) == "dkmv-dev-abc123"
+
+    def test_get_container_name_missing(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        assert run_manager.get_container_name(run_id) is None
+
+    def test_get_container_name_empty_file(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        (run_manager._runs_dir / run_id / "container.txt").write_text("  \n")
+        assert run_manager.get_container_name(run_id) is None
+
+
+class TestListRunsStatusFilter:
+    def test_list_runs_filter_by_status(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        # Create a completed run
+        rid1 = run_manager.start_run("dev", config)
+        result1 = BaseResult(run_id=rid1, component="dev", status="completed")
+        run_manager.save_result(rid1, result1)
+
+        # Create a running run (no result saved)
+        run_manager.start_run("dev", config)
+
+        assert len(run_manager.list_runs(status="completed")) == 1
+        assert len(run_manager.list_runs(status="running")) == 1
+        assert len(run_manager.list_runs(status="failed")) == 0
+
+
 class TestGetRun:
     def test_get_run_returns_full_detail(
         self, run_manager: RunManager, config: BaseComponentConfig, result: BaseResult

@@ -142,22 +142,6 @@ class TestBuildCommand:
         assert "CLAUDE_CODE_VERSION=1.2.3" in captured_cmd
 
 
-STUB_COMMANDS = [
-    ("runs", []),
-    ("show", ["run-123"]),
-    ("attach", ["run-123"]),
-    ("stop", ["run-123"]),
-]
-
-
-@pytest.mark.parametrize("cmd,args", STUB_COMMANDS, ids=[c[0] for c in STUB_COMMANDS])
-class TestStubCommands:
-    def test_stub_returns_not_implemented(self, cmd: str, args: list[str]) -> None:
-        result = runner.invoke(app, [cmd, *args])
-        assert result.exit_code == 0
-        assert "Not yet implemented" in result.output
-
-
 class TestComponentCommandHelp:
     """Verify the 4 component commands accept --help and show correct options."""
 

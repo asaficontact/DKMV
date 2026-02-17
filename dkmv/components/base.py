@@ -260,6 +260,11 @@ class BaseComponent(ABC, Generic[C, R]):
             sandbox_config = self._build_sandbox_config(config)
             session = await self.sandbox.start(sandbox_config, self.name)
 
+            # 3.5 Persist container name for attach/stop commands
+            container_name = self.sandbox.get_container_name(session)
+            if container_name:
+                self.run_manager.save_container_name(run_id, container_name)
+
             # 4. Setup workspace
             await self._setup_base_workspace(session, config)
 

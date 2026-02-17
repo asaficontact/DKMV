@@ -11,9 +11,10 @@
 ## Progress Summary
 
 - **Total tasks:** 90
-- **Completed:** 54
+- **Completed:** 89
 - **In progress:** 0
 - **Blocked:** 0
+- **Remaining:** 1 (T029 — CI verification, requires GitHub push)
 
 ---
 
@@ -126,47 +127,47 @@
 
 ### Task 3.1: Dev Component (F7)
 
-- [ ] T060 Create dkmv/components/dev/ subpackage structure (depends: T050)
-- [ ] T061 Create dev/models.py with DevConfig, DevResult (depends: T030, T060)
-- [ ] T062 Create dev/prompt.md prompt template (depends: T060)
-- [ ] T063 Create dev/component.py with DevComponent (depends: T051, T061, T062)
-- [ ] T064 Register @register_component("dev") (depends: T063)
-- [ ] T065 Implement build_prompt() with eval criteria stripping (depends: T063)
-- [ ] T066 Implement design docs handling (--design-docs) (depends: T063)
-- [ ] T067 Implement feedback injection from synthesized brief (depends: T055, T063)
-- [ ] T068 Implement plan-first prompt approach (.dkmv/plan.md) (depends: T063)
-- [ ] T069 Register `dkmv dev` command in cli.py with all flags (depends: T064)
-- [ ] T070 Implement fresh branch vs existing branch logic (depends: T063)
-- [ ] T071 Write unit tests for Dev component (depends: T060-T070)
-- [ ] T072 E2E test: run against small test repo with trivial PRD (depends: T071)
+- [x] T060 Create dkmv/components/dev/ subpackage structure (depends: T050)
+- [x] T061 Create dev/models.py with DevConfig, DevResult (depends: T030, T060)
+- [x] T062 Create dev/prompt.md prompt template (depends: T060)
+- [x] T063 Create dev/component.py with DevComponent (depends: T051, T061, T062)
+- [x] T064 Register @register_component("dev") (depends: T063)
+- [x] T065 Implement build_prompt() with eval criteria stripping (depends: T063)
+- [x] T066 Implement design docs handling (--design-docs) (depends: T063)
+- [x] T067 Implement feedback injection from synthesized brief (depends: T055, T063)
+- [x] T068 Implement plan-first prompt approach (.dkmv/plan.md) (depends: T063)
+- [x] T069 Register `dkmv dev` command in cli.py with all flags (depends: T064)
+- [x] T070 Implement fresh branch vs existing branch logic (depends: T063)
+- [x] T071 Write unit tests for Dev component (depends: T060-T070)
+- [x] T072 E2E test: run against small test repo with trivial PRD (depends: T071)
 
 ### Task 3.2: QA Component (F8)
 
-- [ ] T073 Create dkmv/components/qa/ subpackage (depends: T050)
-- [ ] T074 Create qa/models.py, qa/component.py, qa/prompt.md (depends: T051, T073)
-- [ ] T075 Implement QA with full PRD (including eval criteria) (depends: T074)
-- [ ] T076 Register `dkmv qa` command in cli.py (depends: T075)
-- [ ] T077 Write unit tests for QA component (depends: T073-T076)
+- [x] T073 Create dkmv/components/qa/ subpackage (depends: T050)
+- [x] T074 Create qa/models.py, qa/component.py, qa/prompt.md (depends: T051, T073)
+- [x] T075 Implement QA with full PRD (including eval criteria) (depends: T074)
+- [x] T076 Register `dkmv qa` command in cli.py (depends: T075)
+- [x] T077 Write unit tests for QA component (depends: T073-T076)
 
 ### Task 3.3: Judge Component (F9)
 
-- [ ] T078 Create dkmv/components/judge/ subpackage (depends: T050)
-- [ ] T079 Create judge/models.py, judge/component.py, judge/prompt.md (depends: T051, T078)
-- [ ] T080 Implement Judge with full PRD (including eval criteria) (depends: T079)
-- [ ] T081 Register `dkmv judge` CLI command and implement verdict display (depends: T080)
-- [ ] T082 Write unit tests for Judge component (depends: T078-T081)
+- [x] T078 Create dkmv/components/judge/ subpackage (depends: T050)
+- [x] T079 Create judge/models.py, judge/component.py, judge/prompt.md (depends: T051, T078)
+- [x] T080 Implement Judge with full PRD (including eval criteria) (depends: T079)
+- [x] T081 Register `dkmv judge` CLI command and implement verdict display (depends: T080)
+- [x] T082 Write unit tests for Judge component (depends: T078-T081)
 
 ### Task 3.4: Docs Component (F10)
 
-- [ ] T083 Create dkmv/components/docs/ subpackage (depends: T050)
-- [ ] T084 Create docs/models.py, docs/component.py, docs/prompt.md, register `dkmv docs` CLI command (depends: T051, T083)
-- [ ] T085 Implement PR creation via gh pr create (depends: T084)
-- [ ] T086 Write unit tests for Docs component (depends: T083-T085)
+- [x] T083 Create dkmv/components/docs/ subpackage (depends: T050)
+- [x] T084 Create docs/models.py, docs/component.py, docs/prompt.md, register `dkmv docs` CLI command (depends: T051, T083)
+- [x] T085 Implement PR creation via gh pr create (depends: T084)
+- [x] T086 Write unit tests for Docs component (depends: T083-T085)
 
 ### Task 3.5: Prompt Snapshot Tests
 
-- [ ] T087 Write syrupy snapshot tests for all 4 prompt templates (depends: T062, T074, T079, T084)
-- [ ] T088 Test prompt building with different config combinations (depends: T087)
+- [x] T087 Write syrupy snapshot tests for all 4 prompt templates (depends: T062, T074, T079, T084)
+- [x] T088 Test prompt building with different config combinations (depends: T087)
 
 ---
 
@@ -176,9 +177,9 @@
 
 ### Task 4.1: Run Management Commands (F11)
 
-- [ ] T090 Implement `dkmv runs` with rich table output (depends: T043)
-- [ ] T091 Implement `dkmv show <run-id>` detailed view (depends: T043)
-- [ ] T092 Implement `dkmv attach <run-id>` docker exec passthrough (depends: T031)
-- [ ] T093 Implement `dkmv stop <run-id>` container cleanup (depends: T035)
-- [ ] T094 Write tests for all run management commands (depends: T090-T093)
-- [ ] T095 Final integration verification (depends: T094)
+- [x] T090 Implement `dkmv runs` with rich table output (depends: T043)
+- [x] T091 Implement `dkmv show <run-id>` detailed view (depends: T043)
+- [x] T092 Implement `dkmv attach <run-id>` docker exec passthrough (depends: T031)
+- [x] T093 Implement `dkmv stop <run-id>` container cleanup (depends: T035)
+- [x] T094 Write tests for all run management commands (depends: T090-T093)
+- [x] T095 Final integration verification (depends: T094)
