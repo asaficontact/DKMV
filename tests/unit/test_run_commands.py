@@ -180,7 +180,7 @@ class TestShowCommand:
             status="completed",
             repo="https://github.com/test/repo",
             branch="feature/auth",
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             feature_name="auth",
             total_cost_usd=0.05,
             duration_seconds=120.0,
@@ -378,3 +378,35 @@ class TestStopCommand:
 
         assert result.exit_code == 0
         assert "already removed" in result.output
+
+
+class TestCleanCommand:
+    def test_clean_removes_containers(self) -> None:
+        ps_mock = MagicMock(returncode=0, stdout="dkmv-sandbox-aaa\ndkmv-sandbox-bbb\n")
+        rm_mock = MagicMock(returncode=0)
+
+        with patch("dkmv.cli.subprocess.run", side_effect=[ps_mock, rm_mock, rm_mock]):
+            result = runner.invoke(app, ["clean"])
+
+        assert result.exit_code == 0
+        assert "Removed dkmv-sandbox-aaa" in result.output
+        assert "Removed dkmv-sandbox-bbb" in result.output
+        assert "Cleaned up 2 container(s)" in result.output
+
+    def test_clean_no_containers(self) -> None:
+        ps_mock = MagicMock(returncode=0, stdout="")
+
+        with patch("dkmv.cli.subprocess.run", return_value=ps_mock):
+            result = runner.invoke(app, ["clean"])
+
+        assert result.exit_code == 0
+        assert "No DKMV containers found" in result.output
+
+    def test_clean_docker_error(self) -> None:
+        ps_mock = MagicMock(returncode=1, stdout="")
+
+        with patch("dkmv.cli.subprocess.run", return_value=ps_mock):
+            result = runner.invoke(app, ["clean"])
+
+        assert result.exit_code == 1
+        assert "Failed to list" in result.output

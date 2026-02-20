@@ -36,7 +36,7 @@ Chosen option: "node:20-bookworm", because it provides both the Node.js runtime 
 │  ENV: PATH, NODE_OPTIONS=4096MB,                │
 │       IS_SANDBOX=1, DISABLE_NONINTERACTIVE      │
 │  USER: dkmv (UID 1000, passwordless sudo)       │
-│  WORKDIR: /home/dkmv/project                    │
+│  WORKDIR: /home/dkmv/workspace                   │
 ├─────────────────────────────────────────────────┤
 │  SWE-ReX (pipx install, as dkmv user)           │
 │  └── swerex-remote in ~/.local/bin              │

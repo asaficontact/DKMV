@@ -233,7 +233,7 @@ Implement `SandboxManager.stream_claude()` that runs Claude Code headless in the
 
 #### Acceptance Criteria
 
-- [ ] Runs Claude Code as background process: `claude -p "$(cat /tmp/dkmv_prompt.md)" --dangerously-skip-permissions --output-format stream-json --model <model> --max-turns <max_turns> > /tmp/dkmv_stream.jsonl 2>&1 &`
+- [x] Runs Claude Code as background process: `claude -p "$(cat /tmp/dkmv_prompt.md)" --dangerously-skip-permissions --verbose --output-format stream-json --model <model> --max-turns <max_turns> < /dev/null > /tmp/dkmv_stream.jsonl 2>/tmp/dkmv_stream.err &`
 - [ ] Uses a second SWE-ReX session to poll/tail the output file
 - [ ] Yields StreamEvent objects via AsyncIterator as lines appear
 - [ ] Detects Claude Code completion (background process exits)
@@ -260,7 +260,7 @@ async def stream_claude(self, session, prompt: str, model: str, max_turns: int, 
     cmd += f' --output-format stream-json --model {model} --max-turns {max_turns}'
     if max_budget_usd:
         cmd += f' --max-budget-usd {max_budget_usd}'
-    cmd += ' > /tmp/dkmv_stream.jsonl 2>&1 & echo $!'
+    cmd += ' < /dev/null > /tmp/dkmv_stream.jsonl 2>/tmp/dkmv_stream.err & echo $!'
 
     # Step 3: Launch as background process, capture PID
     result = await self.execute(session, cmd)
@@ -299,6 +299,8 @@ Key considerations:
 - `tail -n +N` reads from line N onward (1-indexed), so we track `lines_read`
 - Poll interval of 0.5s balances responsiveness with overhead
 - The second bash session is needed because SWE-ReX blocks on each command
+- `< /dev/null` is **required** — SWE-ReX's pexpect sessions use interactive bash with job control enabled; background processes that read from the terminal receive SIGTTIN and get frozen; redirecting stdin from `/dev/null` prevents this
+- `--verbose` is required alongside `--output-format stream-json` when using `-p` (print mode)
 
 Research: SWE-ReX `BashAction` blocks until completion. There is no streaming or callback API.
 

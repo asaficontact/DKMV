@@ -188,6 +188,16 @@ class TestSandboxManagerHelpers:
         result = await sandbox_manager.setup_git_auth(session)
         assert isinstance(result, CommandResult)
 
+    async def test_setup_git_auth_runs_setup_git_only(
+        self, sandbox_manager: SandboxManager, session: SandboxSession
+    ) -> None:
+        """Auth uses gh auth setup-git (not gh auth login) since GITHUB_TOKEN env var
+        is already set via Docker -e flag."""
+        await sandbox_manager.setup_git_auth(session)
+        action = session.deployment.runtime.run_in_session.call_args[0][0]
+        assert action.command == "gh auth setup-git"
+        assert "login" not in action.command
+
 
 class TestStreamClaude:
     async def test_stream_claude_basic_flow(
@@ -258,7 +268,7 @@ class TestStreamClaude:
         async for event in sandbox_manager.stream_claude(
             session=session,
             prompt="test prompt",
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_turns=10,
             timeout_minutes=5,
         ):

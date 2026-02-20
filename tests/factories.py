@@ -35,7 +35,7 @@ class BaseComponentConfigFactory(ModelFactory):
     repo = "https://github.com/test/repo.git"
     branch = "feature/test"
     feature_name = "test-feature"
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-6"
     max_turns = 10
     timeout_minutes = 5
     keep_alive = False
@@ -50,7 +50,7 @@ class BaseResultFactory(ModelFactory):
     repo = "https://github.com/test/repo.git"
     branch = "feature/test"
     feature_name = "test-feature"
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-6"
     total_cost_usd = 0.05
     duration_seconds = 120.0
     num_turns = 5
@@ -84,7 +84,7 @@ class DevConfigFactory(ModelFactory):
     branch = "feature/test-dev"
     feature_name = "test-feature"
     prd_path = Path("/tmp/test-prd.md")
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-6"
     max_turns = 10
     timeout_minutes = 5
     keep_alive = False
@@ -109,7 +109,7 @@ class QAConfigFactory(ModelFactory):
     repo = "https://github.com/test/repo.git"
     branch = "feature/test"
     prd_path = Path("/tmp/test-prd.md")
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-6"
     max_turns = 10
     timeout_minutes = 5
     keep_alive = False
@@ -133,7 +133,7 @@ class JudgeConfigFactory(ModelFactory):
     repo = "https://github.com/test/repo.git"
     branch = "feature/test"
     prd_path = Path("/tmp/test-prd.md")
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-6"
     max_turns = 10
     timeout_minutes = 5
     keep_alive = False
@@ -157,7 +157,7 @@ class DocsConfigFactory(ModelFactory):
     __model__ = DocsConfig
     repo = "https://github.com/test/repo.git"
     branch = "feature/test-docs"
-    model = "claude-sonnet-4-20250514"
+    model = "claude-sonnet-4-6"
     max_turns = 10
     timeout_minutes = 5
     keep_alive = False

@@ -56,7 +56,7 @@ class TestBaseComponentConfig:
         assert cfg.repo == "https://github.com/test/repo.git"
         assert cfg.branch is None
         assert cfg.feature_name == ""
-        assert cfg.model == "claude-sonnet-4-20250514"
+        assert cfg.model == "claude-sonnet-4-6"
         assert cfg.max_turns == 100
         assert cfg.keep_alive is False
         assert cfg.verbose is False

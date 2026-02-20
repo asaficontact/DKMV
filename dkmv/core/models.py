@@ -23,7 +23,7 @@ class BaseComponentConfig(BaseModel):
     repo: str
     branch: str | None = None
     feature_name: str = ""
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
     max_turns: int = 100
     keep_alive: bool = False
     verbose: bool = False

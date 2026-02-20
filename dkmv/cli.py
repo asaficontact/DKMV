@@ -516,3 +516,29 @@ def stop(
     subprocess.run(["docker", "rm", container_name], capture_output=True, text=True)
 
     console.print(f"Container '{container_name}' stopped and removed.", style="green")
+
+
+@app.command()
+def clean() -> None:
+    """Remove all DKMV sandbox containers (running and stopped)."""
+    result = subprocess.run(
+        ["docker", "ps", "-a", "--filter", "name=dkmv-sandbox", "--format", "{{.Names}}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        console.print("Error: Failed to list Docker containers.", style="bold red")
+        raise typer.Exit(code=1)
+
+    containers = [name.strip() for name in result.stdout.strip().splitlines() if name.strip()]
+    if not containers:
+        console.print("No DKMV containers found.", style="dim")
+        return
+
+    removed = 0
+    for name in containers:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True)
+        console.print(f"  Removed {name}")
+        removed += 1
+
+    console.print(f"Cleaned up {removed} container(s).", style="green")

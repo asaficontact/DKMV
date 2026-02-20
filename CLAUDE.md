@@ -66,7 +66,7 @@ Conventional Commits: `<type>[scope]: <description>`
 - **One container per component invocation** — clean state, isolation
 - **Git branches as inter-component communication** — components share zero state except the branch
 - **stream-json output** — Claude Code headless mode with real-time parsing
-- **File-based streaming** — SWE-ReX blocks on commands; Claude Code stdout redirected to file, tailed from second session
+- **File-based streaming** — SWE-ReX blocks on commands; Claude Code backgrounded with `< /dev/null` stdin redirect (required — interactive bash job control sends SIGTTIN to background processes reading from terminal), stdout redirected to file, tailed from second session
 - **SWE-ReX** — container lifecycle management (DockerDeployment, RemoteRuntime)
 
 ## Configuration (env vars)

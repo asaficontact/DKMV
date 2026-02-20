@@ -6,6 +6,12 @@ import pytest
 from dkmv.config import DKMVConfig, load_config
 
 
+@pytest.fixture(autouse=True)
+def _isolate_from_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent pydantic-settings from reading the project's .env file."""
+    monkeypatch.chdir(tmp_path)
+
+
 class TestDKMVConfig:
     def test_loads_from_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-123")
@@ -45,7 +51,7 @@ class TestDKMVConfig:
 
         assert config.anthropic_api_key == ""
         assert config.github_token == ""
-        assert config.default_model == "claude-sonnet-4-20250514"
+        assert config.default_model == "claude-sonnet-4-6"
         assert config.default_max_turns == 100
         assert config.image_name == "dkmv-sandbox:latest"
         assert config.output_dir == Path("./outputs")

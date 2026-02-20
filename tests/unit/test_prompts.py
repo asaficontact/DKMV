@@ -21,7 +21,7 @@ def global_config() -> DKMVConfig:
     return DKMVConfig.model_construct(
         anthropic_api_key="sk-ant-test",
         github_token="ghp_test",
-        default_model="claude-sonnet-4-20250514",
+        default_model="claude-sonnet-4-6",
         default_max_turns=10,
         image_name="dkmv-sandbox:latest",
         output_dir=Path("./outputs"),

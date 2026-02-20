@@ -163,10 +163,11 @@ class SandboxManager:
         )
 
     async def setup_git_auth(self, session: SandboxSession) -> CommandResult:
-        return await self.execute(
-            session,
-            'echo "$GITHUB_TOKEN" | gh auth login --with-token && gh auth setup-git',
-        )
+        # GITHUB_TOKEN env var (passed via Docker -e) already authenticates gh.
+        # We only need to configure git's credential helper to use gh.
+        # Note: `gh auth login --with-token` fails when GITHUB_TOKEN env var is
+        # already set, so we skip it entirely and just run setup-git.
+        return await self.execute(session, "gh auth setup-git")
 
     async def stream_claude(
         self,
@@ -176,6 +177,7 @@ class SandboxManager:
         max_turns: int,
         timeout_minutes: int,
         max_budget_usd: float | None = None,
+        working_dir: str = "/home/dkmv/workspace",
     ) -> AsyncIterator[dict[str, Any]]:
         await self.write_file(session, "/tmp/dkmv_prompt.md", prompt)
 
@@ -185,13 +187,15 @@ class SandboxManager:
             else ""
         )
         cmd = (
+            f"cd {shlex.quote(working_dir)} && "
             'claude -p "$(cat /tmp/dkmv_prompt.md)" '
             "--dangerously-skip-permissions "
+            "--verbose "
             "--output-format stream-json "
             f"--model {shlex.quote(model)} "
             f"--max-turns {shlex.quote(str(max_turns))}"
             f"{budget_flag}"
-            " > /tmp/dkmv_stream.jsonl 2>/tmp/dkmv_stream.err & echo $!"
+            " < /dev/null > /tmp/dkmv_stream.jsonl 2>/tmp/dkmv_stream.err & echo $!"
         )
 
         result = await self.execute(session, cmd)

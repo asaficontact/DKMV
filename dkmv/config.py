@@ -12,7 +12,7 @@ class DKMVConfig(BaseSettings):
 
     anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
     github_token: str = Field(default="", validation_alias="GITHUB_TOKEN")
-    default_model: str = Field(default="claude-sonnet-4-20250514", validation_alias="DKMV_MODEL")
+    default_model: str = Field(default="claude-sonnet-4-6", validation_alias="DKMV_MODEL")
     default_max_turns: int = Field(default=100, validation_alias="DKMV_MAX_TURNS")
     image_name: str = Field(default="dkmv-sandbox:latest", validation_alias="DKMV_IMAGE")
     output_dir: Path = Field(default=Path("./outputs"), validation_alias="DKMV_OUTPUT_DIR")

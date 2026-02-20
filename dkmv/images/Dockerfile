@@ -14,7 +14,6 @@
 #   docker run -it --rm \
 #     --memory=8g --memory-swap=8g \
 #     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-#     -v /path/to/project:/home/dkmv/project \
 #     -p 8000:8000 \
 #     dkmv-sandbox
 #
@@ -44,7 +43,7 @@ FROM node:20-bookworm
 #   - Native installer cannot pin versions (no --version flag)
 #   - npm install produces deterministic, cache-friendly Docker layers
 #   - Anthropic's own .devcontainer/Dockerfile still uses npm install
-ARG CLAUDE_CODE_VERSION=latest
+ARG CLAUDE_CODE_VERSION=2.1.47
 
 # ---------------------------------------------------------------------------
 # System packages
@@ -129,9 +128,9 @@ RUN userdel --remove node \
 # ---------------------------------------------------------------------------
 # Directory structure
 # ---------------------------------------------------------------------------
-# /home/dkmv/project  - mount point for the host project
-# /home/dkmv/.claude  - Claude Code config/state directory
-RUN mkdir -p /home/dkmv/project /home/dkmv/.claude \
+# /home/dkmv/workspace - cloned repo (created at runtime by BaseComponent)
+# /home/dkmv/.claude   - Claude Code config/state directory
+RUN mkdir -p /home/dkmv/workspace /home/dkmv/.claude \
     && chown -R dkmv:dkmv /home/dkmv
 
 # ---------------------------------------------------------------------------
@@ -186,10 +185,9 @@ ENV CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1
 # ---------------------------------------------------------------------------
 # Working directory
 # ---------------------------------------------------------------------------
-# Set to the project mount point. When the host orchestrator bind-mounts a
-# project directory here, Claude Code will see it as its cwd and can operate
-# on the files directly.
-WORKDIR /home/dkmv/project
+# Set to /home/dkmv/workspace where BaseComponent clones repos at runtime.
+# This means `dkmv attach` drops users directly into the code directory.
+WORKDIR /home/dkmv/workspace
 
 # ---------------------------------------------------------------------------
 # Default command

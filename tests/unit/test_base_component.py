@@ -52,7 +52,7 @@ def global_config() -> DKMVConfig:
     return DKMVConfig.model_construct(
         anthropic_api_key="sk-ant-test",
         github_token="ghp_test",
-        default_model="claude-sonnet-4-20250514",
+        default_model="claude-sonnet-4-6",
         default_max_turns=10,
         image_name="dkmv-sandbox:latest",
         output_dir=Path("./outputs"),
@@ -598,6 +598,28 @@ class TestNoBranchSkipsPush:
         calls = [str(c) for c in mock_sandbox.execute.call_args_list]
         push_calls = [c for c in calls if "git push" in c]
         assert len(push_calls) == 0, "Should NOT push when branch is None"
+
+
+class TestGitAuthSetup:
+    async def test_auth_failure_marks_run_failed(
+        self, component: MockComponent, config: MockConfig, mock_sandbox: AsyncMock
+    ) -> None:
+        """Git auth failure should fail early instead of silently causing push timeouts."""
+        mock_sandbox.setup_git_auth = AsyncMock(
+            return_value=CommandResult(output="error: gh auth setup-git failed", exit_code=1)
+        )
+
+        result = await component.run(config)
+
+        assert result.status == "failed"
+        assert "Git auth setup failed" in result.error_message
+
+    async def test_auth_success_continues(
+        self, component: MockComponent, config: MockConfig
+    ) -> None:
+        """Auth success (exit 0) should allow run to proceed normally."""
+        result = await component.run(config)
+        assert result.status == "completed"
 
 
 class TestGitCloneExitCodeCheck:

@@ -45,6 +45,7 @@ Chosen option: "Lock to Claude Code for v1, design for extensibility in v2", bec
 │  │    --output-format stream-json             │  │
 │  │    --model <model>                         │  │
 │  │    --max-turns <n>                         │  │
+│  │  < /dev/null                               │  │
 │  │  > /tmp/dkmv_stream.jsonl 2> .err          │  │
 │  └────────────────────────────────────────────┘  │
 └──────────────────────┬───────────────────────────┘

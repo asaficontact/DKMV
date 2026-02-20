@@ -61,8 +61,8 @@ run_test "NODE_OPTIONS is set" \
     drun printenv NODE_OPTIONS
 
 # Working directory
-run_test "working directory is /home/dkmv/project" \
-    [ "$(drun pwd)" = "/home/dkmv/project" ]
+run_test "working directory is /home/dkmv/workspace" \
+    [ "$(drun pwd)" = "/home/dkmv/workspace" ]
 
 echo "---"
 echo "Results: $PASS passed, $FAIL failed"

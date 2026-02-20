@@ -629,7 +629,7 @@ Create a shell script that asserts the built Docker image has the correct struct
 - [x] Script tests: `swerex-remote` available
 - [x] Script tests: `IS_SANDBOX=1` env var set
 - [x] Script tests: `NODE_OPTIONS` set
-- [x] Script tests: working directory is `/home/dkmv/project`
+- [x] Script tests: working directory is `/home/dkmv/workspace`
 
 #### Files to Create/Modify
 

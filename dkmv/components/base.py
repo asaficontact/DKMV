@@ -92,7 +92,12 @@ class BaseComponent(ABC, Generic[C, R]):
 
     async def _setup_base_workspace(self, session: SandboxSession, config: C) -> None:
         # Git auth
-        await self.sandbox.setup_git_auth(session)
+        auth_result = await self.sandbox.setup_git_auth(session)
+        if auth_result.exit_code != 0:
+            msg = (
+                f"Git auth setup failed (exit {auth_result.exit_code}): {auth_result.output[:500]}"
+            )
+            raise RuntimeError(msg)
 
         # Clone repo
         clone_result = await self.sandbox.execute(

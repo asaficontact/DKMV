@@ -98,4 +98,4 @@ class TestSandboxIntegration:
         assert result.exit_code == 0
 
         call_args = mock_remote_runtime.run_in_session.call_args[0][0]
-        assert "gh auth login" in call_args.command
+        assert call_args.command == "gh auth setup-git"

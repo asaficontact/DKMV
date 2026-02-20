@@ -6,7 +6,7 @@
 - **Tasks completed:** 89 / 90
 <!-- Task count from tasks.md. Update when tasks are added/removed. -->
 - **Test coverage:** 93.89% (296 tests passing, 1 skipped)
-- **Last session:** 2026-02-17
+- **Last session:** 2026-02-20
 - **Remaining:** T029 (CI pipeline verification — requires push to GitHub)
 
 ## Session Log
@@ -201,6 +201,25 @@
 **Coverage:** 93.89% (296 tests passing, 1 skipped)
 **Quality gates:** All green — ruff clean, mypy clean, 296 tests passing
 
+### Session 11 — 2026-02-20
+
+**Goal:** Fix critical bug — Claude Code freezing immediately when launched via SWE-ReX
+**Completed:** Root cause identified and fixed
+**Blockers:** None
+**Root cause:** SWE-ReX's pexpect sessions spawn **interactive bash** (job control enabled). When Claude Code is backgrounded with `&`, bash creates a separate background process group. Node.js reads from stdin during initialization, which triggers **SIGTTIN** (kernel signal that freezes background processes trying to read from the terminal). The process was silently suspended with 0 bytes written, no error output.
+**Why manual testing missed this:** `docker exec bash -c '...'` uses **non-interactive bash** where job control is disabled — background processes stay in the foreground process group and SIGTTIN is never sent.
+**Changes:**
+- `dkmv/core/sandbox.py` — Added `< /dev/null` stdin redirect to the Claude Code background command to prevent SIGTTIN
+- `dkmv/config.py` — Updated default model from `claude-sonnet-4-20250514` to `claude-sonnet-4-6`
+- `dkmv/core/models.py` — Updated default model to `claude-sonnet-4-6`
+- `dkmv/images/Dockerfile` — Pinned Claude Code to version 2.1.47, added `--verbose` flag
+- `pyproject.toml` — Added `aiohttp>=3.9` dependency (missing transitive dep of swe-rex)
+- `docs/architecture_overview.md` — Updated streaming diagram with `< /dev/null` and added explanation
+- `docs/adrs/0002-claude-code-only-for-v1.md` — Updated command example
+- `docs/adrs/0004-sandbox-layer-swerex.md` — Updated streaming diagram
+- `docs/implementation/v1/phase2_core.md` — Updated acceptance criteria, pseudocode, and key considerations
+**Coverage:** 288 tests passing, 1 skipped (pre-existing config test issue from .env leaking)
+
 ## Metrics
 
 | Phase | Total Tasks | Done | % |
@@ -220,3 +239,5 @@
 - SWE-ReX `DockerDeployment` uses explicit `start()`/`stop()` methods, not async context managers
 - Claude Code native installer has an OOM bug in Docker (issue #22536) — npm install is more reliable
 - `pipx` is required for SWE-ReX installation to comply with PEP 668 (externally managed Python environments on Debian Bookworm)
+- SWE-ReX pexpect sessions use interactive bash — background processes (`&`) get their own process group and receive SIGTTIN if they read from the terminal; always use `< /dev/null` for backgrounded commands
+- Claude Code `--output-format stream-json` requires `--verbose` when used with `-p` (print mode) in v2.1.42+

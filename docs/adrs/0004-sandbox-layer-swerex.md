@@ -75,9 +75,10 @@ Session "default"                    Session "tail"
 │ claude -p "..."     │             │ tail -n +N           │
 │   --output-format   │  writes to  │   /tmp/dkmv_stream   │
 │   stream-json       │ ──────────► │   .jsonl             │
-│ > /tmp/dkmv_stream  │  (file)     │                      │
-│   .jsonl &          │             │ Reads new lines      │
-│                     │             │ every poll cycle      │
+│ < /dev/null         │  (file)     │                      │
+│ > /tmp/dkmv_stream  │             │ Reads new lines      │
+│   .jsonl &          │             │ every poll cycle      │
+│                     │             │                      │
 │ echo $! (PID)       │             │                      │
 └─────────────────────┘             └──────────┬───────────┘
                                                │ yields events

@@ -177,7 +177,7 @@ class TestComponentCommandHelp:
 def _mock_config() -> MagicMock:
     """Create a mock DKMVConfig with all needed attributes."""
     cfg = MagicMock()
-    cfg.default_model = "claude-sonnet-4-20250514"
+    cfg.default_model = "claude-sonnet-4-6"
     cfg.default_max_turns = 100
     cfg.timeout_minutes = 30
     cfg.max_budget_usd = None
