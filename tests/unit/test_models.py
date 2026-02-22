@@ -100,9 +100,9 @@ class TestBaseResult:
         assert restored.component == result.component
         assert restored.status == result.status
 
-    def test_rejects_invalid_component(self) -> None:
-        with pytest.raises(ValidationError):
-            BaseResult(run_id="abc", component="invalid")  # type: ignore[arg-type]
+    def test_accepts_custom_component_name(self) -> None:
+        result = BaseResult(run_id="abc", component="my-custom-component")
+        assert result.component == "my-custom-component"
 
     def test_rejects_invalid_status(self) -> None:
         with pytest.raises(ValidationError):

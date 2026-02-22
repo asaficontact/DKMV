@@ -190,7 +190,7 @@ def _mock_config() -> MagicMock:
 
 
 class TestNumericDefaults:
-    """Verify explicit zero values for numeric params are not swallowed by 'or' pattern."""
+    """Verify explicit zero values for numeric params are preserved in CLIOverrides."""
 
     def test_dev_max_turns_zero_passes_through(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -198,24 +198,26 @@ class TestNumericDefaults:
         prd = tmp_path / "prd.md"
         prd.write_text("# PRD\n")
 
-        mock_component = MagicMock()
+        mock_runner = MagicMock()
         mock_result = MagicMock(run_id="r1", status="completed", error_message="")
-        mock_component.run = AsyncMock(return_value=mock_result)
+        mock_runner.run = AsyncMock(return_value=mock_result)
 
         with (
             patch("dkmv.cli.load_config", return_value=_mock_config()),
-            patch("dkmv.components.dev.DevComponent", return_value=mock_component),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
             patch("dkmv.core.runner.RunManager"),
             patch("dkmv.core.sandbox.SandboxManager"),
             patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
         ):
             result = runner.invoke(
                 app, ["dev", str(tmp_path), "--prd", str(prd), "--max-turns", "0"]
             )
 
         assert result.exit_code == 0
-        call_args = mock_component.run.call_args[0][0]
-        assert call_args.max_turns == 0
+        cli_overrides = mock_runner.run.call_args[1]["cli_overrides"]
+        assert cli_overrides.max_turns == 0
 
     def test_qa_timeout_zero_passes_through(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -223,16 +225,18 @@ class TestNumericDefaults:
         prd = tmp_path / "prd.md"
         prd.write_text("# PRD\n")
 
-        mock_component = MagicMock()
+        mock_runner = MagicMock()
         mock_result = MagicMock(run_id="r1", status="completed", error_message="")
-        mock_component.run = AsyncMock(return_value=mock_result)
+        mock_runner.run = AsyncMock(return_value=mock_result)
 
         with (
             patch("dkmv.cli.load_config", return_value=_mock_config()),
-            patch("dkmv.components.qa.QAComponent", return_value=mock_component),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
             patch("dkmv.core.runner.RunManager"),
             patch("dkmv.core.sandbox.SandboxManager"),
             patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
         ):
             result = runner.invoke(
                 app,
@@ -240,8 +244,8 @@ class TestNumericDefaults:
             )
 
         assert result.exit_code == 0
-        call_args = mock_component.run.call_args[0][0]
-        assert call_args.timeout_minutes == 0
+        cli_overrides = mock_runner.run.call_args[1]["cli_overrides"]
+        assert cli_overrides.timeout_minutes == 0
 
     def test_judge_max_budget_zero_passes_through(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -249,25 +253,18 @@ class TestNumericDefaults:
         prd = tmp_path / "prd.md"
         prd.write_text("# PRD\n")
 
-        mock_component = MagicMock()
-        mock_result = MagicMock(
-            run_id="r1",
-            status="completed",
-            error_message="",
-            verdict="pass",
-            reasoning="ok",
-            issues=[],
-            score=0,
-            confidence=0.0,
-        )
-        mock_component.run = AsyncMock(return_value=mock_result)
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
 
         with (
             patch("dkmv.cli.load_config", return_value=_mock_config()),
-            patch("dkmv.components.judge.JudgeComponent", return_value=mock_component),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
             patch("dkmv.core.runner.RunManager"),
             patch("dkmv.core.sandbox.SandboxManager"),
             patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
         ):
             result = runner.invoke(
                 app,
@@ -284,103 +281,98 @@ class TestNumericDefaults:
             )
 
         assert result.exit_code == 0
-        call_args = mock_component.run.call_args[0][0]
-        assert call_args.max_budget_usd == 0.0
+        cli_overrides = mock_runner.run.call_args[1]["cli_overrides"]
+        assert cli_overrides.max_budget_usd == 0.0
 
 
 class TestComponentInvocations:
-    """Verify CLI commands wire up components correctly."""
+    """Verify CLI commands wire up ComponentRunner correctly."""
 
     def test_dev_invocation(self, tmp_path: Path) -> None:
         prd = tmp_path / "prd.md"
         prd.write_text("# PRD\n")
 
-        mock_component = MagicMock()
+        mock_runner = MagicMock()
         mock_result = MagicMock(run_id="r1", status="completed", error_message="")
-        mock_component.run = AsyncMock(return_value=mock_result)
+        mock_runner.run = AsyncMock(return_value=mock_result)
 
         with (
             patch("dkmv.cli.load_config", return_value=_mock_config()),
-            patch("dkmv.components.dev.DevComponent", return_value=mock_component) as cls,
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
             patch("dkmv.core.runner.RunManager"),
             patch("dkmv.core.sandbox.SandboxManager"),
             patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
         ):
             result = runner.invoke(app, ["dev", str(tmp_path), "--prd", str(prd)])
 
         assert result.exit_code == 0
-        cls.assert_called_once()
-        mock_component.run.assert_awaited_once()
+        mock_runner.run.assert_awaited_once()
 
     def test_qa_invocation(self, tmp_path: Path) -> None:
         prd = tmp_path / "prd.md"
         prd.write_text("# PRD\n")
 
-        mock_component = MagicMock()
+        mock_runner = MagicMock()
         mock_result = MagicMock(run_id="r1", status="completed", error_message="")
-        mock_component.run = AsyncMock(return_value=mock_result)
+        mock_runner.run = AsyncMock(return_value=mock_result)
 
         with (
             patch("dkmv.cli.load_config", return_value=_mock_config()),
-            patch("dkmv.components.qa.QAComponent", return_value=mock_component) as cls,
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
             patch("dkmv.core.runner.RunManager"),
             patch("dkmv.core.sandbox.SandboxManager"),
             patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
         ):
             result = runner.invoke(
                 app, ["qa", str(tmp_path), "--branch", "feat", "--prd", str(prd)]
             )
 
         assert result.exit_code == 0
-        cls.assert_called_once()
-        mock_component.run.assert_awaited_once()
+        mock_runner.run.assert_awaited_once()
 
     def test_judge_invocation(self, tmp_path: Path) -> None:
         prd = tmp_path / "prd.md"
         prd.write_text("# PRD\n")
 
-        mock_component = MagicMock()
-        mock_result = MagicMock(
-            run_id="r1",
-            status="completed",
-            error_message="",
-            verdict="pass",
-            reasoning="All good",
-            issues=[],
-            score=90,
-            confidence=0.9,
-        )
-        mock_component.run = AsyncMock(return_value=mock_result)
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
 
         with (
             patch("dkmv.cli.load_config", return_value=_mock_config()),
-            patch("dkmv.components.judge.JudgeComponent", return_value=mock_component) as cls,
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
             patch("dkmv.core.runner.RunManager"),
             patch("dkmv.core.sandbox.SandboxManager"),
             patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
         ):
             result = runner.invoke(
                 app, ["judge", str(tmp_path), "--branch", "feat", "--prd", str(prd)]
             )
 
         assert result.exit_code == 0
-        cls.assert_called_once()
-        mock_component.run.assert_awaited_once()
+        mock_runner.run.assert_awaited_once()
 
     def test_docs_invocation(self, tmp_path: Path) -> None:
-        mock_component = MagicMock()
-        mock_result = MagicMock(run_id="r1", status="completed", error_message="", pr_url="")
-        mock_component.run = AsyncMock(return_value=mock_result)
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
 
         with (
             patch("dkmv.cli.load_config", return_value=_mock_config()),
-            patch("dkmv.components.docs.DocsComponent", return_value=mock_component) as cls,
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
             patch("dkmv.core.runner.RunManager"),
             patch("dkmv.core.sandbox.SandboxManager"),
             patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
         ):
             result = runner.invoke(app, ["docs", str(tmp_path), "--branch", "feat"])
 
         assert result.exit_code == 0
-        cls.assert_called_once()
-        mock_component.run.assert_awaited_once()
+        mock_runner.run.assert_awaited_once()

@@ -350,6 +350,52 @@ class TestGetRunCorruptData:
         assert detail.component == "qa"
 
 
+class TestCustomComponentName:
+    def test_start_run_custom_component_name(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        run_id = run_manager.start_run("my-custom-component", config)
+        run_dir = run_manager._runs_dir / run_id
+        assert run_dir.exists()
+        config_data = json.loads((run_dir / "config.json").read_text())
+        assert config_data["_component"] == "my-custom-component"
+
+
+class TestSaveArtifact:
+    def test_saves_artifact_file(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        run_manager.save_artifact(run_id, "task_result.json", '{"status": "ok"}')
+
+        artifact_path = run_manager._runs_dir / run_id / "task_result.json"
+        assert artifact_path.exists()
+        assert artifact_path.read_text() == '{"status": "ok"}'
+
+
+class TestSaveTaskPrompt:
+    def test_saves_task_prompt_with_name(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        run_manager.save_task_prompt(run_id, "plan", "# Plan the feature")
+
+        prompt_path = run_manager._runs_dir / run_id / "prompt_plan.md"
+        assert prompt_path.exists()
+        assert prompt_path.read_text() == "# Plan the feature"
+
+    def test_multiple_task_prompts_coexist(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        run_manager.save_task_prompt(run_id, "plan", "# Plan")
+        run_manager.save_task_prompt(run_id, "implement", "# Implement")
+
+        run_dir = run_manager._runs_dir / run_id
+        assert (run_dir / "prompt_plan.md").read_text() == "# Plan"
+        assert (run_dir / "prompt_implement.md").read_text() == "# Implement"
+
+
 class TestListRunsSortOrder:
     def test_sorts_by_timestamp_not_id(
         self, run_manager: RunManager, config: BaseComponentConfig

@@ -625,6 +625,149 @@ class TestStreamClaudeBudgetFlag:
         assert "--max-budget-usd" in launch_cmd
 
 
+class TestStreamClaudeEnvVars:
+    async def test_stream_claude_with_env_vars(
+        self, sandbox_manager: SandboxManager, session: SandboxSession
+    ) -> None:
+        """IU-1: env_vars should produce 'env KEY=VALUE ...' prefix in command."""
+        import json
+
+        result_event = json.dumps({"type": "result", "total_cost_usd": 0.0})
+
+        pid_obs = MagicMock()
+        pid_obs.output = "123"
+        pid_obs.exit_code = 0
+        pid_obs.failure_reason = ""
+
+        alive_obs = MagicMock()
+        alive_obs.output = "0"
+        alive_obs.exit_code = 0
+        alive_obs.failure_reason = ""
+
+        dead_obs = MagicMock()
+        dead_obs.output = "1"
+        dead_obs.exit_code = 0
+        dead_obs.failure_reason = ""
+
+        tail_obs = MagicMock()
+        tail_obs.output = result_event
+        tail_obs.exit_code = 0
+        tail_obs.failure_reason = ""
+
+        empty_obs = MagicMock()
+        empty_obs.output = ""
+        empty_obs.exit_code = 0
+        empty_obs.failure_reason = ""
+
+        calls_log: list[str] = []
+
+        async def side_effect(action):
+            cmd = action.command if hasattr(action, "command") else ""
+            calls_log.append(cmd)
+            if not [c for c in calls_log[:-1] if c]:
+                return pid_obs
+            if "kill -0" in cmd:
+                if len([c for c in calls_log if "kill -0" in c]) > 1:
+                    return dead_obs
+                return alive_obs
+            if "tail -n" in cmd:
+                if len([c for c in calls_log if "tail -n" in c]) > 1:
+                    return empty_obs
+                return tail_obs
+            if "kill" in cmd:
+                return empty_obs
+            return pid_obs
+
+        session.deployment.runtime.run_in_session = AsyncMock(side_effect=side_effect)
+        session.deployment.runtime.create_session = AsyncMock()
+        session.deployment.runtime.close_session = AsyncMock()
+        session.deployment.runtime.write_file = AsyncMock()
+
+        async for _ in sandbox_manager.stream_claude(
+            session=session,
+            prompt="test",
+            model="m",
+            max_turns=5,
+            timeout_minutes=1,
+            env_vars={"FOO": "bar", "BAZ": "qux"},
+        ):
+            pass
+
+        launch_cmd = calls_log[0]
+        assert "env FOO=" in launch_cmd
+        assert "BAZ=" in launch_cmd
+        assert launch_cmd.index("env ") < launch_cmd.index("claude -p")
+
+    async def test_stream_claude_without_env_vars_unchanged(
+        self, sandbox_manager: SandboxManager, session: SandboxSession
+    ) -> None:
+        """IU-1: No env_vars should produce no 'env ' prefix."""
+        import json
+
+        result_event = json.dumps({"type": "result", "total_cost_usd": 0.0})
+
+        pid_obs = MagicMock()
+        pid_obs.output = "123"
+        pid_obs.exit_code = 0
+        pid_obs.failure_reason = ""
+
+        alive_obs = MagicMock()
+        alive_obs.output = "0"
+        alive_obs.exit_code = 0
+        alive_obs.failure_reason = ""
+
+        dead_obs = MagicMock()
+        dead_obs.output = "1"
+        dead_obs.exit_code = 0
+        dead_obs.failure_reason = ""
+
+        tail_obs = MagicMock()
+        tail_obs.output = result_event
+        tail_obs.exit_code = 0
+        tail_obs.failure_reason = ""
+
+        empty_obs = MagicMock()
+        empty_obs.output = ""
+        empty_obs.exit_code = 0
+        empty_obs.failure_reason = ""
+
+        calls_log: list[str] = []
+
+        async def side_effect(action):
+            cmd = action.command if hasattr(action, "command") else ""
+            calls_log.append(cmd)
+            if not [c for c in calls_log[:-1] if c]:
+                return pid_obs
+            if "kill -0" in cmd:
+                if len([c for c in calls_log if "kill -0" in c]) > 1:
+                    return dead_obs
+                return alive_obs
+            if "tail -n" in cmd:
+                if len([c for c in calls_log if "tail -n" in c]) > 1:
+                    return empty_obs
+                return tail_obs
+            if "kill" in cmd:
+                return empty_obs
+            return pid_obs
+
+        session.deployment.runtime.run_in_session = AsyncMock(side_effect=side_effect)
+        session.deployment.runtime.create_session = AsyncMock()
+        session.deployment.runtime.close_session = AsyncMock()
+        session.deployment.runtime.write_file = AsyncMock()
+
+        async for _ in sandbox_manager.stream_claude(
+            session=session,
+            prompt="test",
+            model="m",
+            max_turns=5,
+            timeout_minutes=1,
+        ):
+            pass
+
+        launch_cmd = calls_log[0]
+        assert "env " not in launch_cmd
+
+
 class TestMemorySwapDockerArg:
     @patch("dkmv.core.sandbox.DockerDeployment")
     async def test_memory_swap_included(

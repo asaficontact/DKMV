@@ -129,37 +129,56 @@ async def dev(
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
-    """Run the Dev agent to implement a feature."""
-    from dkmv.components.dev import DevComponent, DevConfig
+    """Run the Dev agent to implement a feature.
+
+    Note: This is a wrapper around 'dkmv run dev'. This wrapper auto-derives
+    --branch and --feature-name from the PRD filename. If using 'dkmv run dev'
+    directly, provide --branch explicitly.
+    """
+    from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
+    from dkmv.tasks.models import CLIOverrides
     from dkmv.core.runner import RunManager
     from dkmv.core.sandbox import SandboxManager
     from dkmv.core.stream import StreamParser
 
     config_obj = load_config()
-    dev_config = DevConfig(
-        repo=repo,
-        prd_path=prd,
-        branch=branch,
-        feedback_path=feedback,
-        design_docs_path=design_docs,
-        feature_name=feature_name or "",
-        model=model or config_obj.default_model,
-        max_turns=max_turns if max_turns is not None else config_obj.default_max_turns,
-        timeout_minutes=timeout if timeout is not None else config_obj.timeout_minutes,
-        keep_alive=keep_alive,
-        verbose=verbose or _verbose,
-        max_budget_usd=max_budget_usd if max_budget_usd is not None else config_obj.max_budget_usd,
+
+    variables: dict[str, str] = {"prd_path": str(prd)}
+    if feedback:
+        variables["feedback_path"] = str(feedback)
+    if design_docs:
+        variables["design_docs_path"] = str(design_docs)
+
+    cli_overrides = CLIOverrides(
+        model=model,
+        max_turns=max_turns,
+        timeout_minutes=timeout,
+        max_budget_usd=max_budget_usd,
     )
+
+    # Derive feature_name and branch to match old DevComponent.pre_workspace_setup behavior
+    resolved_feature = feature_name or Path(prd).stem
+    resolved_branch = branch or f"feature/{resolved_feature}-dev"
+
+    component_dir = resolve_component("dev")
     sandbox = SandboxManager()
     run_mgr = RunManager(output_dir=config_obj.output_dir)
     parser = StreamParser(verbose=verbose or _verbose)
-    component = DevComponent(
-        global_config=config_obj,
-        sandbox=sandbox,
-        run_manager=run_mgr,
-        stream_parser=parser,
+    loader = TaskLoader()
+    task_runner = TaskRunner(sandbox, run_mgr, parser, Console())
+    runner = ComponentRunner(sandbox, run_mgr, loader, task_runner, Console())
+
+    result = await runner.run(
+        component_dir=component_dir,
+        repo=repo,
+        branch=resolved_branch,
+        feature_name=resolved_feature,
+        variables=variables,
+        config=config_obj,
+        cli_overrides=cli_overrides,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
     )
-    result = await component.run(dev_config)
     console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:
         console.print(f"Error: {result.error_message}", style="bold red")
@@ -184,35 +203,62 @@ async def qa(
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
-    """Run the QA agent to review and test a branch."""
-    from dkmv.components.qa import QAComponent, QAConfig
+    """Run the QA agent to review and test a branch.
+
+    Note: This is a wrapper around 'dkmv run qa'. Consider using
+    'dkmv run qa --var prd_path=...' directly.
+    """
+    from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
+    from dkmv.tasks.models import CLIOverrides
     from dkmv.core.runner import RunManager
     from dkmv.core.sandbox import SandboxManager
     from dkmv.core.stream import StreamParser
 
     config_obj = load_config()
-    qa_config = QAConfig(
-        repo=repo,
-        branch=branch,
-        prd_path=prd,
-        model=model or config_obj.default_model,
-        max_turns=max_turns if max_turns is not None else config_obj.default_max_turns,
-        timeout_minutes=timeout if timeout is not None else config_obj.timeout_minutes,
-        keep_alive=keep_alive,
-        verbose=verbose or _verbose,
-        max_budget_usd=max_budget_usd if max_budget_usd is not None else config_obj.max_budget_usd,
+    variables: dict[str, str] = {"prd_path": str(prd)}
+    cli_overrides = CLIOverrides(
+        model=model,
+        max_turns=max_turns,
+        timeout_minutes=timeout,
+        max_budget_usd=max_budget_usd,
     )
+
+    component_dir = resolve_component("qa")
     sandbox = SandboxManager()
     run_mgr = RunManager(output_dir=config_obj.output_dir)
     parser = StreamParser(verbose=verbose or _verbose)
-    component = QAComponent(
-        global_config=config_obj,
-        sandbox=sandbox,
-        run_manager=run_mgr,
-        stream_parser=parser,
+    loader = TaskLoader()
+    task_runner = TaskRunner(sandbox, run_mgr, parser, Console())
+    runner = ComponentRunner(sandbox, run_mgr, loader, task_runner, Console())
+
+    result = await runner.run(
+        component_dir=component_dir,
+        repo=repo,
+        branch=branch,
+        feature_name=branch,
+        variables=variables,
+        config=config_obj,
+        cli_overrides=cli_overrides,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
     )
-    result = await component.run(qa_config)
-    console.print(f"Run {result.run_id} completed with status: {result.status}")
+
+    # QA report display from saved artifact
+    import json as json_mod
+
+    report_file = config_obj.output_dir / "runs" / result.run_id / "qa_report.json"
+    if result.status == "completed" and report_file.exists():
+        report_data = json_mod.loads(report_file.read_text())
+        total = report_data.get("tests_total", 0)
+        passed = report_data.get("tests_passed", 0)
+        failed = report_data.get("tests_failed", 0)
+        console.print(f"Run {result.run_id} completed with status: {result.status}")
+        console.print(f"Tests: {total} total, {passed} passed, {failed} failed")
+        for warning in report_data.get("warnings", []):
+            console.print(f"  Warning: {warning}", style="yellow")
+    else:
+        console.print(f"Run {result.run_id} completed with status: {result.status}")
+
     if result.error_message:
         console.print(f"Error: {result.error_message}", style="bold red")
 
@@ -236,48 +282,67 @@ async def judge(
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
-    """Run the Judge agent to evaluate implementation quality."""
-    from dkmv.components.judge import JudgeComponent, JudgeConfig
+    """Run the Judge agent to evaluate implementation quality.
+
+    Note: This is a wrapper around 'dkmv run judge'. Consider using
+    'dkmv run judge --var prd_path=...' directly.
+    """
+    import json as json_mod
+
+    from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
+    from dkmv.tasks.models import CLIOverrides
     from dkmv.core.runner import RunManager
     from dkmv.core.sandbox import SandboxManager
     from dkmv.core.stream import StreamParser
 
     config_obj = load_config()
-    judge_config = JudgeConfig(
-        repo=repo,
-        branch=branch,
-        prd_path=prd,
-        model=model or config_obj.default_model,
-        max_turns=max_turns if max_turns is not None else config_obj.default_max_turns,
-        timeout_minutes=timeout if timeout is not None else config_obj.timeout_minutes,
-        keep_alive=keep_alive,
-        verbose=verbose or _verbose,
-        max_budget_usd=max_budget_usd if max_budget_usd is not None else config_obj.max_budget_usd,
+    variables: dict[str, str] = {"prd_path": str(prd)}
+    cli_overrides = CLIOverrides(
+        model=model,
+        max_turns=max_turns,
+        timeout_minutes=timeout,
+        max_budget_usd=max_budget_usd,
     )
+
+    component_dir = resolve_component("judge")
     sandbox = SandboxManager()
     run_mgr = RunManager(output_dir=config_obj.output_dir)
     parser = StreamParser(verbose=verbose or _verbose)
-    component = JudgeComponent(
-        global_config=config_obj,
-        sandbox=sandbox,
-        run_manager=run_mgr,
-        stream_parser=parser,
-    )
-    result = await component.run(judge_config)
+    loader = TaskLoader()
+    task_runner = TaskRunner(sandbox, run_mgr, parser, Console())
+    runner = ComponentRunner(sandbox, run_mgr, loader, task_runner, Console())
 
-    # Verdict display
-    if result.verdict == "pass":
-        console.print("VERDICT: PASS", style="bold green")
+    result = await runner.run(
+        component_dir=component_dir,
+        repo=repo,
+        branch=branch,
+        feature_name=branch,
+        variables=variables,
+        config=config_obj,
+        cli_overrides=cli_overrides,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
+    )
+
+    # Verdict display from saved artifact
+    verdict_file = config_obj.output_dir / "runs" / result.run_id / "verdict.json"
+    if result.status == "completed" and verdict_file.exists():
+        verdict_data = json_mod.loads(verdict_file.read_text())
+        if verdict_data.get("verdict") == "pass":
+            console.print("VERDICT: PASS", style="bold green")
+        else:
+            console.print("VERDICT: FAIL", style="bold red")
+        if verdict_data.get("reasoning"):
+            console.print(f"Reasoning: {verdict_data['reasoning']}")
+        if verdict_data.get("score") is not None:
+            console.print(f"Score: {verdict_data['score']}/100")
+        if verdict_data.get("confidence") is not None:
+            console.print(f"Confidence: {verdict_data['confidence']:.0%}")
+        for issue in verdict_data.get("issues", []):
+            severity = issue.get("severity", "").upper()
+            console.print(f"  [{severity}] {issue.get('description', '')}")
     else:
-        console.print("VERDICT: FAIL", style="bold red")
-    console.print(f"Reasoning: {result.reasoning}")
-    if result.score:
-        console.print(f"Score: {result.score}/100")
-    if result.confidence:
-        console.print(f"Confidence: {result.confidence:.0%}")
-    for issue in result.issues:
-        severity = issue.severity.upper()
-        console.print(f"  [{severity}] {issue.description}")
+        console.print(f"Run {result.run_id} completed with status: {result.status}")
 
     if result.error_message:
         console.print(f"Error: {result.error_message}", style="bold red")
@@ -305,38 +370,144 @@ async def docs(
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
-    """Run the Docs agent to generate documentation."""
-    from dkmv.components.docs import DocsComponent, DocsConfig
+    """Run the Docs agent to generate documentation.
+
+    Note: This is a wrapper around 'dkmv run docs'. Consider using
+    'dkmv run docs --var create_pr=true' directly.
+    """
+    from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
+    from dkmv.tasks.models import CLIOverrides
     from dkmv.core.runner import RunManager
     from dkmv.core.sandbox import SandboxManager
     from dkmv.core.stream import StreamParser
 
     config_obj = load_config()
-    docs_config = DocsConfig(
-        repo=repo,
-        branch=branch,
-        create_pr=create_pr,
-        pr_base=pr_base,
-        model=model or config_obj.default_model,
-        max_turns=max_turns if max_turns is not None else config_obj.default_max_turns,
-        timeout_minutes=timeout if timeout is not None else config_obj.timeout_minutes,
-        keep_alive=keep_alive,
-        verbose=verbose or _verbose,
-        max_budget_usd=max_budget_usd if max_budget_usd is not None else config_obj.max_budget_usd,
+    variables: dict[str, str] = {}
+    if create_pr:
+        variables["create_pr"] = "true"
+    variables["pr_base"] = pr_base
+
+    cli_overrides = CLIOverrides(
+        model=model,
+        max_turns=max_turns,
+        timeout_minutes=timeout,
+        max_budget_usd=max_budget_usd,
     )
+
+    component_dir = resolve_component("docs")
     sandbox = SandboxManager()
     run_mgr = RunManager(output_dir=config_obj.output_dir)
     parser = StreamParser(verbose=verbose or _verbose)
-    component = DocsComponent(
-        global_config=config_obj,
-        sandbox=sandbox,
-        run_manager=run_mgr,
-        stream_parser=parser,
+    loader = TaskLoader()
+    task_runner = TaskRunner(sandbox, run_mgr, parser, Console())
+    runner = ComponentRunner(sandbox, run_mgr, loader, task_runner, Console())
+
+    result = await runner.run(
+        component_dir=component_dir,
+        repo=repo,
+        branch=branch,
+        feature_name=branch,
+        variables=variables,
+        config=config_obj,
+        cli_overrides=cli_overrides,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
     )
-    result = await component.run(docs_config)
     console.print(f"Run {result.run_id} completed with status: {result.status}")
-    if result.pr_url:
-        console.print(f"PR created: {result.pr_url}", style="bold green")
+
+    # Docs manifest display from saved artifact (optional)
+    import json as json_mod
+
+    manifest_file = config_obj.output_dir / "runs" / result.run_id / "docs_manifest.json"
+    if result.status == "completed" and manifest_file.exists():
+        manifest_data = json_mod.loads(manifest_file.read_text())
+        generated = manifest_data.get("docs_generated", [])
+        updated = manifest_data.get("docs_updated", [])
+        if generated:
+            console.print(f"Generated: {', '.join(generated)}")
+        if updated:
+            console.print(f"Updated: {', '.join(updated)}")
+
+    if result.error_message:
+        console.print(f"Error: {result.error_message}", style="bold red")
+
+
+def _parse_vars(var_list: list[str] | None) -> dict[str, str]:
+    if not var_list:
+        return {}
+    variables: dict[str, str] = {}
+    for item in var_list:
+        if "=" not in item:
+            raise typer.BadParameter(f"Invalid --var format: '{item}'. Expected KEY=VALUE")
+        key, _, value = item.partition("=")
+        variables[key.strip()] = value.strip()
+    return variables
+
+
+@app.command(name="run")
+@async_command
+async def run_component(
+    component: Annotated[
+        str, typer.Argument(help="Component name or path to component directory.")
+    ],
+    repo: Annotated[str, typer.Option("--repo", help="Repository URL to clone.")],
+    branch: Annotated[str | None, typer.Option("--branch", help="Branch name.")] = None,
+    feature_name: Annotated[
+        str | None, typer.Option("--feature-name", help="Feature name for tracking.")
+    ] = None,
+    var: Annotated[
+        list[str] | None, typer.Option("--var", help="Template variable as KEY=VALUE.")
+    ] = None,
+    model: Annotated[str | None, typer.Option("--model", help="Default model for tasks.")] = None,
+    max_turns: Annotated[int | None, typer.Option("--max-turns", help="Default max turns.")] = None,
+    timeout: Annotated[
+        int | None, typer.Option("--timeout", help="Default timeout in minutes.")
+    ] = None,
+    max_budget_usd: Annotated[
+        float | None, typer.Option("--max-budget-usd", help="Default budget in USD.")
+    ] = None,
+    keep_alive: Annotated[
+        bool, typer.Option("--keep-alive", help="Keep container running.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
+) -> None:
+    """Run a component (directory of task YAML files)."""
+    from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
+    from dkmv.tasks.models import CLIOverrides
+    from dkmv.core.runner import RunManager
+    from dkmv.core.sandbox import SandboxManager
+    from dkmv.core.stream import StreamParser
+
+    config = load_config()
+    component_dir = resolve_component(component)
+    variables = _parse_vars(var)
+
+    cli_overrides = CLIOverrides(
+        model=model,
+        max_turns=max_turns,
+        timeout_minutes=timeout,
+        max_budget_usd=max_budget_usd,
+    )
+
+    sandbox = SandboxManager()
+    run_mgr = RunManager(output_dir=config.output_dir)
+    parser = StreamParser(verbose=verbose or _verbose)
+    loader = TaskLoader()
+    task_runner = TaskRunner(sandbox, run_mgr, parser, Console())
+    runner = ComponentRunner(sandbox, run_mgr, loader, task_runner, Console())
+
+    result = await runner.run(
+        component_dir=component_dir,
+        repo=repo,
+        branch=branch,
+        feature_name=feature_name or component_dir.name,
+        variables=variables,
+        config=config,
+        cli_overrides=cli_overrides,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
+    )
+    console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:
         console.print(f"Error: {result.error_message}", style="bold red")
 

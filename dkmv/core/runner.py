@@ -67,6 +67,12 @@ class RunManager:
         run_dir = self._run_dir(run_id)
         (run_dir / "prompt.md").write_text(prompt)
 
+    def save_artifact(self, run_id: str, filename: str, content: str) -> None:
+        (self._run_dir(run_id) / filename).write_text(content)
+
+    def save_task_prompt(self, run_id: str, task_name: str, prompt: str) -> None:
+        (self._run_dir(run_id) / f"prompt_{task_name}.md").write_text(prompt)
+
     def list_runs(
         self,
         component: ComponentName | None = None,

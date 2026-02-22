@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 RunStatus = Literal["pending", "running", "completed", "failed", "timed_out"]
-ComponentName = Literal["dev", "qa", "judge", "docs"]
+ComponentName = str
 
 
 class SandboxConfig(BaseModel):

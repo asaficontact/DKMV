@@ -15,6 +15,8 @@ dependencies = [
     "swe-rex>=1.4",
     "aiohttp>=3.9",
     "rich>=13.0",
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -30,6 +32,7 @@ dev = [
     "polyfactory>=2.0",
     "ruff>=0.8",
     "mypy>=1.11",
+    "types-pyyaml>=6.0",
     "commitizen>=4.0",
     "pre-commit>=4.0",
 ]
@@ -67,6 +70,11 @@ packages = ["dkmv"]
 "dkmv/components/qa/prompt.md" = "dkmv/components/qa/prompt.md"
 "dkmv/components/judge/prompt.md" = "dkmv/components/judge/prompt.md"
 "dkmv/components/docs/prompt.md" = "dkmv/components/docs/prompt.md"
+"dkmv/builtins/dev/01-plan.yaml" = "dkmv/builtins/dev/01-plan.yaml"
+"dkmv/builtins/dev/02-implement.yaml" = "dkmv/builtins/dev/02-implement.yaml"
+"dkmv/builtins/qa/01-evaluate.yaml" = "dkmv/builtins/qa/01-evaluate.yaml"
+"dkmv/builtins/judge/01-verdict.yaml" = "dkmv/builtins/judge/01-verdict.yaml"
+"dkmv/builtins/docs/01-generate.yaml" = "dkmv/builtins/docs/01-generate.yaml"
 
 [tool.mypy]
 python_version = "3.12"

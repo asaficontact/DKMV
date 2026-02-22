@@ -178,6 +178,7 @@ class SandboxManager:
         timeout_minutes: int,
         max_budget_usd: float | None = None,
         working_dir: str = "/home/dkmv/workspace",
+        env_vars: dict[str, str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         await self.write_file(session, "/tmp/dkmv_prompt.md", prompt)
 
@@ -186,9 +187,13 @@ class SandboxManager:
             if max_budget_usd is not None
             else ""
         )
+        env_prefix = ""
+        if env_vars:
+            pairs = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())
+            env_prefix = f"env {pairs} "
         cmd = (
             f"cd {shlex.quote(working_dir)} && "
-            'claude -p "$(cat /tmp/dkmv_prompt.md)" '
+            f'{env_prefix}claude -p "$(cat /tmp/dkmv_prompt.md)" '
             "--dangerously-skip-permissions "
             "--verbose "
             "--output-format stream-json "
