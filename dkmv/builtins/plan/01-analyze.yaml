@@ -1,0 +1,144 @@
+name: analyze
+description: >
+  Analyze the PRD and review/create ADRs for blocking architectural decisions.
+  Produces a structured analysis.json with extracted features, personas,
+  constraints, risks, non-goals, and architecture notes.
+commit: true
+push: true
+
+outputs:
+  - path: analysis.json
+    required: true
+    save: true
+    required_fields:
+      - output_dir
+      - features
+      - constraints
+      - risks
+      - non_goals
+      - architecture_notes
+      - estimated_complexity
+
+instructions: |
+  ## Analysis Rules
+  - Read the full PRD at `.agent/prd.md` before doing anything else
+  - Do NOT write any implementation code
+  - Do NOT create any implementation documents yet — only produce `.agent/analysis.json`
+  - The analysis must be valid JSON
+  - If design docs are available at `.agent/design_docs/`, incorporate them into your analysis
+  - Handle ADRs conditionally:
+    - If an existing ADR directory is found, review and update existing ADRs as needed
+    - If no ADR directory exists AND this is a new project, create `docs/adrs/` and write ADRs for blocking decisions
+    - If no ADR directory exists AND this is an existing project with code, skip ADR file creation — document inline
+  - Only create ADRs for decisions that affect 3+ tasks.
+
+prompt: |
+  You are a senior software architect analyzing a PRD to prepare for implementation planning.
+
+  ## Setup
+
+  1. Read the PRD at `.agent/prd.md` thoroughly — this is your primary input
+  2. Implementation docs will go in `docs/implementation/<name>/` — you will choose the subdirectory name based on the PRD (see Output section)
+  3. If design documents exist at `.agent/design_docs/`, read them for context
+
+  {% if design_docs_path is defined and design_docs_path %}
+  ## Design Documents
+  Review the design documents in `.agent/design_docs/` for architectural context.
+  {% endif %}
+
+  ## Step 1: Deep Analysis
+
+  Analyze the PRD systematically. Extract:
+  - **Features** — distinct functional capabilities to build
+  - **Personas** — who will use this and how
+  - **Constraints** — technical, business, and operational limits
+  - **Risks** — what could go wrong
+  - **Non-goals** — what is explicitly out of scope
+  - **Architecture notes** — key technical decisions implied by the PRD
+
+  ## Step 2: ADR Review
+
+  Check if the project has an existing ADR directory:
+  - If `docs/adrs/` exists: review existing ADRs, update if needed
+  - If no ADR directory AND this is a new project: create `docs/adrs/` and write ADRs for blocking architectural decisions
+  - If no ADR directory AND this is an existing project: skip ADR file creation, document decisions inline in analysis.json
+
+  Only create ADRs for decisions that affect 3+ tasks.
+
+  ## Step 3: Research Phase
+
+  Before writing your output, research the technology landscape relevant to this PRD:
+
+  1. **Identify key technology areas** from the PRD — frameworks, libraries, protocols, data stores, APIs.
+  2. **For each area, evaluate 2-3 options.** Consider: maturity, maintenance status, community size, documentation quality, license compatibility, and fit with the PRD's constraints.
+  3. **Check mentioned technologies** — if the PRD names specific tools or libraries, verify they exist, are actively maintained, and suit the use case. Flag any that are deprecated or problematic.
+  4. **Consider established patterns** — for the PRD's domain (web API, CLI tool, data pipeline, etc.), what are the standard architectural patterns? Note any the PRD implies or requires.
+  5. **Document your findings** in the `technology_decisions` field of analysis.json.
+
+  Focus on decisions that materially affect implementation — don't research obvious choices (e.g., Python's `json` module for JSON parsing). Prioritize decisions where the wrong choice would require significant rework.
+
+  ## Output
+
+  Write `.agent/analysis.json` with the following structure:
+  ```json
+  {
+    "output_dir": "docs/implementation/<name>",
+    "features": [{"id": "F1", "name": "...", "description": "..."}],
+    "personas": [{"name": "...", "description": "..."}],
+    "constraints": ["..."],
+    "risks": [{"risk": "...", "mitigation": "..."}],
+    "non_goals": ["..."],
+    "architecture_notes": ["..."],
+    "adrs_created": ["ADR-0001: ..."],
+    "adrs_reviewed": ["ADR-0001: ..."],
+    "estimated_complexity": "small|medium|large",
+    "technology_decisions": [
+      {
+        "area": "e.g., HTTP framework",
+        "chosen": "e.g., FastAPI",
+        "alternatives_considered": ["Flask", "Starlette"],
+        "rationale": "Why this choice fits the PRD constraints"
+      }
+    ],
+    "questions": [
+      {
+        "id": "q1",
+        "question": "Which approach do you prefer for X?",
+        "options": [
+          {"value": "a", "label": "Option A", "description": "Trade-off details"},
+          {"value": "b", "label": "Option B", "description": "Trade-off details"}
+        ],
+        "default": "a"
+      }
+    ]
+  }
+  ```
+
+  ### Questions Guidance
+
+  Produce 3-5 questions for the user about decisions that significantly affect the implementation plan. Good question topics include:
+  - **Technology choices** where multiple viable options exist (from your research phase)
+  - **Architecture patterns** where the PRD is ambiguous (monolith vs microservice, sync vs async)
+  - **Scope decisions** where the PRD could be interpreted broadly or narrowly
+  - **Integration approaches** where the PRD mentions external systems
+
+  Each question must have 2-4 concrete options with descriptions explaining the trade-offs. Set a sensible `default` based on your analysis. If the PRD is unambiguous about all decisions, you may include fewer questions or omit the field.
+
+  ### Output Directory
+
+  Set `output_dir` to `docs/implementation/<name>` where `<name>` is a short, lowercase-kebab-case name derived from the PRD title or project name (e.g., `docs/implementation/user-auth`, `docs/implementation/payment-api`). This directory is where all subsequent tasks will write their deliverables. Create the directory: `mkdir -p <output_dir>`.
+
+  ## Self-Review
+
+  Before finalizing your output, perform the following verification:
+
+  1. **Re-read the PRD** at `.agent/prd.md` end-to-end. For each section, verify that your analysis.json captures the relevant features, constraints, risks, and non-goals. Flag any PRD requirement you missed.
+  2. **Check completeness** — are all required fields present and non-empty? Does every feature have an id, name, and description? Does every risk have a mitigation?
+  3. **Check correctness** — does your analysis match what the PRD actually says? Re-read any section you're unsure about. Don't invent constraints or risks that aren't in the PRD.
+  4. **Verify ADR decisions** — if you created or reviewed ADRs, confirm they address decisions that genuinely affect 3+ tasks. Remove any that don't meet the threshold.
+  5. **Fix genuine gaps** — if you find missing features, mischaracterized risks, or incorrect constraints, fix them now before writing the final output.
+
+  ## Constraints
+  - Do NOT write implementation code
+  - Do NOT create implementation documents yet
+  - Output only `.agent/analysis.json` (and ADR files if applicable)

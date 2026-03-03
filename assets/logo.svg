@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#09090b"/><stop offset="100%" style="stop-color:#18181b"/></linearGradient>
+    <linearGradient id="lava" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#fbbf24"/><stop offset="30%" style="stop-color:#f97316"/><stop offset="70%" style="stop-color:#ef4444"/><stop offset="100%" style="stop-color:#7f1d1d"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="shd"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.7"/></filter>
+    <clipPath id="a"><polygon points="55,85 180,85 170,160 115,200 55,190"/></clipPath>
+    <clipPath id="b"><polygon points="180,85 345,85 345,150 265,185 200,145 170,160"/></clipPath>
+    <clipPath id="c"><polygon points="345,150 345,230 290,240 265,185"/></clipPath>
+    <clipPath id="d"><polygon points="115,200 170,160 200,145 200,205 160,235"/></clipPath>
+    <clipPath id="e"><polygon points="200,145 265,185 290,240 235,245 200,205"/></clipPath>
+    <clipPath id="f"><polygon points="55,190 115,200 160,235 140,300 55,325"/></clipPath>
+    <clipPath id="g"><polygon points="160,235 200,205 235,245 225,315 165,325"/></clipPath>
+    <clipPath id="h"><polygon points="235,245 290,240 345,230 345,325 280,325 255,295"/></clipPath>
+    <clipPath id="i"><polygon points="225,315 255,295 280,325 225,325"/></clipPath>
+  </defs>
+  <style>
+    .vc-shake{transform-origin:200px 200px;animation:quake 3.2s ease-in forwards}
+    @keyframes quake{0%{transform:translate(0,0)}8%{transform:translate(.5px,0)}10%{transform:translate(-.5px,.5px)}12%{transform:translate(.5px,-.5px)}14%{transform:translate(-.5px,0)}20%{transform:translate(1px,0)}22%{transform:translate(-1px,.5px)}24%{transform:translate(1px,-1px)}26%{transform:translate(-1.5px,.5px)}34%{transform:translate(2px,0)}36%{transform:translate(-2px,1px)}38%{transform:translate(2.5px,-1px)}42%{transform:translate(3px,-1px)}44%{transform:translate(-2.5px,1px)}50%{transform:translate(3.5px,-1.5px)}52%{transform:translate(-4px,2px)}54%{transform:translate(4px,-2px)}58%{transform:translate(4.5px,-2px)}62%{transform:translate(5px,-2.5px)}64%{transform:translate(-5px,3px)}68%{transform:translate(-6px,3px)}70%{transform:translate(6px,-3px)}74%{transform:translate(7px,-3px)}75%{transform:translate(0,0);opacity:1}76%{opacity:0}100%{opacity:0;transform:translate(0,0)}}
+    .cracks{animation:crk 3.2s ease-in-out forwards}@keyframes crk{0%,72%{opacity:0;stroke-dashoffset:400}76%{opacity:.8;stroke-dashoffset:80}82%{opacity:1;stroke-dashoffset:0}92%{opacity:.2}100%{opacity:0}}
+    .ember{opacity:0;animation:emb 3.8s ease-out forwards}@keyframes emb{0%,75%{opacity:0;transform:translate(0,0) scale(1)}78%{opacity:.9}92%{opacity:.2;transform:translate(var(--ex),var(--ey)) scale(.3)}100%{opacity:0;transform:translate(var(--ex),var(--ey)) scale(0)}}
+    .sa{animation:dA 3.5s cubic-bezier(.25,.46,.45,.94) forwards}.sb{animation:dB 3.5s cubic-bezier(.25,.46,.45,.94) forwards}.sc{animation:dC 3.5s cubic-bezier(.25,.46,.45,.94) forwards}.sd{animation:dD 3.5s cubic-bezier(.25,.46,.45,.94) forwards}.se{animation:dE 3.5s cubic-bezier(.25,.46,.45,.94) forwards}.sf{animation:dF 3.5s cubic-bezier(.25,.46,.45,.94) forwards}.sg{animation:dG 3.5s cubic-bezier(.25,.46,.45,.94) forwards}.sh{animation:dH 3.5s cubic-bezier(.25,.46,.45,.94) forwards}.si{animation:dI 3.5s cubic-bezier(.25,.46,.45,.94) forwards}
+    @keyframes dA{0%,75%{transform:translate(0,0) rotate(0);opacity:0}77%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(-20px,-26px) rotate(-5deg);opacity:.78}}
+    @keyframes dB{0%,75%{transform:translate(0,0) rotate(0);opacity:0}77%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(16px,-28px) rotate(4deg);opacity:.78}}
+    @keyframes dC{0%,76%{transform:translate(0,0) rotate(0);opacity:0}78%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(26px,-9px) rotate(6deg);opacity:.72}}
+    @keyframes dD{0%,76%{transform:translate(0,0) rotate(0);opacity:0}78%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(-7px,-9px) rotate(-2.5deg);opacity:.72}}
+    @keyframes dE{0%,76%{transform:translate(0,0) rotate(0);opacity:0}78%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(5px,-10px) rotate(2deg);opacity:.72}}
+    @keyframes dF{0%,76%{transform:translate(0,0) rotate(0);opacity:0}79%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(-18px,16px) rotate(-4deg);opacity:.75}}
+    @keyframes dG{0%,76%{transform:translate(0,0) rotate(0);opacity:0}79%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(-3px,20px) rotate(-1.5deg);opacity:.75}}
+    @keyframes dH{0%,76%{transform:translate(0,0) rotate(0);opacity:0}78%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(20px,18px) rotate(4.5deg);opacity:.75}}
+    @keyframes dI{0%,77%{transform:translate(0,0) rotate(0);opacity:0}80%{opacity:1;transform:translate(0,0) rotate(0)}100%{transform:translate(9px,23px) rotate(3deg);opacity:.68}}
+  </style>
+  <rect width="400" height="400" rx="48" fill="url(#bg)"/>
+  <g class="vc-shake"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#e4e4e7" letter-spacing="-6">VC</text></g>
+  <g class="cracks" filter="url(#glow)"><g fill="none" stroke="url(#lava)" stroke-linecap="round" stroke-dasharray="400" stroke-dashoffset="400"><path d="M 200 205 L 170 160 L 180 85" stroke-width="3"/><path d="M 200 205 L 265 185 L 345 150" stroke-width="2.5"/><path d="M 200 205 L 115 200 L 55 190" stroke-width="2.5"/><path d="M 200 205 L 235 245 L 290 240 L 345 230" stroke-width="2"/><path d="M 200 205 L 160 235 L 140 300 L 55 325" stroke-width="2.5"/><path d="M 200 205 L 225 315" stroke-width="2"/><path d="M 160 235 L 165 325" stroke-width="1.5"/><path d="M 265 185 L 290 240" stroke-width="1.5"/><path d="M 170 160 L 115 200" stroke-width="1.5"/></g></g>
+  <g class="sa" clip-path="url(#a)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#d4d4d8" letter-spacing="-6">VC</text></g>
+  <g class="sb" clip-path="url(#b)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#c8c8cc" letter-spacing="-6">VC</text></g>
+  <g class="sc" clip-path="url(#c)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#bcbcc0" letter-spacing="-6">VC</text></g>
+  <g class="sd" clip-path="url(#d)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#a8a8ac" letter-spacing="-6">VC</text></g>
+  <g class="se" clip-path="url(#e)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#b8b8bc" letter-spacing="-6">VC</text></g>
+  <g class="sf" clip-path="url(#f)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#9e9ea2" letter-spacing="-6">VC</text></g>
+  <g class="sg" clip-path="url(#g)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#929296" letter-spacing="-6">VC</text></g>
+  <g class="sh" clip-path="url(#h)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#aaaaae" letter-spacing="-6">VC</text></g>
+  <g class="si" clip-path="url(#i)" filter="url(#shd)"><text x="200" y="272" text-anchor="middle" font-family="'Arial Black','Segoe UI',sans-serif" font-size="200" font-weight="900" fill="#888890" letter-spacing="-6">VC</text></g>
+  <g filter="url(#glow)">
+    <circle class="ember" cx="200" cy="200" r="3" fill="#fbbf24" style="--ex:-38px;--ey:-52px"/>
+    <circle class="ember" cx="200" cy="200" r="2.5" fill="#f97316" style="--ex:42px;--ey:-46px;animation-delay:.03s"/>
+    <circle class="ember" cx="200" cy="200" r="2.8" fill="#fbbf24" style="--ex:-46px;--ey:38px;animation-delay:.06s"/>
+    <circle class="ember" cx="200" cy="200" r="2" fill="#ef4444" style="--ex:50px;--ey:42px;animation-delay:.05s"/>
+    <circle class="ember" cx="200" cy="200" r="2.5" fill="#fbbf24" style="--ex:-22px;--ey:-62px;animation-delay:.08s"/>
+    <circle class="ember" cx="200" cy="200" r="2.2" fill="#ef4444" style="--ex:56px;--ey:-12px;animation-delay:.09s"/>
+  </g>
+</svg>

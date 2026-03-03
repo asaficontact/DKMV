@@ -1,0 +1,62 @@
+<svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+  <defs>
+    <style>
+      @keyframes neon-glow {
+        0%, 100% {
+          filter: drop-shadow(0 0 8px #00ff88) drop-shadow(0 0 16px #00ff88);
+          opacity: 1;
+        }
+        50% {
+          filter: drop-shadow(0 0 12px #00ff88) drop-shadow(0 0 20px #00ff88);
+          opacity: 0.95;
+        }
+      }
+
+      @keyframes pulse-subtle {
+        0%, 100% {
+          opacity: 0.8;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+
+      .neon-glow {
+        animation: neon-glow 3s ease-in-out infinite;
+      }
+
+      .pulse {
+        animation: pulse-subtle 2.5s ease-in-out infinite;
+      }
+    </style>
+
+    <linearGradient id="neon-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00ff88;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00ffdd;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Dark background -->
+  <rect width="400" height="400" fill="#09090b" rx="48"/>
+
+  <!-- Toggle track (pill shape) -->
+  <rect x="100" y="160" width="200" height="80" rx="40" fill="#1a1a1f" stroke="#2a2a2f" stroke-width="2"/>
+
+  <!-- Toggle track highlight (subtle) -->
+  <rect x="100" y="160" width="200" height="80" rx="40" fill="none" stroke="#00ff88" stroke-width="1" opacity="0.3"/>
+
+  <!-- Toggle knob (ON position - right side) -->
+  <g class="neon-glow">
+    <circle cx="280" cy="200" r="35" fill="url(#neon-grad)"/>
+    <!-- Inner glow circle -->
+    <circle cx="280" cy="200" r="30" fill="none" stroke="#00ffdd" stroke-width="2" opacity="0.6"/>
+  </g>
+
+  <!-- Inner detail on knob -->
+  <circle cx="280" cy="200" r="25" fill="#00ff88" opacity="0.3"/>
+
+  <!-- Decorative indicator dot (ON side) -->
+  <g class="pulse">
+    <circle cx="280" cy="190" r="4" fill="#00ffdd"/>
+  </g>
+</svg>

@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted
+Accepted — Updated to reflect current component set and `.agent/` directory (see ADR-0010, ADR-0014)
 
 ## Context and Problem Statement
 
-DKMV runs multiple specialized agents (Dev, QA, Judge, Docs) sequentially on the same codebase. These components need a way to share work products — Dev's code changes need to be visible to QA, QA's report needs to be visible to Judge, etc. How should components communicate and share state?
+DKMV runs multiple specialized agents (Plan, Dev, QA, Docs) sequentially on the same codebase. These components need a way to share work products — Plan's implementation docs need to be visible to Dev, Dev's code changes need to be visible to QA, etc. How should components communicate and share state?
 
 ## Decision Drivers
 
@@ -33,63 +33,78 @@ Chosen option: "Git branches", because they provide durable, portable, inspectab
 User writes PRD
        │
        ▼
-┌─────────────┐    git push     ┌─────────────┐
-│   Dev Agent  │ ──────────────► │  Git Branch  │
-│              │   feature/auth  │              │
-│ Writes code, │                 │ Code changes │
-│ commits to   │                 │ .dkmv/plan.md│
-│ branch       │                 │              │
-└─────────────┘                 └──────┬───────┘
-                                       │ git clone
-                                       ▼
-                                ┌─────────────┐
-                                │   QA Agent   │
-                                │              │
-                                │ Reads code,  │
-                                │ runs tests,  │
-                                │ writes report│
-                                └──────┬───────┘
-                                       │ git push
-                                       ▼
-                                ┌─────────────┐
-                                │  Git Branch  │
-                                │              │
-                                │ + QA report  │
-                                │ .dkmv/       │
-                                │  qa_report.  │
-                                │  json        │
-                                └──────┬───────┘
-                                       │ git clone
-                                       ▼
-                                ┌─────────────┐
-                                │ Judge Agent  │
-                                │              │
-                                │ Reads code + │
-                                │ QA report,   │
-                                │ writes verdict│
-                                └──────┬───────┘
-                                       │ git push
-                                       ▼
-                                ┌─────────────┐
-                                │  Git Branch  │
-                                │              │
-                                │ + verdict    │
-                                │ .dkmv/       │
-                                │  verdict.json│
-                                └─────────────┘
+┌──────────────┐   git push    ┌──────────────┐
+│  Plan Agent   │ ────────────►│  Git Branch   │
+│               │  feature/    │               │
+│ Analyzes PRD, │  auth-plan   │ Implementation│
+│ creates impl  │              │ docs, ADRs,   │
+│ docs, phases  │              │ .agent/       │
+└──────────────┘              │ analysis.json │
+                               └──────┬────────┘
+                                      │ git clone
+                                      ▼
+                               ┌──────────────┐
+                               │  Dev Agent    │
+                               │               │
+                               │ Reads impl    │
+                               │ docs, writes  │
+                               │ code, tests   │
+                               └──────┬────────┘
+                                      │ git push
+                                      ▼
+                               ┌──────────────┐
+                               │  Git Branch   │
+                               │               │
+                               │ + code changes│
+                               │ + test suite  │
+                               └──────┬────────┘
+                                      │ git clone
+                                      ▼
+                               ┌──────────────┐
+                               │  QA Agent     │
+                               │               │
+                               │ Evaluate →    │
+                               │ Fix → Re-eval │
+                               │ (see ADR-0014)│
+                               └──────┬────────┘
+                                      │ git push
+                                      ▼
+                               ┌──────────────┐
+                               │  Git Branch   │
+                               │               │
+                               │ + fixes       │
+                               │ + QA reports  │
+                               └──────────────┘
 ```
 
 ### Communication Channels
 
-Components communicate through well-known file paths in the `.dkmv/` directory on the branch:
+Components communicate through two mechanisms:
+
+1. **Code and docs on the branch** — implementation docs, source code, tests, ADRs
+2. **Structured outputs in `.agent/`** — JSON artifacts that track task progress and inter-task data
 
 | File | Written By | Read By | Purpose |
 |------|-----------|---------|---------|
-| `.dkmv/plan.md` | Dev | QA, Judge | Implementation plan |
-| `.dkmv/prd.md` | BaseComponent | All | PRD (copied from host) |
-| `.dkmv/qa_report.json` | QA | Judge | Test results and findings |
-| `.dkmv/verdict.json` | Judge | User | Pass/fail verdict with score |
-| `.dkmv/feedback.json` | User/QA | Dev (on re-run) | Feedback for iteration |
+| `.agent/analysis.json` | Plan (analyze) | Plan (downstream tasks) | PRD analysis with features, risks, constraints |
+| `.agent/prd.md` | DKMV (injected input) | Plan agent | PRD copied from host |
+| `.agent/impl_docs/` | DKMV (injected input) | Dev, QA agents | Implementation docs copied from host |
+| `.agent/qa_evaluation.json` | QA (evaluate) | QA (fix task) | Structured evaluation with issues list |
+| `.agent/qa_report.json` | QA (re-evaluate) | User | Final QA report after fixes |
+| `.agent/user_decisions.json` | DKMV (pause system) | Next task in sequence | User's interactive choices |
+| `docs/implementation/<name>/` | Plan (assembly) | Dev, QA | Implementation docs committed to repo |
+| `docs/adrs/` | Plan (analyze) | Dev | Architecture Decision Records |
+
+### Branch Naming Convention
+
+Each component auto-derives a branch name when `--branch` is not explicitly provided:
+
+| Component | Default Branch | Example |
+|-----------|---------------|---------|
+| `plan` | `feature/{prd_stem}-plan` | `feature/user-auth-plan` |
+| `dev` | `feature/{impl_docs_dir}-dev` | `feature/user-auth-dev` |
+| `qa` | Required (`--branch` mandatory) | — |
+| `docs` | Required (`--branch` mandatory) | — |
 
 ### Consequences
 

@@ -7,6 +7,7 @@ name = "dkmv"
 version = "0.1.0"
 description = "CLI tool that orchestrates AI agents to implement software features end-to-end"
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.15.0",
@@ -66,15 +67,22 @@ line-length = 100
 packages = ["dkmv"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"dkmv/components/dev/prompt.md" = "dkmv/components/dev/prompt.md"
-"dkmv/components/qa/prompt.md" = "dkmv/components/qa/prompt.md"
-"dkmv/components/judge/prompt.md" = "dkmv/components/judge/prompt.md"
-"dkmv/components/docs/prompt.md" = "dkmv/components/docs/prompt.md"
-"dkmv/builtins/dev/01-plan.yaml" = "dkmv/builtins/dev/01-plan.yaml"
-"dkmv/builtins/dev/02-implement.yaml" = "dkmv/builtins/dev/02-implement.yaml"
+"dkmv/builtins/dev/implement-phase.yaml" = "dkmv/builtins/dev/implement-phase.yaml"
 "dkmv/builtins/qa/01-evaluate.yaml" = "dkmv/builtins/qa/01-evaluate.yaml"
-"dkmv/builtins/judge/01-verdict.yaml" = "dkmv/builtins/judge/01-verdict.yaml"
-"dkmv/builtins/docs/01-generate.yaml" = "dkmv/builtins/docs/01-generate.yaml"
+"dkmv/builtins/qa/02-fix.yaml" = "dkmv/builtins/qa/02-fix.yaml"
+"dkmv/builtins/qa/03-re-evaluate.yaml" = "dkmv/builtins/qa/03-re-evaluate.yaml"
+"dkmv/builtins/docs/01-update-docs.yaml" = "dkmv/builtins/docs/01-update-docs.yaml"
+"dkmv/builtins/docs/02-verify.yaml" = "dkmv/builtins/docs/02-verify.yaml"
+"dkmv/builtins/docs/03-create-pr.yaml" = "dkmv/builtins/docs/03-create-pr.yaml"
+"dkmv/builtins/plan/01-analyze.yaml" = "dkmv/builtins/plan/01-analyze.yaml"
+"dkmv/builtins/plan/02-features-stories.yaml" = "dkmv/builtins/plan/02-features-stories.yaml"
+"dkmv/builtins/plan/03-phases.yaml" = "dkmv/builtins/plan/03-phases.yaml"
+"dkmv/builtins/plan/04-assembly.yaml" = "dkmv/builtins/plan/04-assembly.yaml"
+"dkmv/builtins/plan/05-evaluate-fix.yaml" = "dkmv/builtins/plan/05-evaluate-fix.yaml"
+"dkmv/builtins/dev/component.yaml" = "dkmv/builtins/dev/component.yaml"
+"dkmv/builtins/qa/component.yaml" = "dkmv/builtins/qa/component.yaml"
+"dkmv/builtins/docs/component.yaml" = "dkmv/builtins/docs/component.yaml"
+"dkmv/builtins/plan/component.yaml" = "dkmv/builtins/plan/component.yaml"
 
 [tool.mypy]
 python_version = "3.12"

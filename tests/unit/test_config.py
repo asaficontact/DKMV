@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import click
 import pytest
@@ -15,6 +16,7 @@ def _isolate_from_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 class TestDKMVConfig:
     def test_loads_from_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-123")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
         monkeypatch.setenv("GITHUB_TOKEN", "ghp_test456")
         monkeypatch.setenv("DKMV_MODEL", "claude-opus-4-20250514")
         monkeypatch.setenv("DKMV_MAX_TURNS", "50")
@@ -27,6 +29,7 @@ class TestDKMVConfig:
         config = DKMVConfig()
 
         assert config.anthropic_api_key == "sk-ant-test-123"
+        assert config.claude_oauth_token == "sk-ant-oat01-test"
         assert config.github_token == "ghp_test456"
         assert config.default_model == "claude-opus-4-20250514"
         assert config.default_max_turns == 50
@@ -38,6 +41,7 @@ class TestDKMVConfig:
 
     def test_uses_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("DKMV_MODEL", raising=False)
         monkeypatch.delenv("DKMV_MAX_TURNS", raising=False)
@@ -50,6 +54,7 @@ class TestDKMVConfig:
         config = DKMVConfig()
 
         assert config.anthropic_api_key == ""
+        assert config.claude_oauth_token == ""
         assert config.github_token == ""
         assert config.default_model == "claude-sonnet-4-6"
         assert config.default_max_turns == 100
@@ -93,3 +98,128 @@ class TestLoadConfig:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         config = load_config(require_api_key=False)
         assert config.anthropic_api_key == ""
+
+
+class TestGitHubTokenFallback:
+    def test_gh_token_env_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GH_TOKEN set, GITHUB_TOKEN not set → token populated."""
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.setenv("GH_TOKEN", "ghp_from_gh_token")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        config = load_config()
+        assert config.github_token == "ghp_from_gh_token"
+
+    def test_gh_auth_token_cli_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """gh auth token CLI source in project config → subprocess called → token populated."""
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+        from dkmv.project import ProjectConfig
+
+        project = ProjectConfig(project_name="test", repo="owner/repo")
+        project.credentials.github_token_source = "gh auth token"
+
+        with (
+            patch("dkmv.project.load_project_config", return_value=project),
+            patch("dkmv.config._fetch_gh_auth_token", return_value="ghp_from_cli"),
+        ):
+            config = load_config()
+
+        assert config.github_token == "ghp_from_cli"
+
+    def test_no_fallback_when_github_token_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GITHUB_TOKEN already set → GH_TOKEN and subprocess not consulted."""
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_primary")
+        monkeypatch.setenv("GH_TOKEN", "ghp_should_not_use")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        config = load_config()
+        assert config.github_token == "ghp_primary"
+
+    def test_gh_auth_token_failure_graceful(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """subprocess fails → token stays empty, no crash."""
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+        from dkmv.project import ProjectConfig
+
+        project = ProjectConfig(project_name="test", repo="owner/repo")
+        project.credentials.github_token_source = "gh auth token"
+
+        with (
+            patch("dkmv.project.load_project_config", return_value=project),
+            patch("dkmv.config._fetch_gh_auth_token", return_value=""),
+        ):
+            config = load_config()
+
+        assert config.github_token == ""
+
+
+class TestOAuthAuthentication:
+    def test_oauth_token_loaded_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CLAUDE_CODE_OAUTH_TOKEN env var is loaded into config."""
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+        config = DKMVConfig()
+        assert config.claude_oauth_token == "sk-ant-oat01-test"
+
+    def test_oauth_token_defaults_to_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        config = DKMVConfig()
+        assert config.claude_oauth_token == ""
+
+    def test_oauth_auth_method_succeeds_with_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OAuth auth method with valid token should not require API key."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+
+        from dkmv.project import ProjectConfig
+
+        project = ProjectConfig(project_name="test", repo="owner/repo")
+        project.credentials.auth_method = "oauth"
+
+        with patch("dkmv.project.load_project_config", return_value=project):
+            config = load_config()
+
+        assert config.claude_oauth_token == "sk-ant-oat01-test"
+        assert config.anthropic_api_key == ""
+
+    def test_oauth_auth_method_fails_without_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OAuth auth method without token should exit with error."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+        from dkmv.project import ProjectConfig
+
+        project = ProjectConfig(project_name="test", repo="owner/repo")
+        project.credentials.auth_method = "oauth"
+
+        with (
+            patch("dkmv.project.load_project_config", return_value=project),
+            pytest.raises(click.exceptions.Exit),
+        ):
+            load_config()
+
+    def test_api_key_auth_method_ignores_oauth_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """API key auth method still requires ANTHROPIC_API_KEY even if OAuth token is set."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+
+        with pytest.raises(click.exceptions.Exit):
+            load_config()
+
+    def test_no_project_config_requires_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without project config, default auth_method is api_key."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+
+        with pytest.raises(click.exceptions.Exit):
+            load_config()

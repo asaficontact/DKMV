@@ -1,25 +1,17 @@
 name: evaluate
 description: >
-  Review the implementation on a feature branch against the PRD. Run tests,
-  evaluate requirements and code quality, and produce a structured QA report.
-commit: true
-push: true
-commit_message: "feat(qa): {{ feature_name }} [dkmv-qa]"
-
-model: claude-sonnet-4-6
-max_turns: 80
-timeout_minutes: 25
-max_budget_usd: 2.00
-
-inputs:
-  - name: prd
-    type: file
-    src: "{{ prd_path }}"
-    dest: /home/dkmv/workspace/.dkmv/prd.md
+  Evaluate the implementation against the implementation docs. Run the full
+  test suite, review code quality, and produce a structured evaluation report.
+  Do NOT modify any source code — this is a read-only evaluation.
+commit: false
+push: false
 
 outputs:
-  - path: /home/dkmv/workspace/.dkmv/qa_report.json
+  - path: qa_evaluation.json
     required: true
+    save: true
+  - path: qa_evaluation.md
+    required: false
     save: true
 
 instructions: |
@@ -27,58 +19,58 @@ instructions: |
   - You are evaluating an implementation — do NOT modify any source code
   - Be thorough but fair in your evaluation
   - Provide specific file and line references for any issues found
-  - The QA report must be valid JSON at `.dkmv/qa_report.json`
-  - Pay special attention to the "## Evaluation Criteria" section in the PRD
+  - The evaluation must produce valid JSON at `.agent/qa_evaluation.json`
+  - Read all implementation docs in `.agent/impl_docs/` for requirements
   - Run the FULL test suite, not just individual files
 
 prompt: |
-  You are a senior QA engineer reviewing a feature implementation against its PRD.
+  You are a senior QA engineer reviewing a feature implementation.
 
   ## Your Task
-  Read the PRD at `.dkmv/prd.md` (including the Evaluation Criteria section)
-  and thoroughly evaluate the implementation on this branch.
+  Read the implementation docs at `.agent/impl_docs/` and thoroughly evaluate
+  the implementation on this branch.
 
   ## Phase 1: Understand Requirements
-  1. Read the PRD at `.dkmv/prd.md` carefully — pay special attention to the
-     `## Evaluation Criteria` section
-  2. Explore the codebase to understand what was implemented
+  1. Read all implementation docs in `.agent/impl_docs/` carefully
+  2. If a CLAUDE.md exists at the repo root, read it for project conventions
+  3. Explore the codebase to understand what was implemented
 
   ## Phase 2: Run Tests
-  3. Run the full test suite and record results
-  4. Check for regressions against the main branch
-  5. Note any tests that are missing or insufficient
+  4. Run the full test suite and record results
+  5. Check for regressions
+  6. Note any tests that are missing or insufficient
 
   ## Phase 3: Evaluate
-  6. Evaluate each PRD requirement — is it fully implemented?
-  7. Evaluate each item in `## Evaluation Criteria`
+  7. Evaluate each requirement from the implementation docs — is it fully implemented?
   8. Review code quality: error handling, edge cases, security, performance
   9. Check for code style consistency with the rest of the codebase
 
   ## Phase 4: Report
-  10. Produce a structured JSON report at `.dkmv/qa_report.json` with the
+  10. Produce a structured JSON report at `.agent/qa_evaluation.json` with the
       following schema:
   ```json
   {
+    "status": "pass|fail",
+    "issues": [
+      {
+        "severity": "critical|high|medium|low",
+        "description": "description of the issue",
+        "file": "path/to/file.py",
+        "suggestion": "how to fix it"
+      }
+    ],
     "tests_total": 0,
     "tests_passed": 0,
     "tests_failed": 0,
-    "requirements": [
-      {"requirement": "description", "status": "pass|fail|partial", "notes": "details"}
-    ],
-    "eval_criteria": [
-      {"criterion": "description", "status": "pass|fail|partial", "notes": "details"}
-    ],
-    "code_quality": {
-      "issues": ["description of issue"],
-      "suggestions": ["suggestion for improvement"]
-    },
-    "warnings": ["any warnings or concerns"],
     "summary": "overall assessment"
   }
   ```
 
+  11. Also write a human-readable markdown report to `.agent/qa_evaluation.md`
+      summarizing the evaluation findings.
+
   ## Constraints
   - Be thorough but fair in your evaluation
   - Provide specific file and line references for any issues
-  - Do not modify the implementation code
+  - Do NOT modify the implementation code
   - Focus on correctness, completeness, and quality

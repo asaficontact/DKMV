@@ -1,418 +1,525 @@
-# DKMV (Don't Kill My Vibe)
+<p align="center">
+  <img src="assets/logo.svg" alt="DKMV logo" width="280" />
+</p>
 
-A Python CLI tool that orchestrates AI agents via Claude Code in Docker containers to implement software features end-to-end.
+<h1 align="center">Don't Kill My Vibe (DKMV)</h1>
 
-Given a Product Requirements Document (PRD), DKMV runs a pipeline of specialized agents — **Dev**, **QA**, **Judge**, and **Docs** — each operating inside isolated Docker containers via [SWE-ReX](https://github.com/SWE-ReX/SWE-ReX). Agents run Claude Code in headless mode, producing real code changes on git branches.
+<p align="center">
+  <strong>Break the loop. Keep the vibe.</strong><br/>
+  Build, run, and share declarative agent workflows.
+</p>
 
-## Architecture
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0" /></a>
+</p>
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     USER (Operator)                     │
-│  Writes PRDs, runs CLI commands, inspects git branches  │
-└────────────────────────┬────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│                    DKMV CLI (dkmv)                       │
-│                                                         │
-│  ┌─────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │
-│  │ dkmv dev│ │ dkmv qa │ │dkmv judge│ │dkmv docs │ │ dkmv run │ │
-│  └────┬────┘ └────┬────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ │
-│       │           │           │             │           │     │
-│       ▼           ▼           ▼             ▼           ▼     │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │            Core Framework Layer                   │  │
-│  │  SandboxManager  RunManager  StreamParser         │  │
-│  └──────────────────────────────────────────────────┘  │
-└────────────────────────┬────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│              SWE-ReX DockerDeployment                    │
-│  Manages container lifecycle, bash sessions, file I/O   │
-└────────────────────────┬────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│           Docker Container (dkmv-sandbox)                │
-│                                                         │
-│  Claude Code (headless, YOLO mode)                      │
-│  ├── Reads PRD from workspace                           │
-│  ├── Explores codebase, writes code, runs tests         │
-│  ├── Iterates until requirements are met                │
-│  └── Commits results to git branch                      │
-│                                                         │
-│  Pre-installed: git, gh CLI, Node.js 20, Python 3       │
-└─────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#how-it-works">How It Works</a> ·
+  <a href="#build-your-own">Build Your Own</a> ·
+  <a href="#built-in-pipelines">Built-in Pipelines</a> ·
+  <a href="vision_paper.md">Vision Paper</a>
+</p>
 
-## Components
+---
 
-DKMV ships with four built-in components. Each component runs in its own isolated Docker container (tasks within a component share the same container):
+## The Problem
 
-```
-PRD ──► Dev ──► QA ──► Judge ──► Docs
-         │       │       │         │
-         ▼       ▼       ▼         ▼
-      feature  tests   verdict   docs PR
-      branch   + QA    + score
-               report
-```
+Every agent session starts from zero. You prompt, review, re-prompt, lose context, repeat. The workflow that finally worked? Gone. The prompting strategy you perfected? Lives in your head, not your repo.
 
-| Component | Purpose | Input | Output |
-|-----------|---------|-------|--------|
-| **Dev** | Implement features from a PRD | PRD + repo | Code on a feature branch |
-| **QA** | Test and validate the implementation | PRD + branch | QA report (`.dkmv/qa_report.json`) |
-| **Judge** | Evaluate quality with pass/fail verdict | PRD + branch | Verdict with score (`.dkmv/verdict.json`) |
-| **Docs** | Generate documentation | Repo + branch | Docs changes, optional PR |
+This is the **conversational loop**, and it doesn't compound. Whether you're building features, running security audits, migrating databases, or reviewing code, the pattern is the same: ephemeral sessions that can't be saved, shared, or improved.
 
-Components share **zero state** with each other. The only bridge between them is the **git branch**. Each component runs in a fresh container and knows nothing about which component ran before or after it.
+## The Fix
 
-## Task System
-
-DKMV uses a YAML-based task system for defining components. Each component is a directory of YAML task files that are executed sequentially inside a single Docker container. The four built-in components (Dev, QA, Judge, Docs) are themselves YAML task files in `dkmv/builtins/`.
-
-```bash
-# Run a built-in component
-dkmv run dev --repo https://github.com/org/repo --var prd_path=./prd.md
-
-# Run a custom component directory
-dkmv run ./my-component --repo https://github.com/org/repo --var key=value
-```
-
-### Task YAML Structure
-
-Each task file defines what context to inject, what prompt to send, and what outputs to capture:
+DKMV is a framework for **declarative agent workflows**. Define tasks as YAML components, run them in isolated Docker containers with Claude Code, and compound your workflows over time. Every refinement you make permanently improves every future run.
 
 ```yaml
-name: implement
-description: Write code based on the plan
+# 01-scan.yaml — a single task in a component
+name: scan
+description: Scan codebase for security vulnerabilities
 commit: true
-push: true
-commit_message: "feat({{ component }}): {{ feature_name }} [dkmv]"
-
-model: claude-sonnet-4-6      # Override per task (optional)
-max_turns: 100
-max_budget_usd: 3.00
-
-inputs:
-  - name: prd
-    type: file                 # file, text, or env
-    src: "{{ prd_path }}"      # Path on your machine (Jinja2 template)
-    dest: /home/dkmv/workspace/.dkmv/prd.md  # Path inside container
-
-outputs:
-  - path: /home/dkmv/workspace/.dkmv/changes.md
-    required: false            # Fail the task if missing?
-    save: true                 # Copy to run output directory?
-
-instructions: |
-  - Follow the plan at `.dkmv/plan.md` precisely
-  - Run tests before finishing
-
 prompt: |
-  Implement the feature described in the PRD at `.dkmv/prd.md`.
+  Scan the codebase for OWASP Top 10 vulnerabilities.
+  Write results to `.agent/scan_results.json`.
+outputs:
+  - path: scan_results.json
+    required: true
+    save: true
 ```
 
-### Execution Parameter Cascade
+```bash
+dkmv run ./my-security-audit --branch feature/security --var checklist_path=./owasp.md
+```
 
-Execution parameters (`model`, `max_turns`, `timeout_minutes`, `max_budget_usd`) are resolved with a three-level cascade: **task YAML > CLI flags > global config**. This lets you set per-task overrides (e.g., a cheaper model for planning) while keeping sensible defaults.
+DKMV ships with built-in components for a complete development pipeline:
 
-### Template Variables
+```bash
+dkmv plan --branch feature/auth --prd auth.md          # PRD -> implementation docs
+dkmv dev  --branch feature/auth --impl-docs docs/auth/  # implement code phase by phase
+dkmv qa   --branch feature/auth --impl-docs docs/auth/  # evaluate -> fix -> re-evaluate
+dkmv docs --branch feature/auth                          # generate docs + open a PR
+```
 
-Task files support Jinja2 templates. Variables are available in prompts, input paths, content, and commit messages:
+> **Best practice:** Always create a branch with your PRD, implementation docs, or code changes pushed to GitHub, then pass `--branch` to every command. DKMV clones and checks out that branch inside the container.
 
-| Variable | Source |
-|----------|--------|
-| `{{ repo }}`, `{{ branch }}`, `{{ feature_name }}` | CLI arguments |
-| `{{ component }}`, `{{ model }}`, `{{ run_id }}` | Runtime |
-| `{{ prd_path }}`, `{{ any_key }}` | CLI `--var KEY=VALUE` flags |
-| `{{ tasks.plan.status }}`, `{{ tasks.plan.cost }}` | Previous task results |
+| | Ad-hoc Agent Sessions | DKMV Components |
+|---|---|---|
+| **Sessions** | Ephemeral, lost on close | Declarative, versioned in git |
+| **Improvement** | Depends on your memory | Components compound over time |
+| **Results** | Vary by prompting skill | Reproducible from same inputs |
+| **Cost** | Unpredictable token spend | Per-task budgets and turn limits |
+| **Sharing** | "Just prompt it like this..." | Share components like you share code |
 
-### Creating Custom Components
+---
+
+## Quick Start
+
+> **Prerequisites:** Python 3.12+, [Docker](https://docs.docker.com/get-docker/), [uv](https://docs.astral.sh/uv/), and an [Anthropic API key](https://console.anthropic.com/) or [Claude Code subscription](https://claude.ai/)
+
+```bash
+git clone https://github.com/your-org/dkmv.git && cd dkmv
+uv sync
+uv run dkmv init    # guided setup — detects credentials, checks Docker, creates .dkmv/
+uv run dkmv build   # build the sandbox image
+```
+
+**Run a built-in component:**
+
+```bash
+uv run dkmv dev --branch feature/auth --impl-docs docs/implementation/auth/
+```
+
+**Run your own component:**
+
+```bash
+uv run dkmv run ./my-component --branch feature/auth --var some_input=value
+```
+
+See [Build Your Own](#build-your-own) to create custom components.
+
+---
+
+## How It Works
+
+<p align="center">
+  <img src="assets/architecture.svg" alt="DKMV architecture: components flow through CLI into the engine (ComponentRunner, TaskRunner, SandboxManager) then execute in isolated Docker containers with Claude Code" width="680" />
+</p>
+
+**Key design decisions:**
+
+- **One container per component.** Fresh Docker container every time. No shared state, no cross-contamination. Same inputs = same execution environment.
+- **Git branches as the interface.** Components communicate exclusively through git. Every change is a commit with a diff. The whole workflow is auditable with standard git tooling.
+- **Real-time streaming.** Watch the agent think, write code, and run tests in your terminal as it happens — even for 30+ minute tasks.
+- **Fail-fast.** If any task fails, remaining tasks are skipped. No wasted compute on a broken run.
+- **Host `.dkmv/` maps to container `.agent/`.** Clean separation between host-side config and container-side workspace.
+
+---
+
+## Build Your Own
+
+Components are the core unit of DKMV. A component is a directory of YAML task files that define what an agent should do, in what order, with what inputs and constraints. Security audits, migrations, refactors, code reviews, data pipelines — anything you can describe to a coding agent.
+
+### Create a Component
 
 Create a directory with numbered YAML task files:
 
 ```
-my-component/
-├── 01-analyze.yaml    # Task 1: runs first
-├── 02-implement.yaml  # Task 2: runs second
-└── 03-verify.yaml     # Task 3: runs third
+my-security-audit/
+├── component.yaml      # Optional: shared settings, pause points
+├── 01-scan.yaml        # Task 1: scan for vulnerabilities
+├── 02-fix.yaml         # Task 2: apply fixes
+└── 03-verify.yaml      # Task 3: verify fixes
 ```
 
-Tasks execute in filename order. All tasks share the same container, so files written by one task are automatically available to the next. Run it with:
+Tasks execute in filename order. All tasks share the same container.
+
+### Task YAML
+
+Each task defines context, prompt, and outputs:
+
+```yaml
+name: scan
+description: Scan codebase for security vulnerabilities
+commit: true
+push: false
+
+model: claude-sonnet-4-6       # per-task model override
+max_turns: 80
+max_budget_usd: 2.00
+
+inputs:
+  - name: checklist
+    type: file
+    src: "{{ checklist_path }}"  # Jinja2 template from --var flags
+    dest: checklist.md
+
+outputs:
+  - path: scan_results.json
+    required: true
+    save: true
+
+instructions: |
+  - Focus on OWASP Top 10 vulnerabilities
+  - Check dependencies for known CVEs
+  - Report findings in JSON format
+
+prompt: |
+  Scan the codebase for security vulnerabilities.
+  Use the checklist at `.agent/checklist.md` as a guide.
+  Write results to `.agent/scan_results.json`.
+```
+
+### Component Manifest
+
+For multi-task components with shared settings and interactive pauses:
+
+```yaml
+name: my-component
+description: My custom component
+model: claude-sonnet-4-6
+max_turns: 80
+timeout_minutes: 25
+max_budget_usd: 2.00
+agent_md_file: "{{ impl_docs_path }}/CLAUDE.md"
+
+inputs:
+  - name: docs
+    type: file
+    src: "{{ impl_docs_path }}"
+    dest: impl_docs
+
+tasks:
+  - file: 01-evaluate.yaml
+    pause_after: true           # pause here for user input
+  - file: 02-fix.yaml
+  - file: 03-verify.yaml
+```
+
+### Run and Register
 
 ```bash
-dkmv run ./my-component --repo https://github.com/org/repo --var key=value
+# Run from a path
+dkmv run ./my-security-audit --branch feature/security --var checklist_path=./owasp.md
+
+# Register for easy reuse
+dkmv register security-audit ./my-security-audit
+
+# Run by name
+dkmv run security-audit --branch feature/security --var checklist_path=./owasp.md
 ```
 
-See the [Task YAML Schema](docs/implementation/v1%20-%20dkmv%20+%20tasks/task_definition.md) for the full reference.
+### Template Variables
 
-## Installation
+Variables come from three sources and are available in all YAML fields via Jinja2:
 
-### Prerequisites
+| Source | Variables | Example |
+|--------|-----------|---------|
+| CLI arguments | `repo`, `branch`, `feature_name` | `{{ branch }}` |
+| Runtime | `component`, `model`, `run_id` | `{{ run_id }}` |
+| `--var` flags | Any key-value pair | `{{ prd_path }}` |
+| Previous tasks | Status, cost, outputs | `{{ tasks.scan.status }}` |
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) (package manager)
-- [Docker](https://docs.docker.com/get-docker/)
-- An [Anthropic API key](https://console.anthropic.com/)
+### Execution Cascade
 
-### Setup
+Every execution parameter resolves through a three-level cascade:
+
+```
+Task YAML  ->  CLI flags  ->  Global config
+(highest)                     (lowest)
+```
+
+Set a cheap model for planning and an expensive one for implementation, while keeping sensible defaults everywhere else.
+
+---
+
+## Built-in Pipelines
+
+DKMV ships with four components that form a complete development pipeline. These are standard YAML components — you can read, fork, and modify them. Each runs in its own isolated container; the only bridge between them is the git branch.
+
+### Plan
+
+Converts a PRD into structured implementation documents. Runs 5 sequential tasks with a pause point after analysis so you can make architectural decisions before implementation begins.
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/dkmv.git
-cd dkmv
-
-# Install dependencies
-uv sync
-
-# Copy environment template and add your API keys
-cp .env.example .env
-# Edit .env with your ANTHROPIC_API_KEY and GITHUB_TOKEN
-
-# Build the sandbox Docker image
-uv run dkmv build
-
-# Verify installation
-uv run dkmv --help
+dkmv plan --branch feature/auth --prd requirements.md
+dkmv plan --branch feature/auth --prd requirements.md --design-docs ./docs/  # include existing design docs
+dkmv plan --branch feature/auth --prd requirements.md --auto                  # skip pause points
 ```
 
-## Quick Start
+**Produces:** `docs/implementation/{feature}/` with `features.md`, `user_stories.md`, phased task files, `tasks.md`, and a `CLAUDE.md` that guides the Dev agent.
+
+### Dev
+
+Takes implementation docs and implements each phase sequentially — writing code, running tests, committing, and pushing. Each phase gets its own budget and turn limit.
 
 ```bash
-# 1. Write a PRD describing the feature you want to implement
-
-# 2. Run the Dev agent to implement a feature
-uv run dkmv dev https://github.com/user/repo --prd prd.md --branch feature/auth
-
-# 3. Run QA against the branch
-uv run dkmv qa https://github.com/user/repo --branch feature/auth --prd prd.md
-
-# 4. Run Judge to evaluate quality
-uv run dkmv judge https://github.com/user/repo --branch feature/auth --prd prd.md
-
-# 5. Generate documentation
-uv run dkmv docs https://github.com/user/repo --branch feature/auth --create-pr
-
-# Alternative: use the generic `dkmv run` command
-uv run dkmv run dev --repo https://github.com/user/repo --var prd_path=prd.md
+dkmv dev --branch feature/auth --impl-docs docs/implementation/auth/
+dkmv dev --branch feature/auth --impl-docs docs/implementation/auth/ --feature-name auth-system
 ```
 
-## CLI Commands
+**Produces:** Working code on a feature branch with commits per phase.
 
-### Agent Commands
+### QA
+
+Runs an **evaluate -> fix -> re-evaluate** loop. The first task evaluates in a clean session (read-only). You then choose what to do:
+
+```
+QA Evaluation: FAIL
+Tests: 142 total, 138 passed, 4 failed
+Issues: 2 critical, 1 high, 3 medium
+
+What would you like to do?
+  1. Fix issues and re-evaluate (Recommended)
+  2. Ship as-is (skip fixes)
+  3. Abort
+```
+
+The re-evaluation runs in a fresh session to avoid bias — the evaluator never sees the fix process.
 
 ```bash
-# Dev — implement features from a PRD
-dkmv dev <repo> --prd <path> [--branch <name>] [--feedback <path>]
-                [--design-docs <dir>] [--feature-name <name>]
-                [--model <model>] [--max-turns <n>] [--timeout <min>]
-                [--max-budget-usd <n>] [--keep-alive] [--verbose]
-
-# QA — test and validate an implementation
-dkmv qa <repo> --branch <name> --prd <path>
-               [--model <model>] [--max-turns <n>] [--timeout <min>]
-               [--max-budget-usd <n>] [--keep-alive] [--verbose]
-
-# Judge — evaluate implementation quality
-dkmv judge <repo> --branch <name> --prd <path>
-                  [--model <model>] [--max-turns <n>] [--timeout <min>]
-                  [--max-budget-usd <n>] [--keep-alive] [--verbose]
-
-# Docs — generate documentation
-dkmv docs <repo> --branch <name> [--create-pr] [--pr-base <branch>]
-                 [--model <model>] [--max-turns <n>] [--timeout <min>]
-                 [--max-budget-usd <n>] [--keep-alive] [--verbose]
+dkmv qa --branch feature/auth --impl-docs docs/implementation/auth/
+dkmv qa --branch feature/auth --impl-docs docs/implementation/auth/ --auto
 ```
 
-### Task System Commands
+**Produces:** `qa_evaluation.json`, `qa_report.json`, and corresponding markdown reports.
+
+### Docs
+
+Explores the codebase and generates or updates documentation. Can create a GitHub pull request.
 
 ```bash
-# Run any component (built-in or custom directory)
-dkmv run <component> --repo <url> [--branch <name>] [--feature-name <name>]
-                     [--var KEY=VALUE ...] [--model <model>] [--max-turns <n>]
-                     [--timeout <min>] [--max-budget-usd <n>]
-                     [--keep-alive] [--verbose]
-
-# Examples:
-dkmv run dev --repo https://github.com/org/repo --var prd_path=./auth.md
-dkmv run qa --repo https://github.com/org/repo --var prd_path=./auth.md
-dkmv run ./custom-tasks --repo https://github.com/org/repo --var key=value
+dkmv docs --branch feature/auth --impl-docs docs/implementation/auth/
 ```
 
-### Utility Commands
+**Produces:** Updated documentation files, optional PR.
 
-```bash
-# Build the sandbox Docker image
-dkmv build [--no-cache] [--claude-version <version>]
+---
 
-# List runs with optional filters
-dkmv runs [--component <name>] [--status <status>] [--limit <n>]
+<details>
+<summary><strong>Authentication</strong></summary>
 
-# Show detailed run information
-dkmv show <run-id>
+DKMV supports two authentication methods:
 
-# Attach to a running container (requires --keep-alive)
-dkmv attach <run-id>
+| Method | Best For | Setup |
+|--------|----------|-------|
+| **API Key** | Pay-per-token usage | Set `ANTHROPIC_API_KEY` |
+| **OAuth** | Claude Code subscription (flat rate) | Run `claude setup-token`, set `CLAUDE_CODE_OAUTH_TOKEN` |
 
-# Stop and remove a container
-dkmv stop <run-id>
+`dkmv init` walks you through choosing and configuring your auth method. GitHub tokens are auto-discovered from `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`.
 
-# Remove all DKMV sandbox containers (running and stopped)
-dkmv clean
+</details>
+
+<details>
+<summary><strong>Configuration</strong></summary>
+
+Configuration resolves through a cascade (highest priority first):
+
+```
+CLI flags  ->  Environment variables  ->  .env file  ->  .dkmv/config.json  ->  Built-in defaults
 ```
 
-### Global Options
-
-```bash
-dkmv --verbose    # Enable verbose output
-dkmv --dry-run    # Show what would be done without executing
-```
-
-## Configuration
-
-All configuration is via environment variables or a `.env` file. No YAML or config files needed.
+### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | *(required)* | Anthropic API key for Claude Code |
-| `GITHUB_TOKEN` | *(optional)* | GitHub token for private repos and PR creation |
-| `DKMV_MODEL` | `claude-sonnet-4-6` | Default Claude model |
-| `DKMV_MAX_TURNS` | `100` | Max Claude Code turns per invocation |
-| `DKMV_IMAGE` | `dkmv-sandbox:latest` | Docker image name |
-| `DKMV_OUTPUT_DIR` | `./outputs` | Directory for run output and logs |
-| `DKMV_TIMEOUT` | `30` | Timeout per component run (minutes) |
-| `DKMV_MEMORY` | `8g` | Docker container memory limit |
-| `DKMV_MAX_BUDGET_USD` | *(none)* | Optional cost cap per Claude invocation |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | OAuth token (alternative to API key) |
+| `GITHUB_TOKEN` | — | GitHub token for private repos and PRs |
+| `DKMV_MODEL` | `claude-sonnet-4-6` | Default model |
+| `DKMV_MAX_TURNS` | `100` | Max turns per task |
+| `DKMV_IMAGE` | `dkmv-sandbox:latest` | Docker sandbox image |
+| `DKMV_OUTPUT_DIR` | `./outputs` | Run output directory |
+| `DKMV_TIMEOUT` | `30` | Timeout per run (minutes) |
+| `DKMV_MEMORY` | `8g` | Container memory limit |
+| `DKMV_MAX_BUDGET_USD` | — | Cost cap per invocation (USD) |
 
-## How It Works
+</details>
 
-### Component Lifecycle
+<details>
+<summary><strong>Managing Runs</strong></summary>
 
-Each component is a directory of YAML task files. When you run a component, `ComponentRunner` orchestrates the full lifecycle:
+Every run is persisted with full config, prompts, stream events, and results.
 
-```
-┌─────────────────────────────────────────────────────┐
-│              ComponentRunner.run()                    │
-│                                                     │
-│  1. Scan component directory for YAML task files    │
-│  2. Create run (generate ID, create output dir)     │
-│  3. Start sandbox (Docker container via SWE-ReX)    │
-│  4. Setup workspace (git clone, branch, gh auth)    │
-│  5. For each task (in filename order):              │
-│     a. Resolve template variables (Jinja2)          │
-│     b. Inject inputs (files, text, env vars)        │
-│     c. Write .claude/CLAUDE.md (instructions)       │
-│     d. Stream Claude Code (file-based streaming)    │
-│     e. Collect and validate outputs                 │
-│     f. Git teardown (add, commit, push per task)    │
-│     g. On failure → skip remaining tasks            │
-│  6. Aggregate results (cost, duration, status)      │
-│  7. Save result to disk                             │
-│  8. Stop container                                  │
-│                                                     │
-│  On error: save failed status, stop container       │
-│  On timeout: save timed_out status, stop container  │
-└─────────────────────────────────────────────────────┘
+```bash
+dkmv runs                                    # list recent runs
+dkmv runs --component dev --status completed # filter
+dkmv show <run-id>                           # inspect a run
+dkmv attach <run-id>                         # shell into a running container
+dkmv stop <run-id>                           # stop a container
+dkmv clean                                   # remove all DKMV containers
 ```
 
-All tasks in a component share the **same container** — files written by one task are visible to the next. If any task fails, the pipeline stops and remaining tasks are marked as skipped.
-
-### Streaming Architecture
-
-Claude Code runs inside the container with `--output-format stream-json`. Since SWE-ReX blocks until a command completes, DKMV uses a file-based streaming workaround:
+### Run Output Structure
 
 ```
-Container (dkmv-sandbox)
-├── Session 1 (main):  claude -p "..." > /tmp/dkmv_stream.jsonl &
-└── Session 2 (tail):  tail -n +N /tmp/dkmv_stream.jsonl
-                              │
-                              ▼
-                    Host (StreamParser)
-                    ├── Parse JSON events
-                    ├── Render to terminal (Rich)
-                    └── Save to outputs/runs/<id>/stream.jsonl
+.dkmv/runs/<run-id>/
+├── config.json           # run configuration snapshot
+├── result.json           # final result (status, cost, duration)
+├── tasks_result.json     # per-task results
+├── stream.jsonl          # raw Claude Code stream events
+├── prompt_<task>.md      # prompt sent for each task
+├── claude_md_<task>.md   # instructions provided to each task
+└── <artifact>.json       # saved task outputs
 ```
 
-### Run Output
+</details>
 
-Each run produces artifacts in `outputs/runs/<run-id>/`:
+<details>
+<summary><strong>Project Setup</strong></summary>
+
+```bash
+dkmv init                          # guided, interactive
+dkmv init --yes                    # accept all defaults
+dkmv init --repo https://... --name my-project
+```
+
+**What it creates:**
 
 ```
-outputs/runs/abc12345/
-├── config.json              # Run configuration
-├── result.json              # Final result (status, cost, duration)
-├── tasks_result.json        # Per-task results (name, status, cost, turns)
-├── stream.jsonl             # Raw stream-json events
-├── container.txt            # Container name (for attach/stop)
-├── prompt_plan.md           # Prompt sent for "plan" task
-├── prompt_implement.md      # Prompt sent for "implement" task
-└── plan.md                  # Saved output artifacts (from save: true)
+.dkmv/
+├── config.json         # project config (repo, defaults, credential sources)
+├── components.json     # custom component registry
+└── runs/               # run outputs
 ```
+
+**What it enables:**
+- `--repo` becomes optional on all commands
+- Run outputs stored in `.dkmv/runs/` instead of `./outputs`
+- Custom components registered by name
+
+### Component Registry
+
+```bash
+dkmv components                              # list all (built-in + custom)
+dkmv register security-audit ./path/to/it    # register
+dkmv unregister security-audit               # unregister
+```
+
+</details>
+
+<details>
+<summary><strong>CLI Reference</strong></summary>
+
+### Component Commands
+
+```bash
+dkmv plan   --branch <name> --prd <path> [--repo <url>] [--design-docs <dir>]
+            [--feature-name <name>] [--auto] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+
+dkmv dev    --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
+            [--model <m>] [--max-turns <n>] [--timeout <min>]
+            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+
+dkmv qa     --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
+            [--auto] [--model <m>] [--max-turns <n>] [--timeout <min>]
+            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+
+dkmv docs   --branch <name> [--repo <url>] [--impl-docs <dir>] [--create-pr] [--pr-base <branch>]
+            [--model <m>] [--max-turns <n>] [--timeout <min>]
+            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+
+dkmv run    <component> --branch <name> [--repo <url>] [--feature-name <name>]
+            [--var KEY=VALUE ...] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+```
+
+> `--repo` is optional when the project is initialized with `dkmv init`.
+
+### Project Commands
+
+```bash
+dkmv init          [--yes] [--repo <url>] [--name <name>]
+dkmv components
+dkmv register      <name> <path> [--force]
+dkmv unregister    <name>
+```
+
+### Run Management
+
+```bash
+dkmv runs          [--component <name>] [--status <status>] [--limit <n>]
+dkmv show          <run-id>
+dkmv attach        <run-id>
+dkmv stop          <run-id>
+dkmv clean
+```
+
+### Build
+
+```bash
+dkmv build         [--no-cache] [--claude-version <version>]
+```
+
+</details>
+
+---
+
+<p align="center">
+  <img src="assets/accent-bars.svg" alt="" width="60" />
+</p>
+
+## The Vision
+
+DKMV implements **Component-Oriented Development** — a paradigm where the developer's primary artifact shifts from code written interactively to *component definitions*: reusable specifications of what an agent should do, in what order, under what constraints, and with what inputs and outputs.
+
+The conversational paradigm is fundamentally limited by three properties:
+
+1. **Non-composability.** You can't package a workflow that worked and reuse it on the next task.
+2. **Non-compoundability.** Improvements to your agent orchestration are lost between sessions.
+3. **Non-reproducibility.** Two developers prompting the same agent produce different results.
+
+COD solves all three. Pipelines are composable (they're YAML files in a repo), compoundable (each refinement persists), and reproducible (same inputs = same orchestration).
+
+The core thesis: **your development pipeline should compound over time, not reset with each session.**
+
+Read the full vision paper: [`vision_paper.md`](vision_paper.md)
+
+---
 
 ## Development
 
 ```bash
-# Run tests
-uv run pytest
-
-# Run tests with coverage
-uv run pytest --cov --cov-fail-under=80
-
-# Skip E2E tests (require Docker + API key)
-uv run pytest -m "not e2e"
-
-# Lint and format
-uv run ruff check .
-uv run ruff format --check .
-
-# Type check
-uv run mypy dkmv/
+uv run pytest                                  # run tests
+uv run pytest --cov --cov-fail-under=80        # with coverage
+uv run pytest -m "not e2e"                     # skip E2E (need Docker + API key)
+uv run ruff check . && uv run ruff format --check .  # lint
+uv run mypy dkmv/                              # type check
 ```
 
 ### Project Structure
 
 ```
 dkmv/
-├── cli.py                 # Typer CLI app with all commands
-├── config.py              # DKMVConfig (pydantic-settings)
-├── utils/                 # async_command decorator
+├── cli.py               # Typer CLI
+├── config.py            # DKMVConfig (pydantic-settings)
+├── project.py           # Project config, find_project_root(), get_repo()
+├── init.py              # dkmv init (credential discovery, Rich UX)
+├── registry.py          # Component registry (.dkmv/components.json)
 ├── core/
-│   ├── models.py          # Shared types (BaseResult, BaseComponentConfig)
-│   ├── sandbox.py         # SandboxManager (SWE-ReX wrapper)
-│   ├── runner.py          # RunManager (run tracking, logs, cost)
-│   └── stream.py          # StreamParser (stream-json → terminal)
-├── tasks/                 # Task engine (YAML-based declarative system)
-│   ├── models.py          # TaskDefinition, TaskInput, TaskOutput, CLIOverrides
-│   ├── loader.py          # TaskLoader (Jinja2 + YAML + Pydantic)
-│   ├── runner.py          # TaskRunner (single task execution)
-│   ├── component.py       # ComponentRunner (multi-task orchestration)
-│   └── discovery.py       # resolve_component() for built-ins and paths
-├── builtins/              # Built-in YAML components
-│   ├── dev/               # 01-plan.yaml, 02-implement.yaml
-│   ├── qa/                # 01-evaluate.yaml
-│   ├── judge/             # 01-verdict.yaml
-│   └── docs/              # 01-generate.yaml
-├── components/            # Legacy Python components (still functional)
-│   ├── base.py            # BaseComponent ABC (12-step lifecycle)
-│   ├── dev/               # Dev agent
-│   ├── qa/                # QA agent
-│   ├── judge/             # Judge agent
-│   └── docs/              # Docs agent
+│   ├── models.py        # Shared types (BaseResult, SandboxConfig)
+│   ├── sandbox.py       # SandboxManager (Docker via SWE-ReX)
+│   ├── runner.py        # RunManager (run tracking, persistence)
+│   └── stream.py        # StreamParser (stream-json -> Rich terminal)
+├── tasks/
+│   ├── models.py        # TaskDefinition, TaskInput, TaskOutput, CLIOverrides
+│   ├── loader.py        # TaskLoader (Jinja2 -> YAML -> Pydantic)
+│   ├── runner.py        # TaskRunner (single-task execution)
+│   ├── component.py     # ComponentRunner (multi-task orchestration)
+│   ├── discovery.py     # resolve_component() — built-in, path, or registry
+│   ├── manifest.py      # ComponentManifest (component.yaml)
+│   └── pause.py         # Interactive pause points
+├── builtins/
+│   ├── dev/             # implement-phase.yaml + component.yaml
+│   ├── plan/            # 01-analyze -> 05-evaluate-fix + component.yaml
+│   ├── qa/              # 01-evaluate, 02-fix, 03-re-evaluate
+│   └── docs/            # 01-generate.yaml + component.yaml
 └── images/
-    └── Dockerfile         # dkmv-sandbox image definition
+    └── Dockerfile       # dkmv-sandbox image
 ```
 
-## Documentation
+---
 
-- **PRD**: [`docs/implementation/v1 - dkmv [DONE]/plan_dkmv_v1[DONE].md`](docs/implementation/v1%20-%20dkmv%20%5BDONE%5D/plan_dkmv_v1%5BDONE%5D.md) — Full product requirements document
-- **Task System PRD**: [`docs/implementation/v1 - dkmv + tasks/prd_tasks_v1.md`](docs/implementation/v1%20-%20dkmv%20+%20tasks/prd_tasks_v1.md) — Task system requirements
-- **Task YAML Schema**: [`docs/implementation/v1 - dkmv + tasks/task_definition.md`](docs/implementation/v1%20-%20dkmv%20+%20tasks/task_definition.md) — YAML task format reference
-- **ADRs**: [`docs/adrs/`](docs/adrs/) — Architecture decision records (MADR 4.0)
-- **Changelog**: [`CHANGELOG.md`](CHANGELOG.md) — Release notes
-
-## License
-
-[Add license information]
+<p align="center">
+  <sub>Built by <a href="https://github.com/tawab">Tawab Safi</a> · Licensed under <a href="LICENSE">Apache 2.0</a></sub>
+</p>

@@ -56,7 +56,7 @@ Host Machine                        Docker Container
 
 ### Implementation
 
-In `BaseComponent._setup_base_workspace()`:
+In `ComponentRunner._setup_workspace()` (`dkmv/tasks/component.py`):
 
 1. `SandboxManager.setup_git_auth()` runs inside the container:
    ```bash

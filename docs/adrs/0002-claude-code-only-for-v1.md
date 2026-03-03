@@ -29,10 +29,10 @@ Chosen option: "Lock to Claude Code for v1, design for extensibility in v2", bec
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                BaseComponent ABC                  │
-│  build_prompt() → prompt string                  │
-│  collect_artifacts() → result data               │
-│  parse_result() → typed result                   │
+│          ComponentRunner / TaskRunner             │
+│  ComponentRunner.run() → orchestrates tasks      │
+│  TaskRunner.run()      → executes single task    │
+│  TaskLoader.load()     → parses YAML + Jinja2    │
 └──────────────────────┬───────────────────────────┘
                        │ calls
                        ▼
@@ -40,11 +40,14 @@ Chosen option: "Lock to Claude Code for v1, design for extensibility in v2", bec
 │              SandboxManager                       │
 │  stream_claude()                                 │
 │  ┌────────────────────────────────────────────┐  │
-│  │  claude -p "$(cat prompt.md)"              │  │
+│  │  claude -p "$(cat /tmp/dkmv_prompt.md)"    │  │
 │  │    --dangerously-skip-permissions          │  │
+│  │    --verbose                               │  │
 │  │    --output-format stream-json             │  │
 │  │    --model <model>                         │  │
 │  │    --max-turns <n>                         │  │
+│  │    [--max-budget-usd <n>]                  │  │
+│  │    [--resume <session_id>]                 │  │
 │  │  < /dev/null                               │  │
 │  │  > /tmp/dkmv_stream.jsonl 2> .err          │  │
 │  └────────────────────────────────────────────┘  │
@@ -68,16 +71,16 @@ Chosen option: "Lock to Claude Code for v1, design for extensibility in v2", bec
 
 ### Extensibility Path (v2+)
 
-The `BaseComponent` ABC and `SandboxManager` provide the abstraction boundary. In v2, alternative runtimes (Codex, Aider, custom Agent SDK agents) can be supported by:
+The YAML-based component system (see ADR-0012) and `SandboxManager` provide the abstraction boundary. In v2, alternative runtimes (Codex, Aider, custom Agent SDK agents) can be supported by:
 
 1. Adding a new `stream_<tool>()` method to `SandboxManager`
 2. Or swapping `SandboxManager` entirely behind the same interface
-3. Components remain unchanged — they only depend on the prompt/result interface
+3. YAML component manifests remain unchanged — they only depend on the prompt/result interface
 
 ### Consequences
 
 - Good: Focused development effort on a single, well-understood integration.
 - Good: stream-json output format provides structured events for real-time parsing.
-- Good: BaseComponent ABC can be extended in v2 to support alternative tools.
+- Good: YAML component system is declarative and tool-agnostic — extensible in v2.
 - Bad: Users who prefer other AI coding tools cannot use DKMV v1.
 - Neutral: The Docker-based isolation pattern is tool-agnostic and will transfer to other tools.

@@ -5,6 +5,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, model_validator
 
+from dkmv.tasks.manifest import _normalize_dest
+
 
 class TaskInput(BaseModel):
     name: str
@@ -38,11 +40,22 @@ class TaskInput(BaseModel):
                     raise ValueError("'env' input requires 'value'")
         return self
 
+    @model_validator(mode="after")
+    def normalize_dest(self) -> Self:
+        self.dest = _normalize_dest(self.dest)
+        return self
+
 
 class TaskOutput(BaseModel):
     path: str
     required: bool = False
     save: bool = True
+    required_fields: list[str] = []
+
+    @model_validator(mode="after")
+    def normalize_path(self) -> Self:
+        self.path = _normalize_dest(self.path) or self.path
+        return self
 
 
 class TaskDefinition(BaseModel):
@@ -50,7 +63,6 @@ class TaskDefinition(BaseModel):
     description: str = ""
     commit: bool = True
     push: bool = True
-    commit_message: str | None = None
 
     model: str | None = None
     max_turns: int | None = None
@@ -74,10 +86,6 @@ class TaskDefinition(BaseModel):
             raise ValueError(
                 "Exactly one of 'instructions' or 'instructions_file' must be set, got both"
             )
-        if not has_instructions and not has_file:
-            raise ValueError(
-                "Exactly one of 'instructions' or 'instructions_file' must be set, got neither"
-            )
         return self
 
     @model_validator(mode="after")
@@ -86,8 +94,6 @@ class TaskDefinition(BaseModel):
         has_file = self.prompt_file is not None
         if has_prompt and has_file:
             raise ValueError("Exactly one of 'prompt' or 'prompt_file' must be set, got both")
-        if not has_prompt and not has_file:
-            raise ValueError("Exactly one of 'prompt' or 'prompt_file' must be set, got neither")
         return self
 
 

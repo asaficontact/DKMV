@@ -1,0 +1,75 @@
+name: "implement-phase-{{ item.phase_number }}"
+description: >
+  Implement Phase {{ item.phase_number }}: {{ item.phase_name }}.
+  Read the phase document, understand context, implement all tasks,
+  write tests, and commit.
+commit: true
+push: true
+
+outputs:
+  - path: "phase_{{ item.phase_number }}_result.json"
+    required: true
+    save: true
+    required_fields:
+      - status
+      - tasks_completed
+      - tests_passed
+
+instructions: |
+  ## Phase {{ item.phase_number }} Implementation Rules
+  - Read the phase document at `.agent/impl_docs/{{ item.phase_file }}`
+  - Read `.agent/impl_docs/tasks.md` for the master task list and context
+  - The implementation guide (CLAUDE.md) is already loaded into your context — follow its conventions, quality gates, and process
+  - Implement ALL tasks listed for Phase {{ item.phase_number }}
+  - Write tests for all new public interfaces
+  - Run the full test suite before finishing — all tests must pass
+  - Follow existing code style and patterns in the codebase
+  - Do not push to main/master directly
+  - Do not modify unrelated files
+  {% if item_index > 0 %}
+  - Previous phases have already been implemented and committed
+  - Check `.agent/` for results from prior phases
+  {% endif %}
+
+prompt: |
+  You are implementing Phase {{ item.phase_number }}: {{ item.phase_name }}.
+
+  ## Context
+  Your implementation guide (CLAUDE.md) is already loaded — it contains the project conventions,
+  quality gates, document map, and the 6-step implementation process. Follow it.
+
+  Key files in `.agent/impl_docs/`:
+  - `tasks.md` — master task list across all phases
+  - `{{ item.phase_file }}` — YOUR phase document with specific tasks
+
+  {% if item_index > 0 %}
+  ## Prior Work
+  Previous phases have been implemented and committed. Review what exists before starting.
+  Check `.agent/` for phase result files from prior phases.
+  {% endif %}
+
+  ## Implementation Steps
+  1. Read `.agent/impl_docs/{{ item.phase_file }}` carefully — understand every task
+  2. Read `.agent/impl_docs/tasks.md` for context on how your phase fits the bigger picture
+  3. Explore the existing codebase to understand conventions and patterns
+  4. Implement each task from the phase document
+  5. Write tests for your implementation
+  6. Run the full test suite to verify nothing is broken
+  7. Fix any test failures
+  8. Update `.agent/impl_docs/progress.md` with a session entry for this phase
+  9. Write the phase result to `.agent/phase_{{ item.phase_number }}_result.json`:
+     ```json
+     {
+       "status": "completed",
+       "tasks_completed": ["T010", "T011", "T012"],
+       "tests_passed": true,
+       "files_changed": ["src/auth.py", "tests/test_auth.py"],
+       "notes": "Brief summary of what was done"
+     }
+     ```
+
+  ## Constraints
+  - Follow existing code style and patterns
+  - Do not modify unrelated files
+  - Write meaningful commit messages
+  - All tests must pass before you finish

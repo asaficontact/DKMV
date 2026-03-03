@@ -30,7 +30,7 @@ Chosen option: "SWE-ReX", because it provides a high-level abstraction for conta
 ### Architecture
 
 ```
-Host Machine (DKMV CLI)
+Host Machine (DKMV CLI — called by ComponentRunner/TaskRunner)
 ┌──────────────────────────────────────────────────┐
 │  SandboxManager (dkmv/core/sandbox.py)           │
 │  ├── start()    → DockerDeployment.start()       │

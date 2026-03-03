@@ -115,6 +115,11 @@ class SandboxManager:
         resp = await session.deployment.runtime.read_file(ReadFileRequest(path=path))
         return resp.content
 
+    async def file_exists(self, session: SandboxSession, path: str) -> bool:
+        """Check if a file exists in the container without triggering SWE-ReX exceptions."""
+        result = await self.execute(session, f"test -f {shlex.quote(path)} && echo exists")
+        return "exists" in result.output
+
     async def stop(self, session: SandboxSession, keep_alive: bool = False) -> None:
         try:
             # Clean up extra sessions first
@@ -179,6 +184,7 @@ class SandboxManager:
         max_budget_usd: float | None = None,
         working_dir: str = "/home/dkmv/workspace",
         env_vars: dict[str, str] | None = None,
+        resume_session_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         await self.write_file(session, "/tmp/dkmv_prompt.md", prompt)
 
@@ -191,9 +197,19 @@ class SandboxManager:
         if env_vars:
             pairs = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())
             env_prefix = f"env {pairs} "
+
+        if resume_session_id:
+            claude_cmd = (
+                f"{env_prefix}claude "
+                f"--resume {shlex.quote(resume_session_id)} "
+                f'-p "$(cat /tmp/dkmv_prompt.md)" '
+            )
+        else:
+            claude_cmd = f'{env_prefix}claude -p "$(cat /tmp/dkmv_prompt.md)" '
+
         cmd = (
             f"cd {shlex.quote(working_dir)} && "
-            f'{env_prefix}claude -p "$(cat /tmp/dkmv_prompt.md)" '
+            f"{claude_cmd}"
             "--dangerously-skip-permissions "
             "--verbose "
             "--output-format stream-json "

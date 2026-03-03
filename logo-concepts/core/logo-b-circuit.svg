@@ -1,0 +1,106 @@
+<svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+  <defs>
+    <style>
+      @keyframes circuit-flow {
+        0% {
+          stroke-dasharray: 200;
+          stroke-dashoffset: 200;
+        }
+        100% {
+          stroke-dasharray: 200;
+          stroke-dashoffset: 0;
+        }
+      }
+
+      @keyframes glow-pulse {
+        0%, 100% {
+          filter: drop-shadow(0 0 6px #b366ff) drop-shadow(0 0 12px #7d3fff);
+        }
+        50% {
+          filter: drop-shadow(0 0 10px #b366ff) drop-shadow(0 0 16px #7d3fff);
+        }
+      }
+
+      @keyframes circuit-glow {
+        0% {
+          stroke: #6d3fff;
+          opacity: 0.4;
+        }
+        50% {
+          stroke: #b366ff;
+          opacity: 0.8;
+        }
+        100% {
+          stroke: #b366ff;
+          opacity: 1;
+        }
+      }
+
+      .switch-group {
+        animation: glow-pulse 3s ease-in-out infinite;
+      }
+
+      .circuit-line {
+        animation: circuit-flow 2.5s ease-in-out forwards;
+        stroke-linecap: round;
+      }
+
+      .circuit-line-1 { animation-delay: 0s; }
+      .circuit-line-2 { animation-delay: 0.3s; }
+      .circuit-line-3 { animation-delay: 0.6s; }
+      .circuit-line-4 { animation-delay: 0.9s; }
+
+      .circuit-node {
+        animation: circuit-glow 2.5s ease-in-out infinite;
+        animation-delay: 1.2s;
+      }
+    </style>
+
+    <linearGradient id="circuit-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#7d3fff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#b366ff;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Dark background -->
+  <rect width="400" height="400" fill="#09090b" rx="48"/>
+
+  <!-- Circuit traces emanating from switch -->
+  <g stroke="#6d3fff" stroke-width="3" fill="none">
+    <!-- Top-left trace -->
+    <path class="circuit-line circuit-line-1" d="M 120 165 Q 80 140 60 100"/>
+    <!-- Top-right trace -->
+    <path class="circuit-line circuit-line-2" d="M 280 165 Q 320 140 340 100"/>
+    <!-- Bottom-left trace -->
+    <path class="circuit-line circuit-line-3" d="M 120 235 Q 80 260 60 300"/>
+    <!-- Bottom-right trace -->
+    <path class="circuit-line circuit-line-4" d="M 280 235 Q 320 260 340 300"/>
+  </g>
+
+  <!-- Circuit nodes at trace endpoints -->
+  <g class="circuit-node">
+    <circle cx="60" cy="100" r="6" fill="none" stroke="#b366ff" stroke-width="2"/>
+    <circle cx="340" cy="100" r="6" fill="none" stroke="#b366ff" stroke-width="2"/>
+    <circle cx="60" cy="300" r="6" fill="none" stroke="#b366ff" stroke-width="2"/>
+    <circle cx="340" cy="300" r="6" fill="none" stroke="#b366ff" stroke-width="2"/>
+  </g>
+
+  <!-- Toggle track (pill shape) -->
+  <rect x="100" y="160" width="200" height="80" rx="40" fill="#1a1a1f" stroke="#4d2a99" stroke-width="2"/>
+
+  <!-- Toggle track accent -->
+  <rect x="100" y="160" width="200" height="80" rx="40" fill="none" stroke="#b366ff" stroke-width="1" opacity="0.4"/>
+
+  <!-- Toggle knob (ON position - right side) -->
+  <g class="switch-group">
+    <circle cx="280" cy="200" r="35" fill="url(#circuit-grad)"/>
+    <circle cx="280" cy="200" r="30" fill="none" stroke="#b366ff" stroke-width="2" opacity="0.6"/>
+  </g>
+
+  <!-- Concentric rings on knob (tech detail) -->
+  <circle cx="280" cy="200" r="20" fill="none" stroke="#7d3fff" stroke-width="1.5" opacity="0.5"/>
+  <circle cx="280" cy="200" r="12" fill="none" stroke="#b366ff" stroke-width="1" opacity="0.6"/>
+
+  <!-- Center dot -->
+  <circle cx="280" cy="200" r="5" fill="#b366ff"/>
+</svg>

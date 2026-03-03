@@ -1,0 +1,203 @@
+name: features-stories
+description: >
+  Extract feature registry and derive user stories with acceptance criteria.
+  Produces features.md and user_stories.md in the implementation output directory.
+commit: true
+push: true
+
+outputs:
+  - path: features_stories_done.txt
+    required: true
+    save: true
+  - path: features_stories_summary.json
+    required: true
+    save: true
+    required_fields:
+      - feature_count
+      - story_count
+      - feature_ids
+      - categories
+
+instructions: |
+  ## Feature & Story Extraction Rules
+  - Output directory: `{{ tasks.analyze.outputs.analysis.output_dir }}` — write all deliverables here
+  - Create the output directory if it doesn't exist
+  - Write `features.md` and `user_stories.md` to the output directory
+  - After writing both files, create `.agent/features_stories_done.txt` with a summary
+  - Do NOT write any implementation code
+  - Do NOT create phase documents or tasks.md yet
+  - Features must be coherent, deliverable units — not too big (>1 phase) or too small (<2-3 tasks)
+  - User stories must follow INVEST criteria: Independent, Negotiable, Valuable, Estimable, Small, Testable
+
+prompt: |
+  You are a senior software architect extracting features and user stories from a PRD.
+
+  ## Setup
+
+  1. The output directory is `{{ tasks.analyze.outputs.analysis.output_dir }}` — all deliverables go here
+  2. Create the output directory if it doesn't exist: `mkdir -p {{ tasks.analyze.outputs.analysis.output_dir }}`
+  3. Read `.agent/analysis.json` for the full PRD analysis (features, constraints, risks, architecture notes)
+  4. Re-read the PRD at `.agent/prd.md` for reference
+
+  ## Analysis Context
+
+  Estimated complexity: **{{ tasks.analyze.outputs.analysis.estimated_complexity }}**
+
+  Features identified in analysis:
+  {% for f in tasks.analyze.outputs.analysis.features %}
+  - {{ f.id }}: {{ f.name }} — {{ f.description }}
+  {% endfor %}
+
+  Constraints:
+  {% for c in tasks.analyze.outputs.analysis.constraints %}
+  - {{ c }}
+  {% endfor %}
+
+  Non-goals:
+  {% for ng in tasks.analyze.outputs.analysis.non_goals %}
+  - {{ ng }}
+  {% endfor %}
+
+  {% if design_docs_path is defined and design_docs_path %}
+  ## Design Documents
+  Review the design documents in `.agent/design_docs/` for additional context.
+  {% endif %}
+
+  ## Step 3: Extract Features → features.md
+
+  ### Process
+  1. **Enumerate features.** Assign each a unique ID: F1, F2, ... FN.
+  2. **Determine dependencies.** Which features require other features to be complete first?
+  3. **Draw the dependency graph.** Use ASCII art — it must be scannable in a terminal.
+  4. **Assign priorities.** Priority = build order, not business importance. Foundation features are priority 1.
+  5. **Link to PRD sections.** Each feature traces to a specific PRD section.
+  6. **Link to user stories.** Each feature serves one or more user stories (assign US-IDs after Step 4).
+
+  ### features.md Structure
+
+  Write `<output_dir>/features.md` with this structure:
+
+  ```markdown
+  # {Project} Feature Registry
+
+  ## Overview
+
+  {N} features organized in {M} phases. Features must be built in dependency order.
+
+  ## Dependency Diagram
+
+  {ASCII diagram showing feature dependencies across phases}
+
+  ## Feature List
+
+  ### F1: {Feature Name}
+
+  - **Priority:** {build order number}
+  - **Phase:** {phase number} — {phase name}
+  - **Status:** [ ] Not started
+  - **Depends on:** {F-IDs or "None"}
+  - **Blocks:** {F-IDs that depend on this}
+  - **User Stories:** {US-IDs}
+  - **Tasks:** {T-ID range — leave as TBD for now}
+  - **PRD Reference:** Section {N} ({description})
+  - **Key Deliverables:**
+    - {Concrete output 1}
+    - {Concrete output 2}
+  ```
+
+  ### Feature Heuristics
+  - **A feature is too big if** it would take more than one phase to implement. Split it.
+  - **A feature is too small if** it doesn't have at least 2-3 tasks. Merge with a related feature.
+  - **Foundation features come first.** Config, project structure, testing infrastructure, build system — always Phase 1.
+  - **Every feature must produce something testable.** If you can't write a test for it, it's not a feature.
+  - **Dependency arrows only point forward.** If F5 depends on F3, F3 must be in an earlier or same phase. Circular dependencies indicate a design problem.
+
+  ## Step 4: Derive User Stories → user_stories.md
+
+  ### Process
+  1. **Identify personas** from the PRD. Common: end user, developer, admin, operator.
+  2. **For each feature,** write 1-3 user stories using: "As a {role}, I want to {action} so I can {benefit}"
+  3. **Write acceptance criteria** for each story (3-7 per story). Each must be testable and specific.
+  4. **Build the traceability matrix** linking stories to features and tasks.
+  5. **Group stories by category** (setup, core workflow, management, etc.).
+
+  ### user_stories.md Structure
+
+  Write `<output_dir>/user_stories.md` with this structure:
+
+  ```markdown
+  # {Project} User Stories
+
+  ## Summary
+
+  {N} user stories across {M} categories.
+
+  ## Traceability Matrix
+
+  | US ID | Title | Feature | Task(s) | Status |
+  |-------|-------|---------|---------|--------|
+  | US-01 | {title} | F1 | TBD | [ ] |
+  | US-02 | {title} | F2 | TBD | [ ] |
+
+  ---
+
+  ## Stories by Category
+
+  ### {Category Name} (US-01 through US-04)
+
+  #### US-01: {Title}
+
+  > As a {role}, I want to {action} so I can {benefit}
+
+  **Acceptance Criteria:**
+  - [ ] {Criterion 1 — testable, specific}
+  - [ ] {Criterion 2}
+  - [ ] {Criterion 3}
+
+  **Feature:** F1 | **Tasks:** TBD | **Priority:** Must-have
+  ```
+
+  ### User Story Heuristics
+  - **Atomic stories.** One behavior per story. If it contains "and," split it.
+  - **3-7 acceptance criteria per story.** Fewer than 3 = underspecified. More than 7 = story needs splitting.
+  - **Acceptance criteria are testable.** Each maps to something verifiable: a command that succeeds, an output that matches, a test that passes.
+  - **Use plain language.** Avoid implementation details in acceptance criteria.
+  - **For AI agents: mandate, don't suggest.** Write "MUST verify ownership" not "Consider checking ownership."
+  - **INVEST criteria.** Independent, Negotiable, Valuable, Estimable, Small, Testable.
+  - **Every feature should have at least one story.** Infrastructure features map to developer-facing stories.
+
+  ## Self-Review
+
+  Before finalizing, perform the following verification:
+
+  1. **Re-read `.agent/analysis.json`** and the PRD. For each feature in the analysis, verify it appears in features.md. For each persona, verify at least one user story addresses them.
+  2. **Check completeness** — does every feature have a unique ID, dependencies, priority, and PRD reference? Does every user story have 3-7 acceptance criteria? Are there any features without stories or stories without features?
+  3. **Check correctness** — do feature dependencies flow forward (no circular deps)? Are acceptance criteria testable and specific, not vague? Do user story IDs in features.md match those in user_stories.md?
+  4. **Verify sizing** — are any features too big (>1 phase) or too small (<2-3 tasks)? Split or merge as needed.
+  5. **Fix genuine gaps** — if you find missing stories, broken cross-references, or vague acceptance criteria, fix them now.
+
+  ## Finalize
+
+  After writing both files:
+  1. Go back and update the `User Stories` field in features.md with the actual US-IDs
+  2. Create `.agent/features_stories_done.txt` with content:
+     ```
+     Output directory: <output_dir>
+     Features: {count} features written to <output_dir>/features.md
+     Stories: {count} stories written to <output_dir>/user_stories.md
+     Categories: {list of categories}
+     ```
+  3. Create `.agent/features_stories_summary.json` — a structured summary for downstream tasks:
+     ```json
+     {
+       "feature_count": 5,
+       "story_count": 12,
+       "feature_ids": ["F1", "F2", "F3", "F4", "F5"],
+       "categories": ["Setup", "Core Workflow", "Management"]
+     }
+     ```
+
+  ## Constraints
+  - Write only features.md and user_stories.md to the output directory
+  - Do NOT create phase documents, tasks.md, or any other files yet
+  - Task IDs in traceability matrix should be "TBD" — they'll be assigned in the next step

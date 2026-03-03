@@ -1,0 +1,59 @@
+name: plan
+description: >
+  Implementation planning component: analyzes a PRD, extracts features and user
+  stories, decomposes into phased tasks, assembles documents, and verifies the
+  complete plan.
+model: claude-opus-4-6
+
+inputs:
+  - name: prd
+    type: file
+    src: "{{ prd_path }}"
+    dest: prd.md
+
+  - name: design_docs
+    type: file
+    src: "{{ design_docs_path | default('') }}"
+    dest: design_docs/
+    optional: true
+
+agent_md: |
+  ## Workspace Layout
+
+  - `.agent/prd.md` — The PRD (source of truth, read-only)
+  - `.agent/design_docs/` — Design documents (if provided)
+  - `.agent/analysis.json` — PRD analysis (produced by task 1, includes `output_dir`)
+  - `docs/implementation/<name>/` — Implementation output directory (determined by task 1)
+
+  ## Planning Rules
+
+  - Do NOT write any implementation code
+  - Task 1 chooses the output subdirectory name and records it as `output_dir` in `.agent/analysis.json`
+  - Tasks 2-5 receive the output directory path directly in their prompts — no need to re-read analysis.json for it
+  - Reference PRD sections, do not copy verbatim
+  - Every task must be independently testable
+  - Every phase must end with verifiable functionality
+
+tasks:
+  - file: 01-analyze.yaml
+    max_turns: 60
+    timeout_minutes: 20
+    max_budget_usd: 2.00
+    pause_after: true
+  - file: 02-features-stories.yaml
+    max_turns: 60
+    timeout_minutes: 20
+    max_budget_usd: 2.00
+  - file: 03-phases.yaml
+    model: claude-opus-4-6
+    max_turns: 100
+    timeout_minutes: 30
+    max_budget_usd: 5.00
+  - file: 04-assembly.yaml
+    max_turns: 60
+    timeout_minutes: 15
+    max_budget_usd: 2.00
+  - file: 05-evaluate-fix.yaml
+    max_turns: 80
+    timeout_minutes: 25
+    max_budget_usd: 3.00

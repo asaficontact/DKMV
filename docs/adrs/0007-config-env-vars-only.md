@@ -69,7 +69,7 @@ Chosen option: "Environment variables + .env file via pydantic-settings", becaus
 │  CLI Commands                        │
 │  ├── dev:   model, max_turns, etc.   │
 │  ├── qa:    model, max_turns, etc.   │
-│  ├── judge: model, max_turns, etc.   │
+│  ├── plan:  model, max_turns, etc.   │
 │  └── docs:  model, max_turns, etc.   │
 │                                      │
 │  Overridable per-command via flags:  │
@@ -83,7 +83,8 @@ Chosen option: "Environment variables + .env file via pydantic-settings", becaus
 1. CLI flags (`--model`, `--timeout`, etc.) — highest priority
 2. Shell environment variables (`export DKMV_MODEL=...`)
 3. `.env` file values
-4. Default values in `DKMVConfig` — lowest priority
+4. `.dkmv/config.json` project defaults (see ADR-0009)
+5. Default values in `DKMVConfig` — lowest priority
 
 ### Consequences
 
@@ -93,7 +94,7 @@ Chosen option: "Environment variables + .env file via pydantic-settings", becaus
 - Good: All 9 settings have sensible defaults — only `ANTHROPIC_API_KEY` is truly required.
 - Good: CI/CD environments can set env vars directly without config file management.
 - Good: No file format to parse, no schema to maintain, no config migration to handle.
-- Bad: No per-project configuration (every project uses the same env vars or `.env` file).
+- Bad: No per-project configuration (every project uses the same env vars or `.env` file). — **Resolved by ADR-0009.**
 - Bad: Complex nested configuration is awkward with flat env vars (not needed for v1).
 - Neutral: `.env.example` documents all available settings for new users.
 
@@ -103,7 +104,7 @@ Chosen option: "Environment variables + .env file via pydantic-settings", becaus
 |----------|---------|----------|-------------|
 | `ANTHROPIC_API_KEY` | — | Yes | Anthropic API key for Claude Code |
 | `GITHUB_TOKEN` | — | For private repos/PRs | GitHub personal access token |
-| `DKMV_MODEL` | `claude-sonnet-4-20250514` | No | Default Claude model |
+| `DKMV_MODEL` | `claude-sonnet-4-6` | No | Default Claude model |
 | `DKMV_MAX_TURNS` | `100` | No | Max Claude Code turns per invocation |
 | `DKMV_IMAGE` | `dkmv-sandbox:latest` | No | Docker image name |
 | `DKMV_OUTPUT_DIR` | `./outputs` | No | Run output directory |

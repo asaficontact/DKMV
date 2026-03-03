@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,9 +27,19 @@ class RunManager:
         return self._runs_dir / run_id
 
     def start_run(self, component: ComponentName, config: BaseComponentConfig) -> str:
-        run_id = uuid.uuid4().hex[:8]
-        run_dir = self._run_dir(run_id)
-        run_dir.mkdir(parents=True)
+        from dkmv.utils.slug import generate_run_id
+
+        for _ in range(3):
+            run_id = generate_run_id(component, config.feature_name)
+            run_dir = self._run_dir(run_id)
+            try:
+                run_dir.mkdir(parents=True, exist_ok=False)
+                break
+            except FileExistsError:
+                continue
+        else:
+            msg = "Failed to generate unique run ID after 3 attempts"
+            raise RuntimeError(msg)
         (run_dir / "logs").mkdir()
 
         config_data = config.model_dump(mode="json")
@@ -130,11 +139,32 @@ class RunManager:
         summaries.sort(key=lambda s: s.timestamp, reverse=True)
         return summaries[:limit]
 
-    def get_run(self, run_id: str) -> RunDetail:
-        run_dir = self._run_dir(run_id)
-        if not run_dir.exists():
-            msg = f"Run {run_id} not found"
+    def _resolve_run_id(self, run_id_or_prefix: str) -> str:
+        if (self._runs_dir / run_id_or_prefix).is_dir():
+            return run_id_or_prefix
+
+        matches = [
+            d.name
+            for d in self._runs_dir.iterdir()
+            if d.is_dir() and d.name.startswith(run_id_or_prefix)
+        ]
+
+        if len(matches) == 0:
+            msg = f"Run {run_id_or_prefix} not found"
             raise FileNotFoundError(msg)
+        if len(matches) == 1:
+            return matches[0]
+
+        matches.sort()
+        shown = matches[:10]
+        msg = (
+            f"Ambiguous prefix '{run_id_or_prefix}' matches {len(matches)} runs: {', '.join(shown)}"
+        )
+        raise ValueError(msg)
+
+    def get_run(self, run_id: str) -> RunDetail:
+        resolved_id = self._resolve_run_id(run_id)
+        run_dir = self._run_dir(resolved_id)
 
         result_file = run_dir / "result.json"
         config_file = run_dir / "config.json"
@@ -150,7 +180,7 @@ class RunManager:
             result_data = json.loads(result_file.read_text())
         else:
             result_data = {
-                "run_id": run_id,
+                "run_id": resolved_id,
                 "component": config_data.get("_component", "dev"),
                 "status": "running",
             }
@@ -168,7 +198,7 @@ class RunManager:
 
         try:
             return RunDetail(
-                run_id=result_data.get("run_id", run_id),
+                run_id=result_data.get("run_id", resolved_id),
                 component=result_data.get("component", config_data.get("_component", "dev")),
                 status=result_data.get("status", "running"),
                 repo=result_data.get("repo", ""),
@@ -189,7 +219,7 @@ class RunManager:
         except ValidationError:
             # Corrupt data in result.json — return degraded detail
             return RunDetail(
-                run_id=run_id,
+                run_id=resolved_id,
                 component=config_data.get("_component", "dev"),
                 status="failed",
                 error_message="Corrupt run data",

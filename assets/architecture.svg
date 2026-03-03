@@ -1,0 +1,120 @@
+<svg viewBox="0 0 720 620" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad-h" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="grad-v" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <style>
+      text { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+      @keyframes flowPulse {
+        0%, 100% { opacity: 0; }
+        40%, 60% { opacity: 0.9; }
+      }
+      .pulse-1 { animation: flowPulse 3.5s ease-in-out infinite; }
+      .pulse-2 { animation: flowPulse 3.5s ease-in-out infinite 1.2s; }
+      .pulse-3 { animation: flowPulse 3.5s ease-in-out infinite 2.4s; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="720" height="620" fill="#09090b" rx="16"/>
+
+  <!-- Subtle ambient glow -->
+  <ellipse cx="360" cy="310" rx="240" ry="180" fill="#a855f7" opacity="0.015"/>
+
+  <!-- ═══ INPUT: PRD BADGE ═══ -->
+  <rect x="20" y="44" width="104" height="40" rx="8" fill="#1a1625" stroke="#a855f7" stroke-opacity="0.25"/>
+  <text x="72" y="61" text-anchor="middle" font-size="12" font-weight="600" fill="#d4d4d8">auth.md</text>
+  <text x="72" y="75" text-anchor="middle" font-size="9" fill="#71717a">PRD</text>
+
+  <!-- Arrow: PRD → CLI -->
+  <line x1="124" y1="64" x2="158" y2="64" stroke="url(#grad-h)" stroke-width="2"/>
+  <polygon points="156,59 166,64 156,69" fill="#a855f7"/>
+
+  <!-- ═══ DKMV CLI CARD ═══ -->
+  <rect x="170" y="32" width="486" height="72" rx="10" fill="#111116" stroke="#1e1e24"/>
+  <rect x="170" y="32" width="486" height="2.5" rx="1" fill="url(#grad-h)"/>
+  <text x="190" y="56" font-size="14" font-weight="700" fill="#e4e4e7">DKMV CLI</text>
+
+  <!-- Component pills -->
+  <rect x="190" y="66" width="42" height="20" rx="10" fill="#1a1625"/>
+  <text x="211" y="80" text-anchor="middle" font-size="11" font-weight="500" fill="#c084fc">plan</text>
+
+  <rect x="240" y="66" width="36" height="20" rx="10" fill="#1a1625"/>
+  <text x="258" y="80" text-anchor="middle" font-size="11" font-weight="500" fill="#c084fc">dev</text>
+
+  <rect x="284" y="66" width="30" height="20" rx="10" fill="#1a1625"/>
+  <text x="299" y="80" text-anchor="middle" font-size="11" font-weight="500" fill="#c084fc">qa</text>
+
+  <rect x="322" y="66" width="42" height="20" rx="10" fill="#1a1625"/>
+  <text x="343" y="80" text-anchor="middle" font-size="11" font-weight="500" fill="#c084fc">docs</text>
+
+  <!-- ═══ ARROW: CLI → ENGINE ═══ -->
+  <line x1="360" y1="104" x2="360" y2="140" stroke="url(#grad-v)" stroke-width="2"/>
+  <polygon points="355,138 360,146 365,138" fill="#8b5cf6"/>
+  <circle cx="360" cy="124" r="3" fill="#a855f7" class="pulse-1"/>
+
+  <!-- ═══ PIPELINE ENGINE ═══ -->
+  <rect x="64" y="150" width="592" height="244" rx="12" fill="none" stroke="#a855f7" stroke-opacity="0.1" stroke-width="1"/>
+  <text x="84" y="172" font-size="10" font-weight="600" fill="#52525b" letter-spacing="1.5">PIPELINE ENGINE</text>
+
+  <!-- ComponentRunner -->
+  <rect x="84" y="182" width="552" height="50" rx="8" fill="#111116" stroke="#1e1e24"/>
+  <rect x="84" y="186" width="3" height="42" rx="1.5" fill="url(#grad-v)"/>
+  <text x="100" y="203" font-size="13" font-weight="600" fill="#e4e4e7">ComponentRunner</text>
+  <text x="100" y="221" font-size="11" fill="#71717a">Load YAML → Resolve templates → Run tasks → Collect outputs</text>
+
+  <!-- Inner arrow -->
+  <line x1="360" y1="232" x2="360" y2="244" stroke="#a855f7" stroke-opacity="0.3" stroke-width="1.5"/>
+
+  <!-- TaskRunner -->
+  <rect x="84" y="248" width="552" height="50" rx="8" fill="#111116" stroke="#1e1e24"/>
+  <rect x="84" y="252" width="3" height="42" rx="1.5" fill="url(#grad-v)"/>
+  <text x="100" y="269" font-size="13" font-weight="600" fill="#e4e4e7">TaskRunner × N</text>
+  <text x="100" y="287" font-size="11" fill="#71717a">Inject inputs → Stream Claude Code → Git commit &amp; push</text>
+
+  <!-- Inner arrow -->
+  <line x1="360" y1="298" x2="360" y2="310" stroke="#a855f7" stroke-opacity="0.3" stroke-width="1.5"/>
+
+  <!-- SandboxManager -->
+  <rect x="84" y="314" width="552" height="50" rx="8" fill="#111116" stroke="#1e1e24"/>
+  <rect x="84" y="318" width="3" height="42" rx="1.5" fill="url(#grad-v)"/>
+  <text x="100" y="335" font-size="13" font-weight="600" fill="#e4e4e7">SandboxManager</text>
+  <text x="100" y="353" font-size="11" fill="#71717a">Orchestrate isolated Docker containers via SWE-ReX</text>
+
+  <!-- ═══ ARROW: ENGINE → DOCKER ═══ -->
+  <line x1="360" y1="394" x2="360" y2="430" stroke="url(#grad-v)" stroke-width="2"/>
+  <polygon points="355,428 360,436 365,428" fill="#06b6d4"/>
+  <circle cx="360" cy="414" r="3" fill="#8b5cf6" class="pulse-2"/>
+
+  <!-- .dkmv/ → .agent/ annotation -->
+  <text x="380" y="418" font-size="9" fill="#3f3f46">.dkmv/ → .agent/</text>
+
+  <!-- ═══ DOCKER CONTAINER ═══ -->
+  <rect x="64" y="440" width="592" height="132" rx="12" fill="#111116" stroke="#06b6d4" stroke-opacity="0.15"/>
+
+  <text x="84" y="464" font-size="13" font-weight="600" fill="#e4e4e7">Docker Container</text>
+  <text x="230" y="464" font-size="11" fill="#52525b">· isolated · one per component</text>
+
+  <text x="84" y="484" font-size="12" font-weight="500" fill="#c084fc">Claude Code (headless)</text>
+
+  <text x="96" y="504" font-size="11" fill="#a1a1aa">·  Reads inputs from .agent/</text>
+  <text x="96" y="520" font-size="11" fill="#a1a1aa">·  Writes code, runs tests</text>
+  <text x="96" y="536" font-size="11" fill="#a1a1aa">·  Follows CLAUDE.md instructions</text>
+  <text x="96" y="552" font-size="11" fill="#a1a1aa">·  Commits to git branch</text>
+
+  <text x="96" y="568" font-size="9" fill="#3f3f46">Pre-installed: git · gh · Node.js · Python · Claude CLI</text>
+
+  <!-- ═══ ARROW: DOCKER → OUTPUT ═══ -->
+  <line x1="360" y1="572" x2="360" y2="588" stroke="url(#grad-v)" stroke-width="2"/>
+  <polygon points="355,586 360,594 365,586" fill="#06b6d4"/>
+  <circle cx="360" cy="582" r="3" fill="#06b6d4" class="pulse-3"/>
+
+  <!-- ═══ OUTPUT BADGE ═══ -->
+  <rect x="224" y="596" width="272" height="22" rx="11" fill="#0a1f14" stroke="#22c55e" stroke-opacity="0.2"/>
+  <text x="360" y="611" text-anchor="middle" font-size="10" font-weight="500" fill="#4ade80">Feature branch — code, tests &amp; commits</text>
+</svg>

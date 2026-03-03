@@ -7,6 +7,7 @@ import jinja2
 import yaml
 from pydantic import ValidationError
 
+from dkmv.tasks.manifest import ComponentManifest
 from dkmv.tasks.models import TaskDefinition
 
 
@@ -71,12 +72,37 @@ class TaskLoader:
             task.instructions = rendered
             task.instructions_file = None
 
+    def load_manifest(self, manifest_path: Path, variables: dict[str, Any]) -> ComponentManifest:
+        raw = manifest_path.read_text()
+
+        try:
+            rendered = self._jinja_env.from_string(raw).render(variables)
+        except jinja2.UndefinedError as e:
+            raise TaskLoadError(str(e), manifest_path) from e
+
+        try:
+            data = yaml.safe_load(rendered)
+        except yaml.YAMLError as e:
+            raise TaskLoadError(str(e), manifest_path) from e
+
+        try:
+            return ComponentManifest.model_validate(data)
+        except ValidationError as e:
+            raise TaskLoadError(str(e), manifest_path) from e
+
     def load_component(
         self, component_dir: Path, variables: dict[str, Any]
     ) -> list[TaskDefinition]:
+        manifest_path = component_dir / "component.yaml"
+        if manifest_path.exists():
+            manifest = self.load_manifest(manifest_path, variables)
+            return [self.load(component_dir / ref.file, variables) for ref in manifest.tasks]
+
         tasks_subdir = component_dir / "tasks"
         scan_dir = tasks_subdir if tasks_subdir.is_dir() else component_dir
         yaml_files = sorted(
-            p for p in scan_dir.iterdir() if p.suffix in (".yaml", ".yml") and p.is_file()
+            p
+            for p in scan_dir.iterdir()
+            if p.suffix in (".yaml", ".yml") and p.is_file() and p.name != "component.yaml"
         )
         return [self.load(f, variables) for f in yaml_files]

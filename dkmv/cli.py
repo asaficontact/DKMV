@@ -2,13 +2,14 @@ import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from dkmv.config import load_config
+from dkmv.tasks.pause import PauseRequest, PauseResponse
 from dkmv.utils import async_command
 
 app = typer.Typer(
@@ -53,6 +54,124 @@ def main(
     global _verbose, _dry_run  # noqa: PLW0603
     _verbose = verbose
     _dry_run = dry_run
+
+
+@app.command()
+def init(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Accept all defaults.")] = False,
+    repo: Annotated[str | None, typer.Option("--repo", help="Repository URL.")] = None,
+    name: Annotated[str | None, typer.Option("--name", help="Project name.")] = None,
+) -> None:
+    """Initialize DKMV for the current project."""
+    from dkmv.init import run_init
+
+    run_init(yes=yes, repo_override=repo, name_override=name)
+
+
+@app.command()
+def components() -> None:
+    """List all available components (built-in and registered)."""
+    from dkmv.project import find_project_root
+    from dkmv.registry import ComponentRegistry
+
+    project_root = find_project_root()
+    has_init = (project_root / ".dkmv" / "components.json").exists()
+
+    infos = ComponentRegistry.list_all(project_root if has_init else None)
+
+    table = Table(title="Components")
+    table.add_column("Name", style="cyan")
+    table.add_column("Type")
+    table.add_column("Tasks", justify="right")
+    table.add_column("Description")
+
+    builtin_count = 0
+    custom_count = 0
+
+    for info in infos:
+        if info.component_type == "built-in":
+            builtin_count += 1
+            table.add_row(
+                info.name,
+                "built-in",
+                str(info.task_count),
+                info.description,
+            )
+        else:
+            custom_count += 1
+            if info.valid:
+                table.add_row(
+                    info.name,
+                    "custom",
+                    str(info.task_count),
+                    info.description,
+                )
+            else:
+                table.add_row(
+                    info.name,
+                    "custom",
+                    "[yellow]?[/yellow]",
+                    f"[yellow]path not found: {info.description}[/yellow]",
+                )
+
+    console.print(table)
+    console.print(f"\n{builtin_count} built-in, {custom_count} custom")
+
+
+@app.command()
+def register(
+    name: Annotated[str, typer.Argument(help="Short name for the component.")],
+    path: Annotated[str, typer.Argument(help="Path to component directory.")],
+    force: Annotated[
+        bool, typer.Option("--force", help="Overwrite existing registration.")
+    ] = False,
+) -> None:
+    """Register a custom component by name."""
+    from dkmv.project import find_project_root
+    from dkmv.registry import ComponentRegistry
+
+    project_root = find_project_root()
+    if not (project_root / ".dkmv").exists():
+        console.print("Error: DKMV not initialized. Run 'dkmv init' first.", style="bold red")
+        raise typer.Exit(code=1)
+
+    try:
+        resolved_path = ComponentRegistry.register(project_root, name, path, force=force)
+    except ValueError as e:
+        console.print(f"Error: {e}", style="bold red")
+        raise typer.Exit(code=1)
+
+    yaml_files = list(resolved_path.glob("*.yaml")) + list(resolved_path.glob("*.yml"))
+    tasks_subdir = resolved_path / "tasks"
+    if tasks_subdir.is_dir():
+        yaml_files.extend(tasks_subdir.glob("*.yaml"))
+        yaml_files.extend(tasks_subdir.glob("*.yml"))
+    yaml_count = len(yaml_files)
+    console.print(
+        f"Registered '{name}' → {resolved_path} ({yaml_count} task{'s' if yaml_count != 1 else ''})"
+    )
+
+
+@app.command()
+def unregister(
+    name: Annotated[str, typer.Argument(help="Component name to unregister.")],
+) -> None:
+    """Unregister a custom component."""
+    from dkmv.project import find_project_root
+    from dkmv.registry import ComponentRegistry
+
+    project_root = find_project_root()
+    if not (project_root / ".dkmv").exists():
+        console.print("Error: DKMV not initialized. Run 'dkmv init' first.", style="bold red")
+        raise typer.Exit(code=1)
+
+    try:
+        ComponentRegistry.unregister(project_root, name)
+    except ValueError as e:
+        console.print(f"Error: {e}", style="bold red")
+        raise typer.Exit(code=1)
+
+    console.print(f"Unregistered '{name}'")
 
 
 @app.command()
@@ -101,15 +220,168 @@ def build(
     typer.echo(f"Image {config.image_name} built successfully.")
 
 
+def _discover_phases(impl_docs_dir: Path) -> list[dict[str, Any]]:
+    """Scan implementation docs directory for phase files."""
+    phase_files = sorted(impl_docs_dir.glob("phase*_*.md"))
+    if not phase_files:
+        raise typer.BadParameter(f"No phase files (phase*_*.md) found in {impl_docs_dir}")
+    phases: list[dict[str, Any]] = []
+    for pf in phase_files:
+        stem = pf.stem  # "phase1_foundation"
+        parts = stem.split("_", 1)
+        phase_num = int(parts[0].replace("phase", ""))
+        phase_name = parts[1].replace("_", " ") if len(parts) > 1 else f"phase{phase_num}"
+        phases.append(
+            {
+                "phase_number": phase_num,
+                "phase_name": phase_name,
+                "phase_file": pf.name,
+            }
+        )
+    return phases
+
+
 @app.command()
 @async_command
 async def dev(
-    repo: Annotated[str, typer.Argument(help="GitHub repository URL or local path.")],
-    prd: Annotated[Path, typer.Option("--prd", help="Path to the PRD file.")],
-    branch: Annotated[str | None, typer.Option("--branch", help="Branch name to use.")] = None,
-    feedback: Annotated[
-        Path | None, typer.Option("--feedback", help="Path to feedback JSON from previous run.")
+    impl_docs: Annotated[
+        Path, typer.Option("--impl-docs", help="Path to implementation docs directory.")
+    ],
+    repo: Annotated[
+        str | None,
+        typer.Option("--repo", help="Repository URL (default: from project config)."),
     ] = None,
+    branch: Annotated[str | None, typer.Option("--branch", help="Branch name to use.")] = None,
+    feature_name: Annotated[
+        str | None, typer.Option("--feature-name", help="Feature name for tracking.")
+    ] = None,
+    model: Annotated[str | None, typer.Option("--model", help="Model to use for this run.")] = None,
+    max_turns: Annotated[
+        int | None, typer.Option("--max-turns", help="Maximum agent turns.")
+    ] = None,
+    max_budget_usd: Annotated[
+        float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
+    ] = None,
+    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    keep_alive: Annotated[
+        bool, typer.Option("--keep-alive", help="Keep container running after completion.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
+) -> None:
+    """Run the Dev agent to implement phases from implementation docs.
+
+    Takes the output of 'dkmv plan' and implements each phase sequentially.
+    """
+    from dkmv.project import find_project_root, get_repo
+    from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
+    from dkmv.tasks.models import CLIOverrides
+    from dkmv.core.runner import RunManager
+    from dkmv.core.sandbox import SandboxManager
+    from dkmv.core.stream import StreamParser
+
+    config_obj = load_config()
+    project_root = find_project_root()
+    resolved_repo = get_repo(repo)
+
+    impl_docs_dir = Path(impl_docs).resolve()
+    if not impl_docs_dir.is_dir():
+        console.print(f"Error: {impl_docs_dir} is not a directory.", style="bold red")
+        raise typer.Exit(code=1)
+
+    phases = _discover_phases(impl_docs_dir)
+
+    resolved_feature = feature_name or impl_docs_dir.name
+    resolved_branch = branch or f"feature/{resolved_feature}-dev"
+
+    variables: dict[str, Any] = {
+        "impl_docs_path": str(impl_docs_dir),
+        "phases": phases,
+    }
+
+    cli_overrides = CLIOverrides(
+        model=model,
+        max_turns=max_turns,
+        timeout_minutes=timeout,
+        max_budget_usd=max_budget_usd,
+    )
+
+    component_dir = resolve_component("dev", project_root=project_root)
+    sandbox = SandboxManager()
+    run_mgr = RunManager(output_dir=config_obj.output_dir)
+    parser = StreamParser(verbose=verbose or _verbose)
+    loader = TaskLoader()
+    task_runner = TaskRunner(sandbox, run_mgr, parser, Console())
+    runner = ComponentRunner(sandbox, run_mgr, loader, task_runner, Console())
+
+    result = await runner.run(
+        component_dir=component_dir,
+        repo=resolved_repo,
+        branch=resolved_branch,
+        feature_name=resolved_feature,
+        variables=variables,
+        config=config_obj,
+        cli_overrides=cli_overrides,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
+    )
+    console.print(f"Run {result.run_id} completed with status: {result.status}")
+    if result.error_message:
+        console.print(f"Error: {result.error_message}", style="bold red")
+
+
+async def _rich_pause_callback(request: PauseRequest) -> PauseResponse:
+    """Render pause questions with Rich and collect user answers via typer.prompt."""
+    if not request.questions:
+        return PauseResponse(answers={})
+
+    console.print(
+        f"\n[bold cyan]Task '{request.task_name}' has questions about architectural decisions:[/bold cyan]\n"
+    )
+    answers: dict[str, str] = {}
+    for q in request.questions:
+        console.print(f"[bold]{q.question}[/bold]")
+        if q.options:
+            for i, opt in enumerate(q.options, 1):
+                label = opt.get("label", opt.get("value", ""))
+                desc = opt.get("description", "")
+                default_marker = " (default)" if q.default and opt.get("value") == q.default else ""
+                console.print(f"  {i}. {label}{default_marker}")
+                if desc:
+                    console.print(f"     {desc}", style="dim")
+
+            default_idx = None
+            if q.default:
+                for i, opt in enumerate(q.options, 1):
+                    if opt.get("value") == q.default:
+                        default_idx = str(i)
+                        break
+
+            choice = typer.prompt("Choose", default=default_idx or "1")
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(q.options):
+                    answers[q.id] = q.options[idx].get("value", choice)
+                else:
+                    answers[q.id] = choice
+            except ValueError:
+                answers[q.id] = choice
+        else:
+            answer = typer.prompt("Answer", default=q.default or "")
+            answers[q.id] = answer
+        console.print()
+
+    return PauseResponse(answers=answers)
+
+
+@app.command()
+@async_command
+async def plan(
+    prd: Annotated[Path, typer.Option("--prd", help="Path to the PRD file.")],
+    repo: Annotated[
+        str | None,
+        typer.Option("--repo", help="Repository URL (default: from project config)."),
+    ] = None,
+    branch: Annotated[str | None, typer.Option("--branch", help="Branch name to use.")] = None,
     design_docs: Annotated[
         Path | None, typer.Option("--design-docs", help="Path to design documents directory.")
     ] = None,
@@ -127,14 +399,17 @@ async def dev(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
-    """Run the Dev agent to implement a feature.
+    """Run the Plan agent to convert a PRD into implementation documents.
 
-    Note: This is a wrapper around 'dkmv run dev'. This wrapper auto-derives
-    --branch and --feature-name from the PRD filename. If using 'dkmv run dev'
-    directly, provide --branch explicitly.
+    Produces features.md, user_stories.md, phaseN_*.md, tasks.md, progress.md,
+    README.md, and CLAUDE.md in docs/implementation/{feature_name}/.
     """
+    import json as json_mod
+
+    from dkmv.project import find_project_root, get_repo
     from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
     from dkmv.tasks.models import CLIOverrides
     from dkmv.core.runner import RunManager
@@ -142,10 +417,15 @@ async def dev(
     from dkmv.core.stream import StreamParser
 
     config_obj = load_config()
+    project_root = find_project_root()
+    resolved_repo = get_repo(repo)
 
-    variables: dict[str, str] = {"prd_path": str(prd)}
-    if feedback:
-        variables["feedback_path"] = str(feedback)
+    resolved_feature = feature_name or Path(prd).stem
+    resolved_branch = branch or f"feature/{resolved_feature}-plan"
+
+    variables: dict[str, str] = {
+        "prd_path": str(prd),
+    }
     if design_docs:
         variables["design_docs_path"] = str(design_docs)
 
@@ -156,11 +436,7 @@ async def dev(
         max_budget_usd=max_budget_usd,
     )
 
-    # Derive feature_name and branch to match old DevComponent.pre_workspace_setup behavior
-    resolved_feature = feature_name or Path(prd).stem
-    resolved_branch = branch or f"feature/{resolved_feature}-dev"
-
-    component_dir = resolve_component("dev")
+    component_dir = resolve_component("plan", project_root=project_root)
     sandbox = SandboxManager()
     run_mgr = RunManager(output_dir=config_obj.output_dir)
     parser = StreamParser(verbose=verbose or _verbose)
@@ -170,7 +446,7 @@ async def dev(
 
     result = await runner.run(
         component_dir=component_dir,
-        repo=repo,
+        repo=resolved_repo,
         branch=resolved_branch,
         feature_name=resolved_feature,
         variables=variables,
@@ -178,84 +454,26 @@ async def dev(
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
-    )
-    console.print(f"Run {result.run_id} completed with status: {result.status}")
-    if result.error_message:
-        console.print(f"Error: {result.error_message}", style="bold red")
-
-
-@app.command()
-@async_command
-async def qa(
-    repo: Annotated[str, typer.Argument(help="GitHub repository URL or local path.")],
-    branch: Annotated[str, typer.Option("--branch", help="Branch to QA.")],
-    prd: Annotated[Path, typer.Option("--prd", help="Path to the PRD file.")],
-    model: Annotated[str | None, typer.Option("--model", help="Model to use.")] = None,
-    max_turns: Annotated[
-        int | None, typer.Option("--max-turns", help="Maximum agent turns.")
-    ] = None,
-    max_budget_usd: Annotated[
-        float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
-    ] = None,
-    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
-    keep_alive: Annotated[
-        bool, typer.Option("--keep-alive", help="Keep container running after completion.")
-    ] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
-) -> None:
-    """Run the QA agent to review and test a branch.
-
-    Note: This is a wrapper around 'dkmv run qa'. Consider using
-    'dkmv run qa --var prd_path=...' directly.
-    """
-    from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
-    from dkmv.tasks.models import CLIOverrides
-    from dkmv.core.runner import RunManager
-    from dkmv.core.sandbox import SandboxManager
-    from dkmv.core.stream import StreamParser
-
-    config_obj = load_config()
-    variables: dict[str, str] = {"prd_path": str(prd)}
-    cli_overrides = CLIOverrides(
-        model=model,
-        max_turns=max_turns,
-        timeout_minutes=timeout,
-        max_budget_usd=max_budget_usd,
+        on_pause=None if auto else _rich_pause_callback,
     )
 
-    component_dir = resolve_component("qa")
-    sandbox = SandboxManager()
-    run_mgr = RunManager(output_dir=config_obj.output_dir)
-    parser = StreamParser(verbose=verbose or _verbose)
-    loader = TaskLoader()
-    task_runner = TaskRunner(sandbox, run_mgr, parser, Console())
-    runner = ComponentRunner(sandbox, run_mgr, loader, task_runner, Console())
-
-    result = await runner.run(
-        component_dir=component_dir,
-        repo=repo,
-        branch=branch,
-        feature_name=branch,
-        variables=variables,
-        config=config_obj,
-        cli_overrides=cli_overrides,
-        keep_alive=keep_alive,
-        verbose=verbose or _verbose,
-    )
-
-    # QA report display from saved artifact
-    import json as json_mod
-
-    report_file = config_obj.output_dir / "runs" / result.run_id / "qa_report.json"
+    # Plan report display from saved artifact
+    report_file = config_obj.output_dir / "runs" / result.run_id / "plan_report.json"
     if result.status == "completed" and report_file.exists():
         report_data = json_mod.loads(report_file.read_text())
-        total = report_data.get("tests_total", 0)
-        passed = report_data.get("tests_passed", 0)
-        failed = report_data.get("tests_failed", 0)
-        console.print(f"Run {result.run_id} completed with status: {result.status}")
-        console.print(f"Tests: {total} total, {passed} passed, {failed} failed")
-        for warning in report_data.get("warnings", []):
-            console.print(f"  Warning: {warning}", style="yellow")
+        status = report_data.get("status", "unknown")
+        if status == "pass":
+            console.print("PLAN: PASS", style="bold green")
+        else:
+            console.print("PLAN: FAIL", style="bold red")
+        found = report_data.get("issues_found", 0)
+        fixed = report_data.get("issues_fixed", 0)
+        console.print(f"Issues found: {found}, fixed: {fixed}")
+        docs = report_data.get("documents_produced", [])
+        if docs:
+            console.print(f"Documents: {', '.join(docs)}")
+        if report_data.get("summary"):
+            console.print(f"Summary: {report_data['summary']}")
     else:
         console.print(f"Run {result.run_id} completed with status: {result.status}")
 
@@ -263,12 +481,77 @@ async def qa(
         console.print(f"Error: {result.error_message}", style="bold red")
 
 
+async def _qa_pause_callback(request: PauseRequest) -> PauseResponse:
+    """Present QA evaluation results and let the user choose: fix, ship, or abort."""
+    import json as json_mod
+
+    # Parse evaluation data from context
+    eval_data: dict[str, Any] = {}
+    for _path, content in request.context.items():
+        try:
+            data = json_mod.loads(content)
+            if isinstance(data, dict) and "status" in data:
+                eval_data = data
+                break
+        except (json_mod.JSONDecodeError, TypeError):
+            continue
+
+    status = eval_data.get("status", "unknown")
+    issues = eval_data.get("issues", [])
+    tests_total = eval_data.get("tests_total", 0)
+    tests_passed = eval_data.get("tests_passed", 0)
+    tests_failed = eval_data.get("tests_failed", 0)
+    summary = eval_data.get("summary", "")
+
+    # Display evaluation summary
+    if status == "pass":
+        console.print("\n[bold green]QA Evaluation: PASS[/bold green]")
+    else:
+        console.print("\n[bold red]QA Evaluation: FAIL[/bold red]")
+
+    if tests_total:
+        console.print(f"Tests: {tests_total} total, {tests_passed} passed, {tests_failed} failed")
+
+    if issues:
+        severity_counts: dict[str, int] = {}
+        for issue in issues:
+            sev = issue.get("severity", "unknown")
+            severity_counts[sev] = severity_counts.get(sev, 0) + 1
+        parts = [f"{count} {sev}" for sev, count in sorted(severity_counts.items())]
+        console.print(f"Issues: {', '.join(parts)}")
+
+    if summary:
+        console.print(f"Summary: {summary}")
+
+    console.print("\n[bold]What would you like to do?[/bold]")
+    console.print("  1. Fix issues and re-evaluate (Recommended)")
+    console.print("  2. Ship as-is (skip fixes)")
+    console.print("  3. Abort")
+
+    choice = typer.prompt("Choose", default="1")
+
+    if choice == "3":
+        raise typer.Exit(code=1)
+    elif choice == "2":
+        return PauseResponse(answers={"action": "ship"}, skip_remaining=True)
+    else:
+        return PauseResponse(answers={"action": "fix"})
+
+
 @app.command()
 @async_command
-async def judge(
-    repo: Annotated[str, typer.Argument(help="GitHub repository URL or local path.")],
-    branch: Annotated[str, typer.Option("--branch", help="Branch to judge.")],
-    prd: Annotated[Path, typer.Option("--prd", help="Path to the PRD file.")],
+async def qa(
+    impl_docs: Annotated[
+        Path, typer.Option("--impl-docs", help="Path to implementation docs directory.")
+    ],
+    branch: Annotated[str, typer.Option("--branch", help="Branch to QA.")],
+    repo: Annotated[
+        str | None,
+        typer.Option("--repo", help="Repository URL (default: from project config)."),
+    ] = None,
+    feature_name: Annotated[
+        str | None, typer.Option("--feature-name", help="Feature name for tracking.")
+    ] = None,
     model: Annotated[str | None, typer.Option("--model", help="Model to use.")] = None,
     max_turns: Annotated[
         int | None, typer.Option("--max-turns", help="Maximum agent turns.")
@@ -280,15 +563,17 @@ async def judge(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
-    """Run the Judge agent to evaluate implementation quality.
+    """Run the QA agent to evaluate, fix, and re-evaluate a branch.
 
-    Note: This is a wrapper around 'dkmv run judge'. Consider using
-    'dkmv run judge --var prd_path=...' directly.
+    Uses an evaluate-fix-re-evaluate loop: the agent first evaluates the
+    implementation, then you choose to fix issues or ship as-is.
     """
     import json as json_mod
 
+    from dkmv.project import find_project_root, get_repo
     from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
     from dkmv.tasks.models import CLIOverrides
     from dkmv.core.runner import RunManager
@@ -296,7 +581,17 @@ async def judge(
     from dkmv.core.stream import StreamParser
 
     config_obj = load_config()
-    variables: dict[str, str] = {"prd_path": str(prd)}
+    project_root = find_project_root()
+    resolved_repo = get_repo(repo)
+
+    impl_docs_dir = Path(impl_docs).resolve()
+    if not impl_docs_dir.is_dir():
+        console.print(f"Error: {impl_docs_dir} is not a directory.", style="bold red")
+        raise typer.Exit(code=1)
+
+    resolved_feature = feature_name or impl_docs_dir.name
+
+    variables: dict[str, str] = {"impl_docs_path": str(impl_docs_dir)}
     cli_overrides = CLIOverrides(
         model=model,
         max_turns=max_turns,
@@ -304,7 +599,7 @@ async def judge(
         max_budget_usd=max_budget_usd,
     )
 
-    component_dir = resolve_component("judge")
+    component_dir = resolve_component("qa", project_root=project_root)
     sandbox = SandboxManager()
     run_mgr = RunManager(output_dir=config_obj.output_dir)
     parser = StreamParser(verbose=verbose or _verbose)
@@ -314,33 +609,32 @@ async def judge(
 
     result = await runner.run(
         component_dir=component_dir,
-        repo=repo,
+        repo=resolved_repo,
         branch=branch,
-        feature_name=branch,
+        feature_name=resolved_feature,
         variables=variables,
         config=config_obj,
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
+        on_pause=None if auto else _qa_pause_callback,
     )
 
-    # Verdict display from saved artifact
-    verdict_file = config_obj.output_dir / "runs" / result.run_id / "verdict.json"
-    if result.status == "completed" and verdict_file.exists():
-        verdict_data = json_mod.loads(verdict_file.read_text())
-        if verdict_data.get("verdict") == "pass":
-            console.print("VERDICT: PASS", style="bold green")
+    # QA report display from saved artifact
+    report_file = config_obj.output_dir / "runs" / result.run_id / "qa_report.json"
+    if result.status == "completed" and report_file.exists():
+        report_data = json_mod.loads(report_file.read_text())
+        qa_status = report_data.get("status", "unknown")
+        if qa_status == "pass":
+            console.print("QA: PASS", style="bold green")
         else:
-            console.print("VERDICT: FAIL", style="bold red")
-        if verdict_data.get("reasoning"):
-            console.print(f"Reasoning: {verdict_data['reasoning']}")
-        if verdict_data.get("score") is not None:
-            console.print(f"Score: {verdict_data['score']}/100")
-        if verdict_data.get("confidence") is not None:
-            console.print(f"Confidence: {verdict_data['confidence']:.0%}")
-        for issue in verdict_data.get("issues", []):
-            severity = issue.get("severity", "").upper()
-            console.print(f"  [{severity}] {issue.get('description', '')}")
+            console.print("QA: FAIL", style="bold red")
+        total = report_data.get("tests_total", 0)
+        passed = report_data.get("tests_passed", 0)
+        failed = report_data.get("tests_failed", 0)
+        console.print(f"Tests: {total} total, {passed} passed, {failed} failed")
+        if report_data.get("summary"):
+            console.print(f"Summary: {report_data['summary']}")
     else:
         console.print(f"Run {result.run_id} completed with status: {result.status}")
 
@@ -351,12 +645,21 @@ async def judge(
 @app.command()
 @async_command
 async def docs(
-    repo: Annotated[str, typer.Argument(help="GitHub repository URL or local path.")],
-    branch: Annotated[str, typer.Option("--branch", help="Branch to document.")],
-    create_pr: Annotated[
-        bool, typer.Option("--create-pr", help="Create a PR with documentation changes.")
-    ] = False,
-    pr_base: Annotated[str, typer.Option("--pr-base", help="Base branch for PR.")] = "main",
+    impl_docs: Annotated[
+        Path, typer.Option("--impl-docs", help="Path to implementation docs directory.")
+    ],
+    branch: Annotated[str, typer.Option("--branch", help="Branch to document and create PR for.")],
+    repo: Annotated[
+        str | None,
+        typer.Option("--repo", help="Repository URL (default: from project config)."),
+    ] = None,
+    pr_base: Annotated[
+        str | None,
+        typer.Option("--pr-base", help="Base branch for PR (default: repo default branch)."),
+    ] = None,
+    feature_name: Annotated[
+        str | None, typer.Option("--feature-name", help="Feature name for tracking.")
+    ] = None,
     model: Annotated[str | None, typer.Option("--model", help="Model to use.")] = None,
     max_turns: Annotated[
         int | None, typer.Option("--max-turns", help="Maximum agent turns.")
@@ -370,11 +673,15 @@ async def docs(
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
-    """Run the Docs agent to generate documentation.
+    """Run the Docs agent to update documentation and create a PR.
 
-    Note: This is a wrapper around 'dkmv run docs'. Consider using
-    'dkmv run docs --var create_pr=true' directly.
+    Reviews the implementation against plan docs, updates all relevant
+    documentation, verifies accuracy, and creates a comprehensive pull
+    request covering all branch changes.
     """
+    import json as json_mod
+
+    from dkmv.project import find_project_root, get_repo
     from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
     from dkmv.tasks.models import CLIOverrides
     from dkmv.core.runner import RunManager
@@ -382,10 +689,19 @@ async def docs(
     from dkmv.core.stream import StreamParser
 
     config_obj = load_config()
-    variables: dict[str, str] = {}
-    if create_pr:
-        variables["create_pr"] = "true"
-    variables["pr_base"] = pr_base
+    project_root = find_project_root()
+    resolved_repo = get_repo(repo)
+
+    impl_docs_dir = Path(impl_docs).resolve()
+    if not impl_docs_dir.is_dir():
+        console.print(f"Error: {impl_docs_dir} is not a directory.", style="bold red")
+        raise typer.Exit(code=1)
+
+    resolved_feature = feature_name or impl_docs_dir.name
+
+    variables: dict[str, str] = {"impl_docs_path": str(impl_docs_dir)}
+    if pr_base:
+        variables["pr_base"] = pr_base
 
     cli_overrides = CLIOverrides(
         model=model,
@@ -394,7 +710,7 @@ async def docs(
         max_budget_usd=max_budget_usd,
     )
 
-    component_dir = resolve_component("docs")
+    component_dir = resolve_component("docs", project_root=project_root)
     sandbox = SandboxManager()
     run_mgr = RunManager(output_dir=config_obj.output_dir)
     parser = StreamParser(verbose=verbose or _verbose)
@@ -404,9 +720,9 @@ async def docs(
 
     result = await runner.run(
         component_dir=component_dir,
-        repo=repo,
+        repo=resolved_repo,
         branch=branch,
-        feature_name=branch,
+        feature_name=resolved_feature,
         variables=variables,
         config=config_obj,
         cli_overrides=cli_overrides,
@@ -415,18 +731,25 @@ async def docs(
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
 
-    # Docs manifest display from saved artifact (optional)
-    import json as json_mod
+    # Verification status display
+    verify_file = config_obj.output_dir / "runs" / result.run_id / "docs_verification.json"
+    if result.status == "completed" and verify_file.exists():
+        verify_data = json_mod.loads(verify_file.read_text())
+        v_status = verify_data.get("status", "unknown")
+        if v_status == "pass":
+            console.print("Docs verification: PASS", style="bold green")
+        else:
+            console.print("Docs verification: FAIL", style="bold red")
 
-    manifest_file = config_obj.output_dir / "runs" / result.run_id / "docs_manifest.json"
-    if result.status == "completed" and manifest_file.exists():
-        manifest_data = json_mod.loads(manifest_file.read_text())
-        generated = manifest_data.get("docs_generated", [])
-        updated = manifest_data.get("docs_updated", [])
-        if generated:
-            console.print(f"Generated: {', '.join(generated)}")
-        if updated:
-            console.print(f"Updated: {', '.join(updated)}")
+    # PR result display
+    pr_file = config_obj.output_dir / "runs" / result.run_id / "pr_result.json"
+    if result.status == "completed" and pr_file.exists():
+        pr_data = json_mod.loads(pr_file.read_text())
+        pr_url = pr_data.get("pr_url", "")
+        if pr_url:
+            console.print(f"PR: {pr_url}", style="bold green")
+        pr_status = pr_data.get("status", "unknown")
+        console.print(f"PR status: {pr_status}")
 
     if result.error_message:
         console.print(f"Error: {result.error_message}", style="bold red")
@@ -450,7 +773,10 @@ async def run_component(
     component: Annotated[
         str, typer.Argument(help="Component name or path to component directory.")
     ],
-    repo: Annotated[str, typer.Option("--repo", help="Repository URL to clone.")],
+    repo: Annotated[
+        str | None,
+        typer.Option("--repo", help="Repository URL (default: from project config)."),
+    ] = None,
     branch: Annotated[str | None, typer.Option("--branch", help="Branch name.")] = None,
     feature_name: Annotated[
         str | None, typer.Option("--feature-name", help="Feature name for tracking.")
@@ -472,6 +798,7 @@ async def run_component(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run a component (directory of task YAML files)."""
+    from dkmv.project import find_project_root, get_repo
     from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
     from dkmv.tasks.models import CLIOverrides
     from dkmv.core.runner import RunManager
@@ -479,7 +806,10 @@ async def run_component(
     from dkmv.core.stream import StreamParser
 
     config = load_config()
-    component_dir = resolve_component(component)
+    project_root = find_project_root()
+    resolved_repo = get_repo(repo)
+
+    component_dir = resolve_component(component, project_root=project_root)
     variables = _parse_vars(var)
 
     cli_overrides = CLIOverrides(
@@ -498,7 +828,7 @@ async def run_component(
 
     result = await runner.run(
         component_dir=component_dir,
-        repo=repo,
+        repo=resolved_repo,
         branch=branch,
         feature_name=feature_name or component_dir.name,
         variables=variables,
@@ -515,7 +845,7 @@ async def run_component(
 @app.command()
 def runs(
     component: Annotated[
-        str | None, typer.Option("--component", help="Filter by component (dev|qa|judge|docs).")
+        str | None, typer.Option("--component", help="Filter by component (dev|qa|docs).")
     ] = None,
     status: Annotated[str | None, typer.Option("--status", help="Filter by status.")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Max number of runs to show.")] = 20,
@@ -582,6 +912,9 @@ def show(
     except FileNotFoundError:
         console.print(f"Error: Run '{run_id}' not found.", style="bold red")
         raise typer.Exit(code=1)
+    except ValueError as e:
+        console.print(f"Error: {e}", style="bold red")
+        raise typer.Exit(code=1)
 
     status_style = {
         "completed": "green",
@@ -625,12 +958,15 @@ def attach(
     run_mgr = RunManager(output_dir=config.output_dir)
 
     try:
-        run_mgr.get_run(run_id)
+        detail = run_mgr.get_run(run_id)
     except FileNotFoundError:
         console.print(f"Error: Run '{run_id}' not found.", style="bold red")
         raise typer.Exit(code=1)
+    except ValueError as e:
+        console.print(f"Error: {e}", style="bold red")
+        raise typer.Exit(code=1)
 
-    container_name = run_mgr.get_container_name(run_id)
+    container_name = run_mgr.get_container_name(detail.run_id)
     if not container_name:
         console.print("Error: No container name found for this run.", style="bold red")
         console.print("The container may have been started without --keep-alive.")
@@ -661,12 +997,15 @@ def stop(
     run_mgr = RunManager(output_dir=config.output_dir)
 
     try:
-        run_mgr.get_run(run_id)
+        detail = run_mgr.get_run(run_id)
     except FileNotFoundError:
         console.print(f"Error: Run '{run_id}' not found.", style="bold red")
         raise typer.Exit(code=1)
+    except ValueError as e:
+        console.print(f"Error: {e}", style="bold red")
+        raise typer.Exit(code=1)
 
-    container_name = run_mgr.get_container_name(run_id)
+    container_name = run_mgr.get_container_name(detail.run_id)
     if not container_name:
         console.print("Error: No container name found for this run.", style="bold red")
         raise typer.Exit(code=1)

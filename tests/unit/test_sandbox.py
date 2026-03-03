@@ -148,6 +148,45 @@ class TestSandboxManagerFileOps:
         session.deployment.runtime.read_file.assert_awaited_once()
 
 
+class TestSandboxManagerFileExists:
+    async def test_file_exists_returns_true(
+        self, sandbox_manager: SandboxManager, session: SandboxSession
+    ) -> None:
+        obs = MagicMock()
+        obs.output = "exists"
+        obs.exit_code = 0
+        obs.failure_reason = ""
+        session.deployment.runtime.run_in_session = AsyncMock(return_value=obs)
+
+        result = await sandbox_manager.file_exists(session, "/tmp/test.txt")
+        assert result is True
+
+    async def test_file_exists_returns_false(
+        self, sandbox_manager: SandboxManager, session: SandboxSession
+    ) -> None:
+        obs = MagicMock()
+        obs.output = ""
+        obs.exit_code = 1
+        obs.failure_reason = ""
+        session.deployment.runtime.run_in_session = AsyncMock(return_value=obs)
+
+        result = await sandbox_manager.file_exists(session, "/tmp/missing.txt")
+        assert result is False
+
+    async def test_file_exists_quotes_path(
+        self, sandbox_manager: SandboxManager, session: SandboxSession
+    ) -> None:
+        obs = MagicMock()
+        obs.output = ""
+        obs.exit_code = 1
+        obs.failure_reason = ""
+        session.deployment.runtime.run_in_session = AsyncMock(return_value=obs)
+
+        await sandbox_manager.file_exists(session, "/tmp/file with spaces.txt")
+        action = session.deployment.runtime.run_in_session.call_args[0][0]
+        assert "'/tmp/file with spaces.txt'" in action.command
+
+
 class TestSandboxManagerStop:
     async def test_stop_calls_deployment_stop(
         self, sandbox_manager: SandboxManager, session: SandboxSession
@@ -766,6 +805,149 @@ class TestStreamClaudeEnvVars:
 
         launch_cmd = calls_log[0]
         assert "env " not in launch_cmd
+
+
+class TestStreamClaudeResume:
+    async def test_stream_claude_resume_uses_resume_flag(
+        self, sandbox_manager: SandboxManager, session: SandboxSession
+    ) -> None:
+        """When resume_session_id is set, command includes --resume."""
+        import json
+
+        result_event = json.dumps({"type": "result", "total_cost_usd": 0.0})
+
+        pid_obs = MagicMock()
+        pid_obs.output = "123"
+        pid_obs.exit_code = 0
+        pid_obs.failure_reason = ""
+
+        alive_obs = MagicMock()
+        alive_obs.output = "0"
+        alive_obs.exit_code = 0
+        alive_obs.failure_reason = ""
+
+        dead_obs = MagicMock()
+        dead_obs.output = "1"
+        dead_obs.exit_code = 0
+        dead_obs.failure_reason = ""
+
+        tail_obs = MagicMock()
+        tail_obs.output = result_event
+        tail_obs.exit_code = 0
+        tail_obs.failure_reason = ""
+
+        empty_obs = MagicMock()
+        empty_obs.output = ""
+        empty_obs.exit_code = 0
+        empty_obs.failure_reason = ""
+
+        calls_log: list[str] = []
+
+        async def side_effect(action):
+            cmd = action.command if hasattr(action, "command") else ""
+            calls_log.append(cmd)
+            if not [c for c in calls_log[:-1] if c]:
+                return pid_obs
+            if "kill -0" in cmd:
+                if len([c for c in calls_log if "kill -0" in c]) > 1:
+                    return dead_obs
+                return alive_obs
+            if "tail -n" in cmd:
+                if len([c for c in calls_log if "tail -n" in c]) > 1:
+                    return empty_obs
+                return tail_obs
+            if "kill" in cmd:
+                return empty_obs
+            return pid_obs
+
+        session.deployment.runtime.run_in_session = AsyncMock(side_effect=side_effect)
+        session.deployment.runtime.create_session = AsyncMock()
+        session.deployment.runtime.close_session = AsyncMock()
+        session.deployment.runtime.write_file = AsyncMock()
+
+        async for _ in sandbox_manager.stream_claude(
+            session=session,
+            prompt="Fix the output",
+            model="m",
+            max_turns=5,
+            timeout_minutes=1,
+            resume_session_id="sess-abc-123",
+        ):
+            pass
+
+        launch_cmd = calls_log[0]
+        assert "--resume" in launch_cmd
+        assert "sess-abc-123" in launch_cmd
+
+    async def test_stream_claude_without_resume_uses_p_flag(
+        self, sandbox_manager: SandboxManager, session: SandboxSession
+    ) -> None:
+        """Default behavior without resume_session_id uses -p flag."""
+        import json
+
+        result_event = json.dumps({"type": "result", "total_cost_usd": 0.0})
+
+        pid_obs = MagicMock()
+        pid_obs.output = "123"
+        pid_obs.exit_code = 0
+        pid_obs.failure_reason = ""
+
+        alive_obs = MagicMock()
+        alive_obs.output = "0"
+        alive_obs.exit_code = 0
+        alive_obs.failure_reason = ""
+
+        dead_obs = MagicMock()
+        dead_obs.output = "1"
+        dead_obs.exit_code = 0
+        dead_obs.failure_reason = ""
+
+        tail_obs = MagicMock()
+        tail_obs.output = result_event
+        tail_obs.exit_code = 0
+        tail_obs.failure_reason = ""
+
+        empty_obs = MagicMock()
+        empty_obs.output = ""
+        empty_obs.exit_code = 0
+        empty_obs.failure_reason = ""
+
+        calls_log: list[str] = []
+
+        async def side_effect(action):
+            cmd = action.command if hasattr(action, "command") else ""
+            calls_log.append(cmd)
+            if not [c for c in calls_log[:-1] if c]:
+                return pid_obs
+            if "kill -0" in cmd:
+                if len([c for c in calls_log if "kill -0" in c]) > 1:
+                    return dead_obs
+                return alive_obs
+            if "tail -n" in cmd:
+                if len([c for c in calls_log if "tail -n" in c]) > 1:
+                    return empty_obs
+                return tail_obs
+            if "kill" in cmd:
+                return empty_obs
+            return pid_obs
+
+        session.deployment.runtime.run_in_session = AsyncMock(side_effect=side_effect)
+        session.deployment.runtime.create_session = AsyncMock()
+        session.deployment.runtime.close_session = AsyncMock()
+        session.deployment.runtime.write_file = AsyncMock()
+
+        async for _ in sandbox_manager.stream_claude(
+            session=session,
+            prompt="test",
+            model="m",
+            max_turns=5,
+            timeout_minutes=1,
+        ):
+            pass
+
+        launch_cmd = calls_log[0]
+        assert "--resume" not in launch_cmd
+        assert "claude -p" in launch_cmd
 
 
 class TestMemorySwapDockerArg:

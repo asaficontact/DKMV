@@ -97,6 +97,18 @@ class TestTaskInput:
         inp = TaskInput(name="test", type=input_type, **fields)  # type: ignore[arg-type]
         assert inp.type == input_type
 
+    def test_relative_dest_normalized(self) -> None:
+        inp = TaskInput(name="prd", type="file", src="/a", dest="prd.md")
+        assert inp.dest == "/home/dkmv/workspace/.agent/prd.md"
+
+    def test_absolute_dest_unchanged(self) -> None:
+        inp = TaskInput(name="prd", type="file", src="/a", dest="/custom/prd.md")
+        assert inp.dest == "/custom/prd.md"
+
+    def test_env_dest_stays_none(self) -> None:
+        inp = TaskInput(name="tok", type="env", key="K", value="V")
+        assert inp.dest is None
+
 
 class TestTaskOutput:
     def test_defaults(self) -> None:
@@ -113,6 +125,27 @@ class TestTaskOutput:
         with pytest.raises(ValidationError):
             TaskOutput()  # type: ignore[call-arg]
 
+    def test_relative_path_normalized(self) -> None:
+        out = TaskOutput(path="plan.md")
+        assert out.path == "/home/dkmv/workspace/.agent/plan.md"
+
+    def test_absolute_path_unchanged(self) -> None:
+        out = TaskOutput(path="/custom/output.txt")
+        assert out.path == "/custom/output.txt"
+
+
+class TestTaskOutputRequiredFields:
+    def test_required_fields_default_empty(self) -> None:
+        out = TaskOutput(path="/workspace/output.json")
+        assert out.required_fields == []
+
+    def test_required_fields_set(self) -> None:
+        out = TaskOutput(
+            path="/workspace/output.json",
+            required_fields=["output_dir", "features"],
+        )
+        assert out.required_fields == ["output_dir", "features"]
+
 
 class TestTaskDefinition:
     def test_valid_complete_definition(self) -> None:
@@ -121,7 +154,6 @@ class TestTaskDefinition:
             description="Plan the feature",
             commit=False,
             push=False,
-            commit_message="plan done",
             model="claude-opus-4-6",
             max_turns=50,
             timeout_minutes=15,
@@ -151,9 +183,10 @@ class TestTaskDefinition:
         with pytest.raises(ValidationError, match="got both"):
             TaskDefinition(name="t", instructions="x", prompt="a", prompt_file="b.md")
 
-    def test_neither_prompt_nor_prompt_file_raises(self) -> None:
-        with pytest.raises(ValidationError, match="got neither"):
-            TaskDefinition(name="t", instructions="x")
+    def test_neither_prompt_nor_prompt_file_allowed(self) -> None:
+        td = TaskDefinition(name="t", instructions="x")
+        assert td.prompt is None
+        assert td.prompt_file is None
 
     def test_both_instructions_and_instructions_file_raises(self) -> None:
         with pytest.raises(ValidationError, match="got both"):
@@ -164,9 +197,10 @@ class TestTaskDefinition:
                 prompt="go",
             )
 
-    def test_neither_instructions_nor_instructions_file_raises(self) -> None:
-        with pytest.raises(ValidationError, match="got neither"):
-            TaskDefinition(name="t", prompt="go")
+    def test_neither_instructions_nor_instructions_file_allowed(self) -> None:
+        td = TaskDefinition(name="t", prompt="go")
+        assert td.instructions is None
+        assert td.instructions_file is None
 
     def test_execution_fields_default_to_none(self) -> None:
         td = TaskDefinition(name="t", instructions="x", prompt="go")

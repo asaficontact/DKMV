@@ -1,204 +1,405 @@
 # DKMV Architecture Overview
 
-DKMV is a Python CLI tool that orchestrates AI agents (Claude Code) inside isolated Docker containers to implement software features end-to-end. Each agent is a specialized **component** — Dev writes code, QA validates it, Judge evaluates quality, and Docs generates documentation. Components run in fresh containers and communicate only through git branches.
+DKMV is a Python CLI tool that orchestrates AI agents (Claude Code) inside isolated Docker containers to perform software engineering tasks. Agents are defined as **components** — directories of YAML task definitions governed by a `component.yaml` manifest. Components run sequentially in fresh containers and communicate through git branches.
+
+The system ships four built-in components: **plan** (PRD → implementation docs), **dev** (phase-by-phase implementation), **qa** (evaluate → fix → re-evaluate), and **docs** (documentation + PR creation).
 
 ---
 
 ## System Architecture
 
 ```
+┌──────────────────────────────────────────────────────────────────────┐
+│                         YOUR MACHINE (Host)                          │
+│                                                                      │
+│  ┌─────────┐    ┌──────────────────────────────────────────────────┐ │
+│  │  .env   │───>│               DKMV CLI (typer)                  │ │
+│  │  file   │    │                                                  │ │
+│  └─────────┘    │  ┌──────────────────────────────────────────┐    │ │
+│                 │  │        DKMVConfig + ProjectConfig         │    │ │
+│  ┌─────────┐   │  │   (pydantic-settings + .dkmv/config.json) │    │ │
+│  │ .dkmv/  │──>│  └──────────────┬────────────────────────────┘    │ │
+│  │config.  │   │                 │                                  │ │
+│  │json     │   │     ┌───────────┴────────────┐                    │ │
+│  └─────────┘   │     │                        │                    │ │
+│                 │  ┌──▼──────────────┐  ┌─────▼──────────────┐     │ │
+│                 │  │ ComponentRunner │  │   RunManager        │     │ │
+│                 │  │ (task system    │  │ (persists runs to   │     │ │
+│                 │  │  orchestrator)  │  │  .dkmv/runs/)       │     │ │
+│                 │  └──┬─────────────┘  └─────────────────────┘     │ │
+│                 │     │                                              │ │
+│                 │  ┌──▼──────────────────────┐                      │ │
+│                 │  │    SandboxManager       │                      │ │
+│                 │  │ (Docker container via   │                      │ │
+│                 │  │  SWE-ReX)               │                      │ │
+│                 │  └──┬──────────────────────┘                      │ │
+│                 └─────┼──────────────────────────────────────────────┘ │
+│                       │ docker run -e ANTHROPIC_API_KEY=...            │
+│                       │ docker run -e GITHUB_TOKEN=...                 │
+│                       ▼                                                │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │                DOCKER CONTAINER (dkmv-sandbox)                    │  │
+│  │                                                                   │  │
+│  │  User: dkmv (UID 1000)     Image: node:20-bookworm               │  │
+│  │                                                                   │  │
+│  │  ┌───────────────────────────────────────────────────────────┐   │  │
+│  │  │  SWE-ReX (swerex-remote)                                  │   │  │
+│  │  │  Listens on port 8000, receives commands from host        │   │  │
+│  │  └──────────────────────┬────────────────────────────────────┘   │  │
+│  │                         │                                         │  │
+│  │  ┌──────────────────────▼────────────────────────────────────┐   │  │
+│  │  │  Bash Sessions                                             │   │  │
+│  │  │  ├── "main"  — git clone, setup, launch claude             │   │  │
+│  │  │  └── "tail"  — polls /tmp/dkmv_stream.jsonl                │   │  │
+│  │  └────────────────────────────────────────────────────────────┘   │  │
+│  │                                                                   │  │
+│  │  ┌─────────────────────────────────────────────┐                 │  │
+│  │  │  /home/dkmv/workspace/                      │                 │  │
+│  │  │  ├── (cloned repo)                          │                 │  │
+│  │  │  ├── .claude/CLAUDE.md  (layered agent rules)│                │  │
+│  │  │  └── .agent/            (inter-task state)   │                │  │
+│  │  │      ├── impl_docs/     (injected inputs)    │                │  │
+│  │  │      ├── analysis.json  (task outputs)       │                │  │
+│  │  │      └── user_decisions.json (pause answers) │                │  │
+│  │  └─────────────────────────────────────────────┘                 │  │
+│  │                                                                   │  │
+│  │  Claude Code (headless) ──> /tmp/dkmv_stream.jsonl               │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                       │                                                │
+│                       │ git push origin feature/...                    │
+│                       ▼                                                │
+│                   ┌────────┐                                           │
+│                   │ GitHub │                                           │
+│                   └────────┘                                           │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Core Concepts
+
+### Components
+
+A **component** is a directory containing one or more YAML task definitions and an optional `component.yaml` manifest. The manifest declares shared inputs, default parameters, and the task execution order.
+
+```
+my-component/
+├── component.yaml      # Manifest (optional): inputs, defaults, task refs
+├── 01-analyze.yaml     # Task 1
+├── 02-implement.yaml   # Task 2
+└── 03-verify.yaml      # Task 3
+```
+
+### Tasks
+
+A **task** is a single Claude Code session defined in a YAML file. Each task has:
+- A **prompt** sent to Claude Code
+- Optional **instructions** layered into CLAUDE.md
+- **Inputs** (files, text, env vars) injected into the container
+- **Outputs** (files) collected from the container after execution
+- **commit/push** flags controlling git behavior
+
+### The Component Pipeline
+
+Components are designed to run on a shared git branch. Each component's tasks operate sequentially within a single Docker container:
+
+```
+                          ┌──────────────┐
+                          │   PRD File   │
+                          └──────┬───────┘
+                                 │
+                   ┌─────────────▼──────────────┐
+                   │       PLAN Component        │
+                   │  5 tasks: analyze → features │
+                   │  → phases → assembly → eval  │
+                   │  Output: impl_docs/          │
+                   └─────────────┬──────────────┘
+                                 │ impl_docs
+                   ┌─────────────▼──────────────┐
+                   │       DEV Component         │
+                   │  N tasks (one per phase)     │
+                   │  Implements code + tests     │
+                   └─────────────┬──────────────┘
+                                 │ branch with code
+                   ┌─────────────▼──────────────┐
+                   │        QA Component         │
+                   │  3 tasks: evaluate → fix    │
+                   │  → re-evaluate              │
+                   │  Interactive pause after     │
+                   │  evaluate (fix/ship/abort)   │
+                   └─────────────┬──────────────┘
+                                 │ branch with fixes
+                   ┌─────────────▼──────────────┐
+                   │       DOCS Component        │
+                   │  3 tasks: update-docs →     │
+                   │  verify → create-pr         │
+                   │  Creates GitHub PR           │
+                   └─────────────────────────────┘
+```
+
+---
+
+## Architectural Layers
+
+### Layer 1: CLI (`dkmv/cli.py`)
+
+The CLI is built with Typer. It provides wrapper commands for each built-in component plus generic `run` for custom components:
+
+```
+dkmv
+├── init                          Initialize DKMV project (.dkmv/)
+├── components                    List available components
+├── register <name> <path>        Register a custom component
+├── unregister <name>             Remove a custom component
+├── build                         Build the Docker image
+│
+├── plan --prd ... --branch ...   Run Plan agent (PRD → impl docs)
+├── dev --impl-docs ... --branch  Run Dev agent (implement phases)
+├── qa --impl-docs ... --branch   Run QA agent (evaluate-fix loop)
+├── docs --impl-docs ... --branch Run Docs agent (docs + PR)
+├── run <component> --branch ...  Run any component by name/path
+│
+├── runs                          List past runs (filterable)
+├── show <run_id>                 Show full run details
+├── attach <run_id>               Shell into running container
+├── stop <run_id>                 Stop a running container
+└── clean                         Remove all DKMV containers
+```
+
+Each run command creates the full runtime stack:
+
+```
+CLI command
+│
+├── load_config() → DKMVConfig (env vars + .env + project config cascade)
+├── get_repo() → resolve repo from CLI --repo or project config
+├── resolve_component() → find component directory
+│
+├── Instantiate:
+│   ├── SandboxManager()
+│   ├── RunManager(output_dir)
+│   ├── StreamParser(console, verbose)
+│   ├── TaskLoader()
+│   └── TaskRunner(sandbox, run_mgr, stream_parser, console)
+│
+├── ComponentRunner(sandbox, run_mgr, task_loader, task_runner, console)
+├── result = await runner.run(component_dir, repo, branch, ...)
+│
+└── Display result (status, cost, artifacts)
+```
+
+**`--repo` is optional** on all run commands when the project is initialized — falls back to `.dkmv/config.json` via `get_repo()`.
+
+### Layer 2: Task System (`dkmv/tasks/`)
+
+The task system handles component loading, task execution, and orchestration.
+
+```
 ┌──────────────────────────────────────────────────────────────────┐
-│                        YOUR MACHINE (Host)                       │
+│                      ComponentRunner.run()                        │
 │                                                                  │
-│  ┌─────────┐    ┌──────────────────────────────────────────────┐ │
-│  │  .env   │───>│              DKMV CLI (typer)                │ │
-│  │  file   │    │                                              │ │
-│  └─────────┘    │  ┌────────────────────────────────────────┐  │ │
-│                 │  │          DKMVConfig                     │  │ │
-│                 │  │  (pydantic-settings, reads env + .env)  │  │ │
-│                 │  └──────────────┬─────────────────────────┘  │ │
-│                 │                 │                             │ │
-│                 │     ┌───────────┴───────────┐                │ │
-│                 │     │                       │                │ │
-│                 │  ┌──▼──────────┐  ┌────────▼─────────┐      │ │
-│                 │  │  Component  │  │   RunManager      │      │ │
-│                 │  │ (Dev/QA/    │  │ (persists runs    │      │ │
-│                 │  │  Judge/Docs)│  │  to outputs/runs/)│      │ │
-│                 │  └──┬──────────┘  └──────────────────┘      │ │
-│                 │     │                                        │ │
-│                 │  ┌──▼──────────────────┐                     │ │
-│                 │  │   SandboxManager    │                     │ │
-│                 │  │ (manages container  │                     │ │
-│                 │  │  via SWE-ReX)       │                     │ │
-│                 │  └──┬─────────────────┘                     │ │
-│                 └─────┼────────────────────────────────────────┘ │
-│                       │ docker run -e ANTHROPIC_API_KEY=...      │
-│                       │ docker run -e GITHUB_TOKEN=...           │
-│                       ▼                                          │
+│  1. Scan YAML files in component directory                       │
+│  2. Start sandbox (Docker container)                             │
+│  3. Setup workspace (clone, branch, git config, .agent/)         │
+│  4. Load manifest (if component.yaml exists)                     │
+│  5. Expand for_each task refs                                    │
+│  6. Inject shared inputs, create dirs, write state files         │
+│                                                                  │
+│  FOR EACH TASK:                                                  │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │              DOCKER CONTAINER (dkmv-sandbox)                │  │
-│  │                                                             │  │
-│  │  User: dkmv (UID 1000)     Image: node:20-bookworm         │  │
-│  │                                                             │  │
-│  │  ┌─────────────────────────────────────────────────────┐   │  │
-│  │  │  SWE-ReX (swerex-remote)                            │   │  │
-│  │  │  Listens on port 8000, receives commands from host  │   │  │
-│  │  └────────────────────┬────────────────────────────────┘   │  │
-│  │                       │                                     │  │
-│  │  ┌────────────────────▼────────────────────────────────┐   │  │
-│  │  │  Bash Sessions                                      │   │  │
-│  │  │  ├── "main"  — git clone, setup, launch claude      │   │  │
-│  │  │  └── "tail"  — polls /tmp/dkmv_stream.jsonl         │   │  │
-│  │  └─────────────────────────────────────────────────────┘   │  │
-│  │                                                             │  │
-│  │  ┌────────────────────────────────────────┐                │  │
-│  │  │  /home/dkmv/workspace/                 │                │  │
-│  │  │  ├── (cloned repo)                     │                │  │
-│  │  │  ├── .claude/CLAUDE.md  (agent rules)  │                │  │
-│  │  │  └── .dkmv/                            │                │  │
-│  │  │      ├── prd.md         (requirements) │                │  │
-│  │  │      ├── plan.md        (Dev plan)     │                │  │
-│  │  │      ├── qa_report.json (QA output)    │                │  │
-│  │  │      └── verdict.json   (Judge output) │                │  │
-│  │  └────────────────────────────────────────┘                │  │
-│  │                                                             │  │
-│  │  Claude Code (headless) ──> /tmp/dkmv_stream.jsonl         │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                       │                                          │
-│                       │ git push origin feature/...              │
-│                       ▼                                          │
-│                   ┌────────┐                                     │
-│                   │ GitHub │                                     │
-│                   └────────┘                                     │
+│  │  7. Build cumulative variables (prior task outputs avail)  │  │
+│  │  8. TaskLoader.load() — Jinja2 render + YAML parse         │  │
+│  │  9. Apply manifest defaults (task_ref → manifest → task)   │  │
+│  │ 10. TaskRunner.run()                                       │  │
+│  │     ├── Inject inputs (files/text/env)                     │  │
+│  │     ├── Write layered CLAUDE.md                            │  │
+│  │     ├── Stream Claude Code (background + tail poll)        │  │
+│  │     ├── Collect outputs (with retry on failure)            │  │
+│  │     └── Git teardown (commit + push)                       │  │
+│  │ 11. Handle pause_after (invoke callback, write decisions)  │  │
+│  │ 12. On failure: skip remaining tasks                       │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  13. Stop sandbox, save results                                  │
+│  14. Return ComponentResult                                      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
----
+### Layer 3: Core Infrastructure (`dkmv/core/`)
 
-## The Component Pipeline
-
-Components are designed to run sequentially on the same git branch. Each component sees the work of the previous ones through the shared branch:
+Three managers provide the foundation:
 
 ```
-                        ┌─────────────┐
-                        │     PRD     │  (Product Requirements Document)
-                        └──────┬──────┘
-                               │
-                 ┌─────────────▼──────────────┐
-                 │         DEV Agent           │
-                 │  - Reads PRD (eval stripped) │
-                 │  - Creates plan.md           │
-                 │  - Implements code + tests   │
-                 │  - Commits to branch         │
-                 └─────────────┬──────────────┘
-                               │ git push
-                 ┌─────────────▼──────────────┐
-                 │         QA Agent            │
-                 │  - Reads FULL PRD           │
-                 │  - Runs tests               │
-                 │  - Evaluates requirements   │
-                 │  - Writes qa_report.json    │
-                 └─────────────┬──────────────┘
-                               │ git push
-                 ┌─────────────▼──────────────┐
-                 │       JUDGE Agent           │
-                 │  - Reads FULL PRD           │
-                 │  - Independent evaluation   │
-                 │  - Writes verdict.json      │
-                 │  - Pass/Fail + Score        │
-                 └─────────────┬──────────────┘
-                               │
-                     ┌─────────┴─────────┐
-                     │                   │
-               ┌─────▼────┐        ┌─────▼─────┐
-               │   PASS   │        │   FAIL    │
-               └─────┬────┘        └─────┬─────┘
-                     │                   │
-          ┌──────────▼──────┐    ┌───────▼──────────┐
-          │   DOCS Agent    │    │   DEV Agent       │
-          │  - Generate docs│    │   (re-run with    │
-          │  - Optional PR  │    │    feedback from   │
-          └─────────────────┘    │    Judge verdict)  │
-                                 └──────────────────┘
+┌─────────────────┐  ┌──────────────┐  ┌─────────────────┐
+│ SandboxManager   │  │  RunManager  │  │  StreamParser   │
+│                  │  │              │  │                 │
+│ start()          │  │ start_run()  │  │ parse_line()    │
+│ execute()        │  │ save_result()│  │ render_event()  │
+│ stream_claude()  │  │ append_      │  │                 │
+│ setup_git_auth() │  │   stream()   │  │ Parses Claude   │
+│ read_file()      │  │ save_prompt()│  │ Code stream-json│
+│ write_file()     │  │ save_        │  │ events and      │
+│ stop()           │  │   artifact() │  │ renders them to │
+│                  │  │ list_runs()  │  │ the terminal    │
+│ Wraps SWE-ReX    │  │ get_run()    │  │ via Rich        │
+│ DockerDeployment │  │              │  │                 │
+│                  │  │ File-based   │  │                 │
+└─────────────────┘  └──────────────┘  └─────────────────┘
 ```
-
-**Key design decision:** Dev never sees the Evaluation Criteria section of the PRD. This prevents the Dev agent from gaming the evaluation. QA and Judge both see the full PRD.
 
 ---
 
-## Core Infrastructure
+## Task System Details
 
-Three managers provide the foundation that all components share:
+### Task Definition Model (`tasks/models.py`)
 
-```
-┌───────────────────────────────────────────────────────────────┐
-│                     BaseComponent.run()                        │
-│                                                               │
-│  Uses three managers:                                         │
-│                                                               │
-│  ┌─────────────────┐  ┌──────────────┐  ┌─────────────────┐  │
-│  │ SandboxManager   │  │  RunManager  │  │  StreamParser   │  │
-│  │                  │  │              │  │                 │  │
-│  │ start()          │  │ start_run()  │  │ parse_line()    │  │
-│  │ execute()        │  │ save_result()│  │ render_event()  │  │
-│  │ stream_claude()  │  │ append_      │  │                 │  │
-│  │ setup_git_auth() │  │   stream()   │  │ Parses Claude   │  │
-│  │ read_file()      │  │ save_prompt()│  │ Code stream-json│  │
-│  │ write_file()     │  │ list_runs()  │  │ events and      │  │
-│  │ stop()           │  │ get_run()    │  │ renders them to │  │
-│  │                  │  │              │  │ the terminal    │  │
-│  │ Wraps SWE-ReX    │  │ File-based   │  │ via Rich        │  │
-│  │ DockerDeployment │  │ persistence  │  │                 │  │
-│  └─────────────────┘  └──────────────┘  └─────────────────┘  │
-└───────────────────────────────────────────────────────────────┘
-```
+```python
+class TaskDefinition(BaseModel):
+    name: str
+    description: str = ""
+    commit: bool = True           # Git commit after task
+    push: bool = True             # Git push after commit
 
-### SandboxManager
+    # Parameters (cascade from manifest → config if None)
+    model: str | None = None
+    max_turns: int | None = None
+    timeout_minutes: int | None = None
+    max_budget_usd: float | None = None
 
-Manages the Docker container lifecycle through SWE-ReX. SWE-ReX is a third-party library that provides `DockerDeployment` (starts/stops containers) and `RemoteRuntime` (executes commands inside them via an HTTP API on port 8000).
+    inputs: list[TaskInput] = []   # Files/text/env vars to inject
+    outputs: list[TaskOutput] = [] # Files to collect after execution
 
-**Key methods:**
-- `start()` — Creates a Docker container, starts SWE-ReX runtime, opens a bash session
-- `execute()` — Runs a shell command in the container, returns output + exit code
-- `stream_claude()` — Launches Claude Code and streams its output back (see below)
-- `setup_git_auth()` — Configures GitHub token: `gh auth login --with-token && gh auth setup-git`
-- `stop()` — Closes sessions and removes the container (or keeps it alive)
-
-### RunManager
-
-File-based persistence for all run artifacts. Each run gets a directory:
-
-```
-outputs/runs/{run_id}/
-├── config.json      Component config snapshot
-├── prompt.md        The prompt sent to Claude Code
-├── stream.jsonl     Every Claude Code event (one JSON per line, append-only)
-├── result.json      Final result (atomic write via .tmp + os.replace)
-├── container.txt    Docker container name (for attach/stop commands)
-└── logs/
+    instructions: str | None = None    # Layered into CLAUDE.md
+    instructions_file: str | None = None
+    prompt: str | None = None          # Sent as -p argument
+    prompt_file: str | None = None
 ```
 
-Run IDs are 8-character hex strings from `uuid4`. Results are written atomically (write to `.tmp`, then `os.replace`) to prevent partial reads.
+### Component Manifest Model (`tasks/manifest.py`)
 
-### StreamParser
+```python
+class ComponentManifest(BaseModel):
+    name: str
+    description: str = ""
 
-Parses Claude Code's `stream-json` output format into normalized `StreamEvent` objects and renders them to the terminal via Rich.
+    inputs: list[ManifestInput] = []      # Shared inputs for all tasks
+    workspace_dirs: list[str] = []         # Directories to create in workspace
+    state_files: list[ManifestStateFile] = []  # Pre-written files
 
-**Event types from Claude Code:**
-| Type | What it represents |
-|---|---|
-| `system` | Session initialization (cwd, tools, model) |
-| `assistant` | Claude's response — text or tool_use blocks |
-| `user` | Tool execution results |
-| `result` | Final summary — cost, duration, turns, success/error |
+    agent_md: str | None = None           # Inline CLAUDE.md content
+    agent_md_file: str | None = None      # Path to CLAUDE.md file
+
+    # Component-level defaults (task_ref overrides these, task YAML overrides both)
+    model: str | None = None
+    max_turns: int | None = None
+    timeout_minutes: int | None = None
+    max_budget_usd: float | None = None
+
+    tasks: list[ManifestTaskRef] = []     # Ordered task references
+    deliverables: list[ManifestDeliverable] = []
+```
+
+### ManifestTaskRef — Per-Task Overrides
+
+```python
+class ManifestTaskRef(BaseModel):
+    file: str                              # YAML filename
+    model: str | None = None               # Override manifest default
+    max_turns: int | None = None
+    timeout_minutes: int | None = None
+    max_budget_usd: float | None = None
+    pause_after: bool = False              # Pause for user input after task
+    for_each: str | None = None            # Iterate over a variable list
+```
+
+### Parameter Resolution Cascade
+
+Parameters (model, max_turns, timeout, budget) resolve through a 4-level cascade:
+
+```
+Priority (highest → lowest):
+1. Task YAML        — value set directly in the task definition file
+2. ManifestTaskRef  — per-task override in component.yaml
+3. ComponentManifest — component-level default in component.yaml
+4. CLI / Config     — _resolve_param: task → CLI override → DKMVConfig default
+```
+
+Levels 1-3 are applied by `ComponentRunner._apply_manifest_defaults()` (static method, mutates the TaskDefinition before execution). Level 4 is applied at runtime by `TaskRunner._resolve_param()`.
+
+### Jinja2 Templating with Cumulative Variables
+
+Task YAML files are Jinja2 templates rendered with `StrictUndefined` (undefined variables raise errors). Variables are built cumulatively by `ComponentRunner._build_variables()`:
+
+```python
+variables = {
+    # Static
+    "repo": "https://github.com/org/repo",
+    "branch": "feat/my-feature",
+    "feature_name": "my-feature",
+    "component": "dev",
+    "model": "claude-sonnet-4-6",
+    "run_id": "a1b2c3d4",
+
+    # User-provided (from CLI --var or command-specific args)
+    "impl_docs_path": "/path/to/impl-docs",
+    "phases": [{"phase_number": 1, "phase_name": "core", "phase_file": "phase1_core.md"}],
+
+    # Cumulative: outputs from prior completed tasks (JSON auto-parsed)
+    "tasks": {
+        "analyze": {
+            "outputs": {
+                "analysis": {"output_dir": "docs/impl/v1", "features": [...]}
+            }
+        }
+    }
+}
+```
+
+This enables powerful inter-task data flow: Task 2 can reference `{{ tasks.analyze.outputs.analysis.output_dir }}`.
+
+### For-Each Task Expansion
+
+ManifestTaskRefs can declare `for_each: "variable_name"` to iterate over a list variable. Each iteration receives `item` (the list element) and `item_index` injected into its template context. The dev component uses this to instantiate `implement-phase.yaml` once per phase.
+
+### CLAUDE.md Layering
+
+Each agent's CLAUDE.md is assembled from multiple layers:
+
+```
+┌────────────────────────────────────────────────────┐
+│ 1. DKMV_SYSTEM_CONTEXT (system_context.py)         │
+│    - Agent identity, workspace rules, environment   │
+├────────────────────────────────────────────────────┤
+│ 2. Component agent_md (from component.yaml)         │
+│    - Component-specific rules and conventions       │
+├────────────────────────────────────────────────────┤
+│ 3. Task instructions (from task YAML)               │
+│    - Task-specific rules and constraints            │
+├────────────────────────────────────────────────────┤
+│ 4. Git commit rules (auto-appended when commit=true)│
+│    - Conventional commit format requirements        │
+└────────────────────────────────────────────────────┘
+```
+
+### Pause-After (Human-in-the-Loop)
+
+ManifestTaskRefs can set `pause_after: true`. After a task succeeds, the ComponentRunner:
+1. Extracts questions from the task's JSON output (looking for a `questions` array with `id`, `question`, `options` fields)
+2. Builds a `PauseRequest` and invokes the `on_pause` callback
+3. Writes user answers to `.agent/user_decisions.json`
+4. If the callback sets `skip_remaining=True`, remaining tasks are skipped
+
+Used by: QA component (pause after evaluate — user chooses fix/ship/abort) and Plan component (pause after analyze — user reviews analysis).
+
+### Retry on Output Failure
+
+If `_collect_outputs` fails (missing required output or failed field validation), the TaskRunner resumes the Claude session with `--resume` and a corrective prompt asking it to produce the missing output. Max turns capped at 10 for the retry.
 
 ---
 
-## File-Based Streaming (The Dual-Session Workaround)
+## File-Based Streaming (Dual-Session Workaround)
 
-This is the most important implementation detail to understand. SWE-ReX's `run_in_session()` is **blocking** — it waits for a command to finish before returning. But Claude Code can run for 30+ minutes. We need real-time output, not blocking.
-
-**Solution:** Run Claude Code in the background, write output to a file, tail that file from a second session.
+SWE-ReX's `run_in_session()` is **blocking** — it waits for a command to finish. But Claude Code can run for 30+ minutes. The solution: run Claude in the background, tail its output from a second session.
 
 ```
 Container
@@ -221,9 +422,9 @@ Container
 │  │  (reads new lines since last poll)                 │  │
 │  └────────────────────────────────────────────────────┘  │
 │                                                          │
-│  /tmp/dkmv_stream.jsonl  <── Claude writes here          │
-│  /tmp/dkmv_stream.err    <── stderr captured here        │
-│  /tmp/dkmv_prompt.md     <── prompt written here         │
+│  /tmp/dkmv_stream.jsonl  ←── Claude writes here          │
+│  /tmp/dkmv_stream.err    ←── stderr captured here        │
+│  /tmp/dkmv_prompt.md     ←── prompt written here         │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
 
@@ -242,298 +443,47 @@ Host (polling loop, 0.5s interval):
 └──────────────────────────────────────────────────────────┘
 ```
 
-The `finally` block always kills the Claude Code process and closes the tail session — even on timeout — to prevent runaway API costs.
+The `finally` block always kills the Claude Code process and closes the tail session to prevent runaway API costs.
 
-**Why `< /dev/null`?** SWE-ReX's pexpect sessions are **interactive bash** (job control enabled). Background processes get their own process group. If a background process tries to read from the terminal, the kernel sends **SIGTTIN** which freezes the process immediately — 0 bytes written, no error message. Redirecting stdin from `/dev/null` prevents this. Non-interactive shells (e.g., `docker exec bash -c`) don't have this issue because job control is disabled.
-
----
-
-## The 12-Step Component Lifecycle
-
-Every component (Dev, QA, Judge, Docs) executes the same lifecycle defined in `BaseComponent.run()`. Components customize behavior by overriding hooks.
-
-```
-BaseComponent.run(config)
-│
-├── 1. VALIDATE          config.repo required, timeout > 0
-│
-├── 2. CREATE RUN        RunManager.start_run() → run_id
-│                        Writes config.json to outputs/runs/{run_id}/
-│
-├── 3. START SANDBOX     SandboxManager.start() → SandboxSession
-│   │                    Launches Docker container via SWE-ReX
-│   │                    Injects ANTHROPIC_API_KEY + GITHUB_TOKEN as -e flags
-│   │
-│   └── 3.5 SAVE         RunManager.save_container_name()
-│          CONTAINER      (enables `dkmv attach` and `dkmv stop`)
-│
-├── 4. SETUP WORKSPACE
-│   ├── Git auth          gh auth login --with-token
-│   ├── Clone repo        git clone {repo} /home/dkmv/workspace
-│   ├── Hook ●            pre_workspace_setup()  [can derive branch name]
-│   ├── Checkout branch   git checkout {branch} || git checkout -b {branch}
-│   ├── Create .dkmv/     mkdir .dkmv, add to .gitignore
-│   └── Hook ●            setup_workspace()  [writes PRD, feedback, etc.]
-│
-├── 5. WRITE CLAUDE.MD   Agent instructions → .claude/CLAUDE.md
-│
-├── 6. BUILD PROMPT      Hook ●  build_prompt()  [loads template, injects config]
-│                        RunManager.save_prompt()
-│
-├── 7. STREAM CLAUDE     SandboxManager.stream_claude()
-│      CODE              For each event:
-│                          RunManager.append_stream()     (persist)
-│                          StreamParser.parse_line()       (normalize)
-│                          StreamParser.render_event()     (display)
-│                          Capture "result" event
-│
-├── 8. COLLECT RESULTS   Extract cost, duration, turns from result event
-│   └── 8.5 ARTIFACTS    Hook ●  collect_artifacts()  [reads JSON from container]
-│                        parse_result() + merge into result
-│
-├── 9. GIT TEARDOWN      git add -A → git commit → git push origin {branch}
-│   └── 9.5 POST HOOK    Hook ●  post_teardown()  [PR creation, plan capture]
-│
-├── 10. MARK COMPLETE    result.status = "completed"
-│
-├── [ON ERROR]           TimeoutError → status = "timed_out"
-│                        Exception    → status = "failed"
-│
-├── FINALLY: SAVE        RunManager.save_result()  (always, even on failure)
-├── FINALLY: STOP        SandboxManager.stop()     (remove container or keep alive)
-│
-└── 12. RETURN           Typed result (DevResult, QAResult, etc.)
-```
-
-Steps marked with ● are hooks that components override to customize behavior.
+**Why `< /dev/null`?** SWE-ReX's pexpect sessions use **interactive bash** (job control enabled). Background processes get their own process group. If a background process reads from the terminal, the kernel sends **SIGTTIN** which freezes it silently — 0 bytes, no error. Redirecting stdin from `/dev/null` prevents this.
 
 ---
 
-## The Four Components
+## Inter-Component Communication
 
-### Dev Component
-
-**Purpose:** Implement a feature from a PRD. Plans first, then codes and tests.
-
-**Hook overrides:**
-| Hook | What Dev does |
-|---|---|
-| `pre_workspace_setup` | Auto-derives branch name: `feature/{feature_name}-dev` |
-| `setup_workspace` | Writes PRD to `.dkmv/prd.md` **with evaluation criteria stripped** via regex. Optionally copies feedback and design docs |
-| `build_prompt` | Loads `prompt.md`, conditionally adds design docs and feedback sections |
-| `post_teardown` | Captures `.dkmv/plan.md` from container (saves to run artifacts) |
-
-**Config (`DevConfig`):**
-```
-BaseComponentConfig +
-  prd_path: Path              # PRD file (host path, required)
-  feedback_path: Path | None  # Feedback from previous Judge run
-  design_docs_path: Path | None  # Directory of design documents
-```
-
-**Result (`DevResult`):**
-```
-BaseResult +
-  files_changed: list[str]     # Files modified/created
-  tests_passed: int | None     # Test results
-  tests_failed: int | None
-```
-
-**What Claude Code does inside the container:**
-1. Reads `.dkmv/prd.md` (evaluation criteria already removed)
-2. Explores codebase
-3. Writes plan to `.dkmv/plan.md`
-4. Implements the feature
-5. Writes tests, runs them, fixes failures
-
-### QA Component
-
-**Purpose:** Validate the implementation against the full PRD, including evaluation criteria.
-
-**Hook overrides:**
-| Hook | What QA does |
-|---|---|
-| `setup_workspace` | Writes **full PRD** (with evaluation criteria) to `.dkmv/prd.md` |
-| `build_prompt` | Loads `prompt.md` as-is |
-| `collect_artifacts` | Reads `.dkmv/qa_report.json` from container |
-| `_teardown_git` | Force-commits `.dkmv/qa_report.json` (even if .dkmv/ is gitignored) |
-
-**Config (`QAConfig`):**
-```
-BaseComponentConfig +
-  prd_path: Path  # Full PRD file (required)
-```
-
-**Result (`QAResult`):**
-```
-BaseResult +
-  tests_total: int       # Total test count
-  tests_passed: int
-  tests_failed: int
-  warnings: list[str]    # Quality warnings
-```
-
-**What Claude Code does inside the container:**
-1. Reads the full PRD (sees evaluation criteria)
-2. Runs the test suite
-3. Evaluates each requirement and evaluation criterion
-4. Reviews code quality
-5. Writes structured report to `.dkmv/qa_report.json`
-
-### Judge Component
-
-**Purpose:** Independent pass/fail evaluation. Explicitly instructed to ignore QA reports and form its own assessment.
-
-**Hook overrides:**
-| Hook | What Judge does |
-|---|---|
-| `setup_workspace` | Writes **full PRD** to `.dkmv/prd.md` |
-| `build_prompt` | Loads `prompt.md` as-is |
-| `collect_artifacts` | Reads `.dkmv/verdict.json` from container |
-| `_teardown_git` | Force-commits `.dkmv/verdict.json` |
-
-**Config (`JudgeConfig`):**
-```
-BaseComponentConfig +
-  prd_path: Path  # Full PRD file (required)
-```
-
-**Result (`JudgeResult`):**
-```
-BaseResult +
-  verdict: "pass" | "fail"
-  confidence: float (0.0–1.0)
-  reasoning: str
-  prd_requirements: list[PrdRequirement]  # Per-requirement status
-  issues: list[JudgeIssue]               # Severity + description + file/line
-  suggestions: list[str]
-  score: int (0–100)
-```
-
-**Nested models:**
-- `PrdRequirement`: `{requirement, status: implemented|missing|partial, notes}`
-- `JudgeIssue`: `{severity: critical|high|medium|low, description, file, line, suggestion}`
-
-**What Claude Code does inside the container:**
-1. Reads the full PRD
-2. Reviews implementation independently (ignores QA reports)
-3. Runs the test suite
-4. Evaluates each requirement
-5. Writes verdict to `.dkmv/verdict.json` with pass/fail, score, and issues
-
-### Docs Component
-
-**Purpose:** Generate or update documentation. Optionally creates a GitHub PR.
-
-**Hook overrides:**
-| Hook | What Docs does |
-|---|---|
-| `build_prompt` | Loads `prompt.md` as-is |
-| `post_teardown` | If `create_pr=True`: runs `gh pr create` in container |
-
-**Config (`DocsConfig`):**
-```
-BaseComponentConfig +
-  create_pr: bool = False   # Whether to create a PR
-  pr_base: str = "main"     # Base branch for PR
-```
-
-**Result (`DocsResult`):**
-```
-BaseResult +
-  docs_generated: list[str]   # Files created/updated
-  pr_url: str | None          # PR URL if created
-```
-
-**What Claude Code does inside the container:**
-1. Explores the codebase
-2. Identifies APIs, config, and key concepts
-3. Creates/updates documentation files
-4. Commits changes
-
----
-
-## Component Comparison
+Components share zero in-memory state. All communication flows through git:
 
 ```
-                    DEV           QA            JUDGE         DOCS
-                    ─────────     ─────────     ─────────     ─────────
-PRD Treatment       Stripped      Full          Full          None
-                    (no eval      (sees eval    (sees eval
-                    criteria)     criteria)     criteria)
-
-Branch Naming       Auto-derived  From input    From input    From input
-                    feature/X-dev
-
-Artifact Written    .dkmv/        .dkmv/        .dkmv/        (docs files)
-                    plan.md       qa_report     verdict
-                                  .json         .json
-
-Force-Commit        No            qa_report     verdict       No
-                                  .json         .json
-
-Post-Teardown       Capture       —             —             gh pr create
-                    plan.md                                   (optional)
-
-Modifies Code?      YES           No            No            No
-                                  (read-only)   (read-only)   (docs only)
+┌─────────┐   git push    ┌────────┐   git clone    ┌─────────┐
+│  PLAN   │ ────────────> │ GitHub │ <──────────── │   DEV   │
+│Container│               │ Branch │               │Container│
+└─────────┘               └────────┘               └─────────┘
+                               ▲
+                               │ git clone
+                          ┌────┴────┐
+                          │   QA   │
+                          │Container│
+                          └─────────┘
 ```
 
----
-
-## The CLI Layer
-
-The CLI is built with Typer. Each component has a corresponding command, plus utility commands for run management:
-
-```
-dkmv
-├── build                     Build the Docker image
-├── dev <repo> --prd ...      Run Dev agent
-├── qa <repo> --branch ...    Run QA agent
-├── judge <repo> --branch ... Run Judge agent
-├── docs <repo> --branch ...  Run Docs agent
-├── runs                      List past runs (filterable)
-├── show <run_id>             Show full run details
-├── attach <run_id>           Shell into a running container
-└── stop <run_id>             Stop a running container
-```
-
-**How a CLI command wires things together (example: `dkmv dev`):**
-
-```
-CLI command
-│
-├── load_config() → DKMVConfig (from .env + env vars)
-│
-├── Create DevConfig from CLI flags + global defaults
-│
-├── Instantiate managers:
-│   ├── SandboxManager()
-│   ├── RunManager(output_dir)
-│   └── StreamParser(console, verbose)
-│
-├── DevComponent(global_config, sandbox, run_manager, stream_parser)
-│
-├── result = await component.run(dev_config)
-│
-└── Display result (status, error if any)
-```
-
-All component commands follow this same pattern. The `@async_command` decorator wraps the async function with `asyncio.run()` so Typer can call it synchronously.
+Within a single component, tasks share state via the `.agent/` directory inside the container. Outputs from completed tasks are automatically available as Jinja2 variables for later tasks.
 
 ---
 
 ## Configuration System
 
-Configuration uses pydantic-settings: environment variables and `.env` files, no YAML.
+### Config Cascade
 
 ```
 Precedence (highest to lowest):
 1. CLI flags (--model, --max-turns, etc.)
 2. Shell environment variables
 3. .env file in current directory
-4. Hardcoded defaults in DKMVConfig
+4. Project config (.dkmv/config.json defaults)
+5. Hardcoded defaults in DKMVConfig
 ```
+
+### Environment Variables
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -549,76 +499,216 @@ Precedence (highest to lowest):
 
 Secrets (`ANTHROPIC_API_KEY`, `GITHUB_TOKEN`) are passed into Docker containers as `-e` flags at runtime — never baked into the image.
 
+### Project Config (`.dkmv/config.json`)
+
+Created by `dkmv init`. Provides project-scoped defaults:
+
+```json
+{
+  "version": 1,
+  "project_name": "my-project",
+  "repo": "https://github.com/org/repo",
+  "default_branch": "main",
+  "credentials": {
+    "anthropic_api_key_source": "env",
+    "github_token_source": "gh_cli"
+  },
+  "defaults": {
+    "model": "claude-sonnet-4-6",
+    "max_turns": 100,
+    "timeout_minutes": 30
+  },
+  "sandbox": {
+    "image": "dkmv-sandbox:latest"
+  }
+}
+```
+
+Project config is the **lowest-priority** config source — env vars and CLI flags always win.
+
+---
+
+## Project Initialization (`dkmv init`)
+
+`dkmv init` creates the `.dkmv/` directory structure with auto-detection:
+
+```
+.dkmv/
+├── config.json        # ProjectConfig (version, repo, credentials, defaults)
+├── components.json    # Custom component registry (initially empty)
+└── runs/              # Run artifacts directory
+```
+
+The init process runs 4 steps with Rich UX:
+1. **Project detection** — repo URL (from git remote), project name, default branch
+2. **Credential discovery** — checks env vars, `.env` file, `gh auth token`
+3. **Docker check** — verifies Docker is available and image exists
+4. **Write config** — creates `.dkmv/` structure, updates `.gitignore`
+
+Supports `--yes` for non-interactive mode, `--repo` and `--name` overrides, reinit detection, and nested project warnings.
+
+---
+
+## Component Registry
+
+Custom components can be registered with `dkmv register <name> <path>`:
+
+```bash
+dkmv register my-linter ./components/linter
+dkmv components          # Lists built-in + custom
+dkmv run my-linter ...   # Uses the registered component
+dkmv unregister my-linter
+```
+
+Registry entries are stored in `.dkmv/components.json`. Component resolution order:
+1. **Path** (contains `/` or starts with `.`) — resolve to absolute path
+2. **Built-in** — lookup in `dkmv.builtins` package
+3. **Registry** — lookup in `.dkmv/components.json`
+
+---
+
+## Built-in Components
+
+### Plan Component
+
+**Purpose:** Convert a PRD into a full set of implementation documents (phases, tasks, user stories, features).
+
+**Inputs:** PRD file (required), design docs directory (optional).
+
+**Tasks (5 sequential):**
+
+| # | Task | Purpose | Pause | Budget |
+|---|------|---------|-------|--------|
+| 1 | analyze | Deep PRD analysis, research, constraints. Output: `analysis.json` | Yes | $2.00 |
+| 2 | features-stories | Extract feature registry + user stories | No | $2.00 |
+| 3 | phases | Decompose into phases with task-level detail | No | $5.00 |
+| 4 | assembly | Assemble README, CLAUDE.md, tasks.md, progress.md | No | $2.00 |
+| 5 | evaluate-fix | 3-pass verification loop. Output: `plan_report.json` | No | $3.00 |
+
+**Key pattern:** Task 1 sets `output_dir` in `analysis.json`. All subsequent tasks reference it via `{{ tasks.analyze.outputs.analysis.output_dir }}`.
+
+### Dev Component
+
+**Purpose:** Phase-by-phase implementation from implementation docs produced by Plan.
+
+**Inputs:** Implementation docs directory (file input).
+
+**Agent MD:** Loaded from `{impl_docs_path}/CLAUDE.md` (the CLAUDE.md generated by the plan component).
+
+**Tasks:** Single template `implement-phase.yaml` iterated via `for_each: "phases"`. Each iteration implements one phase, reading its phase document and producing a `phase_N_result.json`.
+
+### QA Component
+
+**Purpose:** Evaluate-fix-re-evaluate loop for quality assurance.
+
+**Inputs:** Implementation docs directory (file input).
+
+**Tasks (3 sequential with interactive pause):**
+
+| # | Task | Purpose | Pause | Commit |
+|---|------|---------|-------|--------|
+| 1 | evaluate | Read-only evaluation. Output: `qa_evaluation.json` | Yes | No |
+| 2 | fix | Fix issues based on user decision. Reads `user_decisions.json` | No | Yes |
+| 3 | re-evaluate | Fresh re-evaluation. Output: `qa_report.json` | No | No |
+
+**Key pattern:** After evaluate, pause presents the user with Fix/Ship/Abort options. If "ship" is chosen, `skip_remaining=True` skips fix and re-evaluate.
+
+### Docs Component
+
+**Purpose:** Update documentation and create a pull request.
+
+**Inputs:** Implementation docs directory (file input).
+
+**Tasks (3 sequential):**
+
+| # | Task | Purpose | Commit |
+|---|------|---------|--------|
+| 1 | update-docs | Review impl, update docs. Output: `docs_manifest.json` | Yes |
+| 2 | verify | Second-pass verification. Output: `docs_verification.json` | Yes |
+| 3 | create-pr | Clean up `.agent/`, create PR. Output: `pr_result.json` | Yes |
+
+---
+
+## Container-Side Directory Rename
+
+Host-side `.dkmv/` becomes container-side `.agent/` (per ADR-0010). This is implemented by `_normalize_dest()` in `manifest.py`, which prepends `/home/dkmv/workspace/.agent/` to relative destination paths in manifest inputs and task outputs. The workspace setup creates `.agent/` in the container workspace.
+
+---
+
+## Git Teardown (Per-Task)
+
+After each task completes, `TaskRunner._git_teardown()` performs a 3-layer commit strategy:
+
+```
+1. Force-add declared outputs    git add -f {output_path}
+   (may be in .gitignore)        (for each output in task.outputs)
+
+2. Safety-net add               git add -A -- . ':!.agent/' ':!.claude/'
+   (catch code changes the       (excludes framework directories)
+    agent made but didn't stage)
+
+3. Commit if dirty              git commit -m "chore: uncommitted changes from {task_name}"
+
+4. Push if configured           git push origin HEAD
+```
+
+The commit message uses a deterministic git identity: `DKMV/{ComponentName} <dkmv-agent@noreply.dkmv.dev>`.
+
+---
+
+## Run Artifacts
+
+Each run gets a directory with all artifacts:
+
+```
+.dkmv/runs/{run_id}/
+├── config.json               # Component config snapshot
+├── result.json               # Final ComponentResult (atomic write)
+├── tasks_result.json         # Per-task results array
+├── stream.jsonl              # Raw Claude Code events (append-only)
+├── container.txt             # Docker container name
+├── prompts_log.md            # Unified prompts log (all tasks)
+├── prompt_{task_name}.md     # Per-task prompt
+├── claude_md_{task_name}.md  # Per-task CLAUDE.md
+├── {task_output_artifacts}   # Collected output files
+└── logs/
+```
+
+Run IDs are 8-character hex strings from `uuid4`. Results are written atomically (write to `.tmp`, then `os.replace`) to prevent corrupt reads.
+
 ---
 
 ## The Docker Sandbox
 
-The `dkmv-sandbox` image is purpose-built for running Claude Code headless in Docker:
+The `dkmv-sandbox` image is purpose-built for running Claude Code headless:
 
 ```
 Image Layers
-─────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────
   node:20-bookworm              Base (Debian + Node.js 20)
-  ─────────────────────────────────────────────────────────
+  ───────────────────────────────────────────────────────
   apt-get install               System packages:
     git, curl, wget, jq,          Core tools
     build-essential,               Build tools (native modules)
     python3, pip, pipx,            Python stack (for SWE-ReX)
     gh                             GitHub CLI (official repo)
-  ─────────────────────────────────────────────────────────
+  ───────────────────────────────────────────────────────
   npm install -g                Claude Code (pinned version)
     @anthropic-ai/claude-code
-  ─────────────────────────────────────────────────────────
+  ───────────────────────────────────────────────────────
   User: dkmv (UID 1000)        Non-root with passwordless sudo
-  ─────────────────────────────────────────────────────────
+  ───────────────────────────────────────────────────────
   pipx install swe-rex          SWE-ReX (remote execution server)
-  ─────────────────────────────────────────────────────────
+  ───────────────────────────────────────────────────────
 
-Environment Variables in Container:
-  PATH                          Includes ~/.local/bin (pipx binaries)
-  NODE_OPTIONS                  --max-old-space-size=4096 (4GB heap)
+Key Environment Variables:
   IS_SANDBOX=1                  Enables --dangerously-skip-permissions
   CLAUDE_CODE_DISABLE_          Allows headless (no TTY) operation
     NONINTERACTIVE_CHECK=1
+  NODE_OPTIONS                  --max-old-space-size=4096 (4GB heap)
 ```
 
-Claude Code refuses `--dangerously-skip-permissions` as root, so the `dkmv` user (UID 1000) is created with passwordless sudo.
-
-When the container starts, SWE-ReX (`swerex-remote`) runs on port 8000. The host communicates with it via HTTP to execute commands, read/write files, and manage bash sessions.
-
----
-
-## Inter-Component Communication
-
-Components share zero in-memory state. All communication flows through git:
-
-```
-┌─────────┐   git push    ┌────────┐   git clone    ┌─────────┐
-│   DEV   │ ────────────> │ GitHub │ <──────────── │   QA    │
-│Container│               │ Branch │               │Container│
-└─────────┘               └────────┘               └─────────┘
-                              ▲
-                              │ git clone
-                          ┌───┴─────┐
-                          │  JUDGE  │
-                          │Container│
-                          └─────────┘
-```
-
-**Shared artifacts on the branch:**
-
-| File | Written by | Read by |
-|---|---|---|
-| Source code + tests | Dev | QA, Judge, Docs |
-| `.dkmv/prd.md` | Each component (own copy) | Claude Code in that container |
-| `.dkmv/plan.md` | Dev (Claude writes it) | — |
-| `.dkmv/qa_report.json` | QA | (available on branch) |
-| `.dkmv/verdict.json` | Judge | CLI (displays verdict) |
-
-**Feedback loop:** When Judge returns `fail`, you can extract feedback from the verdict and pass it to Dev's next run:
-```
-judge verdict.json → BaseComponent.synthesize_feedback() → feedback.md → Dev --feedback
-```
+Claude Code refuses `--dangerously-skip-permissions` as root, hence the `dkmv` user (UID 1000) with passwordless sudo.
 
 ---
 
@@ -628,56 +718,65 @@ judge verdict.json → BaseComponent.synthesize_feedback() → feedback.md → D
 dkmv/
 ├── __init__.py                  # __version__ = "0.1.0"
 ├── __main__.py                  # Entry: from dkmv.cli import app; app()
-├── cli.py                       # All Typer commands (build, dev, qa, judge, docs, runs, show, attach, stop)
-├── config.py                    # DKMVConfig (pydantic-settings)
+├── cli.py                       # All Typer commands
+├── config.py                    # DKMVConfig (pydantic-settings) + load_config()
+├── project.py                   # ProjectConfig, find_project_root(), get_repo()
+├── init.py                      # dkmv init logic (credential discovery, Rich UX)
+├── registry.py                  # ComponentRegistry (.dkmv/components.json)
 │
 ├── utils/
-│   └── async_support.py         # @async_command decorator (wraps asyncio.run)
+│   └── async_support.py         # @async_command decorator
 │
 ├── core/
-│   ├── __init__.py              # Public exports
-│   ├── models.py                # SandboxConfig, BaseComponentConfig, BaseResult, RunSummary, RunDetail
+│   ├── models.py                # SandboxConfig, BaseComponentConfig, BaseResult, RunSummary
 │   ├── sandbox.py               # SandboxManager (Docker + SWE-ReX)
 │   ├── runner.py                # RunManager (file-based persistence)
 │   └── stream.py                # StreamParser + StreamEvent
 │
-├── components/
-│   ├── __init__.py              # Component registry (register_component, get_component)
-│   ├── base.py                  # BaseComponent ABC (12-step lifecycle + hooks)
+├── tasks/
+│   ├── models.py                # TaskDefinition, TaskResult, ComponentResult, CLIOverrides
+│   ├── manifest.py              # ComponentManifest, ManifestTaskRef, ManifestInput
+│   ├── loader.py                # TaskLoader (YAML + Jinja2 + Pydantic)
+│   ├── runner.py                # TaskRunner (single-task execution)
+│   ├── component.py             # ComponentRunner (multi-task orchestration)
+│   ├── discovery.py             # resolve_component(), BUILTIN_COMPONENTS
+│   ├── pause.py                 # PauseRequest, PauseResponse models
+│   └── system_context.py        # DKMV_SYSTEM_CONTEXT constant
+│
+├── builtins/
+│   ├── plan/                    # 5 tasks: analyze → features → phases → assembly → eval
+│   │   ├── component.yaml
+│   │   ├── 01-analyze.yaml
+│   │   ├── 02-features-stories.yaml
+│   │   ├── 03-phases.yaml
+│   │   ├── 04-assembly.yaml
+│   │   └── 05-evaluate-fix.yaml
 │   │
-│   ├── dev/
-│   │   ├── __init__.py          # Exports DevComponent, DevConfig, DevResult
-│   │   ├── component.py         # DevComponent (strips eval criteria, derives branch)
-│   │   ├── models.py            # DevConfig, DevResult
-│   │   └── prompt.md            # Dev agent prompt template
+│   ├── dev/                     # 1 template task, iterated via for_each
+│   │   ├── component.yaml
+│   │   └── implement-phase.yaml
 │   │
-│   ├── qa/
-│   │   ├── __init__.py
-│   │   ├── component.py         # QAComponent (full PRD, force-commits report)
-│   │   ├── models.py            # QAConfig, QAResult
-│   │   └── prompt.md
+│   ├── qa/                      # 3 tasks: evaluate → fix → re-evaluate
+│   │   ├── component.yaml
+│   │   ├── 01-evaluate.yaml
+│   │   ├── 02-fix.yaml
+│   │   └── 03-re-evaluate.yaml
 │   │
-│   ├── judge/
-│   │   ├── __init__.py
-│   │   ├── component.py         # JudgeComponent (independent eval, force-commits verdict)
-│   │   ├── models.py            # JudgeConfig, JudgeResult, PrdRequirement, JudgeIssue
-│   │   └── prompt.md
-│   │
-│   └── docs/
-│       ├── __init__.py
-│       ├── component.py         # DocsComponent (optional PR creation)
-│       ├── models.py            # DocsConfig, DocsResult
-│       └── prompt.md
+│   └── docs/                    # 3 tasks: update-docs → verify → create-pr
+│       ├── component.yaml
+│       ├── 01-update-docs.yaml
+│       ├── 02-verify.yaml
+│       └── 03-create-pr.yaml
 │
 └── images/
     └── Dockerfile               # dkmv-sandbox image definition
 ```
 
 **Isolation rules:**
-- Components import from `core/` — never from each other
-- Shared types live in `core/models.py`
-- Component-specific types live in their own `models.py`
-- Prompt templates are co-located as `prompt.md` inside each component package
+- Core infrastructure (`core/`) has no knowledge of the task system
+- The task system (`tasks/`) depends on core but not on CLI
+- CLI (`cli.py`) wires everything together
+- Built-in components are pure YAML — no Python code
 
 ---
 
@@ -685,13 +784,17 @@ dkmv/
 
 | Decision | Rationale |
 |---|---|
+| **YAML manifests, not Python classes** | Components are declarative YAML, not code. Easier to create, version, share, and understand |
 | **One container per component** | Clean state, no cross-contamination between agents |
-| **Git branches for communication** | Components share zero in-memory state; branches are durable and auditable |
+| **Git branches for inter-component communication** | Durable, auditable, no shared memory |
+| **`.agent/` for intra-component communication** | Tasks within a component share files via the `.agent/` directory |
+| **Jinja2 with StrictUndefined** | Template errors are caught at load time, not silently swallowed |
+| **Cumulative task variables** | Later tasks can reference outputs from earlier tasks |
 | **File-based streaming** | Works around SWE-ReX blocking I/O; provides real-time output |
-| **Eval criteria stripped from Dev** | Prevents Dev from gaming the evaluation |
-| **Judge is independent** | Prompt explicitly tells Judge to ignore QA reports |
-| **No YAML config** | Env vars + `.env` only — simpler, 12-factor app style |
+| **Layered CLAUDE.md** | System + component + task instructions compose cleanly |
+| **Parameter cascade** | Sensible defaults with precise override control at every level |
 | **Atomic result writes** | Write to `.tmp` then `os.replace()` prevents corrupt reads |
-| **npm for Claude Code install** | Native installer has OOM bug in Docker; npm allows version pinning |
-| **node:20-bookworm base** | Anthropic-recommended; Alpine breaks native Node modules |
-| **Non-root dkmv user** | Claude Code requires non-root for `--dangerously-skip-permissions` |
+| **For-each expansion** | One YAML template, N instances — enables the dev phase-per-task pattern |
+| **Pause-after mechanism** | Human-in-the-loop decisions between tasks without breaking automation |
+| **Project-scoped config** | `dkmv init` removes the need for `--repo` on every command |
+| **Component registry** | Custom components can be named and used like built-ins |

@@ -111,7 +111,7 @@ class TestBaseResult:
     def test_factory_generates_valid(self) -> None:
         result = BaseResultFactory.build()
         assert result.run_id
-        assert result.component in ("dev", "qa", "judge", "docs")
+        assert result.component in ("dev", "qa", "docs", "plan")
 
 
 class TestBaseResultConstraints:
@@ -156,7 +156,7 @@ class TestRunSummary:
     def test_factory_generates_valid(self) -> None:
         summary = RunSummaryFactory.build()
         assert summary.run_id
-        assert summary.component in ("dev", "qa", "judge", "docs")
+        assert summary.component in ("dev", "qa", "docs", "plan")
 
 
 class TestRunDetail:

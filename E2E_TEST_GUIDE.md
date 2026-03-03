@@ -272,7 +272,7 @@ The CLI will stream Claude Code's output in real-time. You should see:
 1. Container starting
 2. Git clone of your repo
 3. Claude reading the PRD
-4. Claude creating a plan at `.dkmv/plan.md`
+4. Claude creating a plan at `.agent/plan.md`
 5. Claude implementing the to-do app code
 6. Claude writing tests
 7. Claude running tests
@@ -325,10 +325,10 @@ python -m todo list --status done
 python -m todo delete 1
 
 # Check the plan Claude created
-cat .dkmv/plan.md
+cat .agent/plan.md
 
 # Check the PRD that was injected (should NOT have Evaluation Criteria)
-cat .dkmv/prd.md
+cat .agent/prd.md
 # Verify: "Evaluation Criteria" section is NOT present
 
 # Exit the container
@@ -371,7 +371,7 @@ uv run dkmv stop <run-id>
 - [ ] `tests/` contains test files
 - [ ] Tests pass inside the container
 - [ ] The to-do app commands work (`add`, `list`, `complete`, `delete`)
-- [ ] `.dkmv/plan.md` was created (plan-first approach)
+- [ ] `.agent/plan.md` was created (plan-first approach)
 - [ ] Evaluation Criteria was stripped from the PRD visible to Claude
 - [ ] Local artifacts saved in `outputs/runs/<run-id>/`
 
@@ -402,7 +402,7 @@ You should see:
 4. Claude exploring the code that Dev wrote
 5. Claude running the test suite
 6. Claude evaluating each requirement and eval criterion
-7. Claude writing `.dkmv/qa_report.json`
+7. Claude writing `.agent/qa_report.json`
 8. Git commit and push of the report
 
 ### What to Verify After Completion
@@ -423,7 +423,7 @@ Inside the container:
 cd /home/dkmv/workspace
 
 # Check the QA report
-cat .dkmv/qa_report.json | python3 -m json.tool
+cat .agent/qa_report.json | python3 -m json.tool
 ```
 
 **QA report should contain:**
@@ -437,7 +437,7 @@ cat .dkmv/qa_report.json | python3 -m json.tool
 
 ```bash
 # Check the PRD that QA received (should INCLUDE Evaluation Criteria)
-cat .dkmv/prd.md
+cat .agent/prd.md
 # Verify: "Evaluation Criteria" section IS present
 
 exit
@@ -466,7 +466,7 @@ uv run dkmv stop <run-id>
 
 - [ ] Run completed without errors
 - [ ] QA report committed and pushed to `feature/todo-app` branch
-- [ ] `.dkmv/qa_report.json` exists on the branch
+- [ ] `.agent/qa_report.json` exists on the branch
 - [ ] QA received the full PRD (including Evaluation Criteria)
 - [ ] Report contains test results (total, passed, failed)
 - [ ] Report evaluates each requirement
@@ -500,7 +500,7 @@ You should see:
 4. Claude independently reviewing the implementation
 5. Claude running tests
 6. Claude evaluating each PRD requirement
-7. Claude producing verdict at `.dkmv/verdict.json`
+7. Claude producing verdict at `.agent/verdict.json`
 8. **Verdict display**: The CLI prints `VERDICT: PASS` or `VERDICT: FAIL` with score and reasoning
 
 ### What to Verify After Completion
@@ -533,7 +533,7 @@ Inside the container:
 cd /home/dkmv/workspace
 
 # Check the verdict
-cat .dkmv/verdict.json | python3 -m json.tool
+cat .agent/verdict.json | python3 -m json.tool
 ```
 
 **Verdict should contain:**
@@ -572,7 +572,7 @@ uv run dkmv stop <run-id>
 
 - [ ] Run completed without errors
 - [ ] Verdict displayed in CLI (PASS or FAIL with score)
-- [ ] `.dkmv/verdict.json` committed and pushed to branch
+- [ ] `.agent/verdict.json` committed and pushed to branch
 - [ ] Verdict includes confidence score (0.0-1.0)
 - [ ] Verdict includes score (0-100)
 - [ ] Each PRD requirement has an implementation status
@@ -744,14 +744,14 @@ If the Judge gave a `FAIL` verdict, you can feed the issues back to Dev for iter
 
 ### 10.1 Extract Feedback from Judge Verdict
 
-The Judge's verdict is at `.dkmv/verdict.json` on the branch. You can use it directly as feedback:
+The Judge's verdict is at `.agent/verdict.json` on the branch. You can use it directly as feedback:
 
 ```bash
 # Pull the verdict from the branch
 cd ~/Projects/todo-app-test
 git fetch origin
-git checkout origin/feature/todo-app -- .dkmv/verdict.json
-cp .dkmv/verdict.json /Users/tawab/Projects/DKMV/todo_feedback.json
+git checkout origin/feature/todo-app -- .agent/verdict.json
+cp .agent/verdict.json /Users/tawab/Projects/DKMV/todo_feedback.json
 git checkout -- .   # Clean up
 cd /Users/tawab/Projects/DKMV
 ```
@@ -771,8 +771,8 @@ uv run dkmv dev \
 
 **What happens:**
 1. Dev clones the **existing** `feature/todo-app` branch (with all previous code)
-2. The feedback JSON is written to `.dkmv/feedback.json` inside the container
-3. The prompt includes: "Review the feedback from a previous review cycle at `.dkmv/feedback.json` and address all issues raised."
+2. The feedback JSON is written to `.agent/feedback.json` inside the container
+3. The prompt includes: "Review the feedback from a previous review cycle at `.agent/feedback.json` and address all issues raised."
 4. Claude reads the issues from the Judge and fixes them
 5. New commit pushed to the same branch
 
@@ -849,7 +849,7 @@ uv run dkmv judge \
 **Dev Agent:**
 - [ ] Clones repo and creates/checks out branch
 - [ ] Strips Evaluation Criteria from PRD
-- [ ] Creates `.dkmv/plan.md` before implementing
+- [ ] Creates `.agent/plan.md` before implementing
 - [ ] Implements all 4 commands (add, list, complete, delete)
 - [ ] Writes unit tests
 - [ ] Tests pass
@@ -862,7 +862,7 @@ uv run dkmv judge \
 - [ ] Runs tests and reports results
 - [ ] Evaluates each requirement
 - [ ] Evaluates each evaluation criterion
-- [ ] Produces `.dkmv/qa_report.json`
+- [ ] Produces `.agent/qa_report.json`
 - [ ] Commits report to branch
 
 **Judge Agent:**
@@ -872,7 +872,7 @@ uv run dkmv judge \
 - [ ] Includes confidence and score
 - [ ] Evaluates each PRD requirement
 - [ ] Lists issues with severity
-- [ ] Produces `.dkmv/verdict.json`
+- [ ] Produces `.agent/verdict.json`
 - [ ] CLI displays verdict summary
 
 **Docs Agent:**
@@ -935,7 +935,7 @@ If tests fail during the Dev agent run, that's expected behavior — Claude shou
 
 ### QA/Judge report not created
 
-If `.dkmv/qa_report.json` or `.dkmv/verdict.json` is missing:
+If `.agent/qa_report.json` or `.agent/verdict.json` is missing:
 
 **Cause:** Claude may not have followed the prompt instructions to create the artifact.
 **Inspect:** Check `stream.jsonl` for what Claude actually did. Check if the file exists under a different name.

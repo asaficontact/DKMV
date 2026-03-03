@@ -134,6 +134,15 @@ RUN mkdir -p /home/dkmv/workspace /home/dkmv/.claude \
     && chown -R dkmv:dkmv /home/dkmv
 
 # ---------------------------------------------------------------------------
+# Claude Code onboarding bypass
+# ---------------------------------------------------------------------------
+# When using CLAUDE_CODE_OAUTH_TOKEN for subscription-based auth, Claude Code
+# still prompts for the interactive onboarding wizard unless this file exists.
+# See: https://github.com/anthropics/claude-code/issues/8938
+RUN echo '{"hasCompletedOnboarding":true}' > /home/dkmv/.claude.json \
+    && chown dkmv:dkmv /home/dkmv/.claude.json
+
+# ---------------------------------------------------------------------------
 # Switch to non-root user
 # ---------------------------------------------------------------------------
 USER dkmv

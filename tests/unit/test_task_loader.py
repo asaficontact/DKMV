@@ -118,10 +118,11 @@ instructions: "x
             """
 name: test
 prompt: go
+prompt_file: also.md
 """,
         )
         loader = TaskLoader()
-        with pytest.raises(TaskLoadError, match="instructions"):
+        with pytest.raises(TaskLoadError, match="got both"):
             loader.load(yaml_file, {})
 
     def test_error_includes_file_path(self, tmp_path: Path) -> None:

@@ -1,0 +1,22 @@
+name: qa
+description: >
+  QA evaluation component: reviews an implementation against implementation docs,
+  runs tests, evaluates quality, and optionally fixes issues with an
+  interactive evaluate-fix loop.
+model: claude-sonnet-4-6
+max_turns: 80
+timeout_minutes: 25
+max_budget_usd: 2.00
+agent_md_file: "{{ impl_docs_path }}/CLAUDE.md"
+
+inputs:
+  - name: impl_docs
+    type: file
+    src: "{{ impl_docs_path }}"
+    dest: impl_docs/
+
+tasks:
+  - file: 01-evaluate.yaml
+    pause_after: true
+  - file: 02-fix.yaml
+  - file: 03-re-evaluate.yaml

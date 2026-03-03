@@ -67,7 +67,7 @@ class TestRunsCommand:
         mock_mgr = MagicMock()
         mock_mgr.list_runs.return_value = [
             RunSummary(
-                run_id="abc12345",
+                run_id="260101-1200-dev-test-a1b2",
                 component="dev",
                 status="completed",
                 feature_name="auth",
@@ -83,9 +83,10 @@ class TestRunsCommand:
             result = runner.invoke(app, ["runs"])
 
         assert result.exit_code == 0
-        assert "abc12345" in result.output
+        assert "260101-1200-dev-test-a1b2" in result.output
         assert "dev" in result.output
-        assert "completed" in result.output
+        # Rich may truncate column values in narrow terminals
+        assert "comp" in result.output
         assert "auth" in result.output
 
     def test_runs_component_filter(self, tmp_path: Path) -> None:
@@ -128,7 +129,7 @@ class TestRunsCommand:
         mock_mgr = MagicMock()
         mock_mgr.list_runs.return_value = [
             RunSummary(
-                run_id="abc12345",
+                run_id="260101-1200-dev-test-a1b2",
                 component="dev",
                 status="completed",
                 total_cost_usd=0.05,
@@ -148,7 +149,7 @@ class TestRunsCommand:
         mock_mgr = MagicMock()
         mock_mgr.list_runs.return_value = [
             RunSummary(
-                run_id="abc12345",
+                run_id="260101-1200-dev-test-a1b2",
                 component="dev",
                 status="completed",
                 duration_seconds=120.0,
@@ -175,7 +176,7 @@ class TestShowCommand:
     def test_show_displays_detail(self, tmp_path: Path) -> None:
         mock_mgr = MagicMock()
         mock_mgr.get_run.return_value = RunDetail(
-            run_id="abc12345",
+            run_id="260101-1200-dev-test-a1b2",
             component="dev",
             status="completed",
             repo="https://github.com/test/repo",
@@ -192,10 +193,10 @@ class TestShowCommand:
             patch("dkmv.cli.load_config", return_value=_mock_config(tmp_path)),
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
         ):
-            result = runner.invoke(app, ["show", "abc12345"])
+            result = runner.invoke(app, ["show", "260101-1200-dev-test-a1b2"])
 
         assert result.exit_code == 0
-        assert "abc12345" in result.output
+        assert "260101-1200-dev-test-a1b2" in result.output
         assert "dev" in result.output
         assert "completed" in result.output
         assert "feature/auth" in result.output
@@ -217,7 +218,7 @@ class TestShowCommand:
     def test_show_error_message_displayed(self, tmp_path: Path) -> None:
         mock_mgr = MagicMock()
         mock_mgr.get_run.return_value = RunDetail(
-            run_id="abc12345",
+            run_id="260101-1200-dev-test-a1b2",
             component="dev",
             status="failed",
             error_message="Something went wrong",
@@ -227,7 +228,7 @@ class TestShowCommand:
             patch("dkmv.cli.load_config", return_value=_mock_config(tmp_path)),
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
         ):
-            result = runner.invoke(app, ["show", "abc12345"])
+            result = runner.invoke(app, ["show", "260101-1200-dev-test-a1b2"])
 
         assert result.exit_code == 0
         assert "Something went wrong" in result.output
@@ -235,7 +236,7 @@ class TestShowCommand:
     def test_show_session_id_displayed(self, tmp_path: Path) -> None:
         mock_mgr = MagicMock()
         mock_mgr.get_run.return_value = RunDetail(
-            run_id="abc12345",
+            run_id="260101-1200-dev-test-a1b2",
             component="dev",
             status="completed",
             session_id="sess-abc-123",
@@ -245,10 +246,25 @@ class TestShowCommand:
             patch("dkmv.cli.load_config", return_value=_mock_config(tmp_path)),
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
         ):
-            result = runner.invoke(app, ["show", "abc12345"])
+            result = runner.invoke(app, ["show", "260101-1200-dev-test-a1b2"])
 
         assert result.exit_code == 0
         assert "sess-abc-123" in result.output
+
+    def test_show_ambiguous_prefix(self, tmp_path: Path) -> None:
+        mock_mgr = MagicMock()
+        mock_mgr.get_run.side_effect = ValueError(
+            "Ambiguous prefix '260101' matches 2 runs: 260101-1200-dev-a1b2, 260101-1200-dev-c3d4"
+        )
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config(tmp_path)),
+            patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
+        ):
+            result = runner.invoke(app, ["show", "260101"])
+
+        assert result.exit_code == 1
+        assert "Ambiguous prefix" in result.output
 
 
 class TestAttachCommand:
@@ -265,7 +281,7 @@ class TestAttachCommand:
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
             patch("dkmv.cli.subprocess.run", side_effect=[inspect_mock, exec_mock]),
         ):
-            result = runner.invoke(app, ["attach", "abc12345"])
+            result = runner.invoke(app, ["attach", "260101-1200-dev-test-a1b2"])
 
         assert "Attaching to container" in result.output
 
@@ -291,7 +307,7 @@ class TestAttachCommand:
             patch("dkmv.cli.load_config", return_value=_mock_config(tmp_path)),
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
         ):
-            result = runner.invoke(app, ["attach", "abc12345"])
+            result = runner.invoke(app, ["attach", "260101-1200-dev-test-a1b2"])
 
         assert result.exit_code == 1
         assert "No container name" in result.output
@@ -309,7 +325,7 @@ class TestAttachCommand:
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
             patch("dkmv.cli.subprocess.run", return_value=inspect_mock),
         ):
-            result = runner.invoke(app, ["attach", "abc12345"])
+            result = runner.invoke(app, ["attach", "260101-1200-dev-test-a1b2"])
 
         assert result.exit_code == 1
         assert "is not running" in result.output
@@ -330,7 +346,7 @@ class TestStopCommand:
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
             patch("dkmv.cli.subprocess.run", side_effect=[inspect_mock, stop_mock, rm_mock]),
         ):
-            result = runner.invoke(app, ["stop", "abc12345"])
+            result = runner.invoke(app, ["stop", "260101-1200-dev-test-a1b2"])
 
         assert result.exit_code == 0
         assert "stopped and removed" in result.output
@@ -357,7 +373,7 @@ class TestStopCommand:
             patch("dkmv.cli.load_config", return_value=_mock_config(tmp_path)),
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
         ):
-            result = runner.invoke(app, ["stop", "abc12345"])
+            result = runner.invoke(app, ["stop", "260101-1200-dev-test-a1b2"])
 
         assert result.exit_code == 1
         assert "No container name" in result.output
@@ -374,7 +390,7 @@ class TestStopCommand:
             patch("dkmv.core.runner.RunManager", return_value=mock_mgr),
             patch("dkmv.cli.subprocess.run", return_value=inspect_mock),
         ):
-            result = runner.invoke(app, ["stop", "abc12345"])
+            result = runner.invoke(app, ["stop", "260101-1200-dev-test-a1b2"])
 
         assert result.exit_code == 0
         assert "already removed" in result.output

@@ -64,7 +64,32 @@ class TestStartRun:
         id1 = run_manager.start_run("dev", config)
         id2 = run_manager.start_run("dev", config)
         assert id1 != id2
-        assert len(id1) == 8
+        # New format: YYMMDD-HHMM-{comp}-{feat}-{4hex}
+        assert "dev" in id1
+        assert "user-auth" in id1  # feature_name from config
+
+    def test_run_id_format_with_feature(
+        self, run_manager: RunManager, config: BaseComponentConfig
+    ) -> None:
+        import re
+
+        run_id = run_manager.start_run("dev", config)
+        # Should match YYMMDD-HHMM-dev-user-auth-XXXX
+        pattern = r"^\d{6}-\d{4}-dev-user-auth-[0-9a-f]{4}$"
+        assert re.match(pattern, run_id), f"Run ID '{run_id}' doesn't match expected format"
+
+    def test_run_id_format_without_feature(self, run_manager: RunManager) -> None:
+        import re
+
+        config = BaseComponentConfig(
+            repo="https://github.com/test/repo.git",
+            branch="main",
+            feature_name="",
+        )
+        run_id = run_manager.start_run("dev", config)
+        # Should match YYMMDD-HHMM-dev-XXXX (no feature segment)
+        pattern = r"^\d{6}-\d{4}-dev-[0-9a-f]{4}$"
+        assert re.match(pattern, run_id), f"Run ID '{run_id}' doesn't match expected format"
 
 
 class TestSaveResult:
@@ -434,3 +459,52 @@ class TestListRunsSortOrder:
         # Should be the 2 most recent
         assert runs[0].run_id == results[-1]
         assert runs[1].run_id == results[-2]
+
+
+class TestGetRunPrefixMatching:
+    def test_exact_match(
+        self, run_manager: RunManager, config: BaseComponentConfig, result: BaseResult
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        result.run_id = run_id
+        run_manager.save_result(run_id, result)
+
+        detail = run_manager.get_run(run_id)
+        assert detail.run_id == run_id
+
+    def test_single_prefix_match(
+        self, run_manager: RunManager, config: BaseComponentConfig, result: BaseResult
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        result.run_id = run_id
+        run_manager.save_result(run_id, result)
+
+        # Use the first 6 chars (YYMMDD) as prefix — should be unique with one run
+        prefix = run_id[:6]
+        detail = run_manager.get_run(prefix)
+        assert detail.run_id == run_id
+
+    def test_no_match_raises(self, run_manager: RunManager) -> None:
+        with pytest.raises(FileNotFoundError, match="not found"):
+            run_manager.get_run("nonexistent-prefix")
+
+    def test_ambiguous_prefix_raises(self, run_manager: RunManager) -> None:
+        # Manually create two dirs with same prefix
+        (run_manager._runs_dir / "260301-1430-dev-auth-a1b2").mkdir(parents=True)
+        (run_manager._runs_dir / "260301-1430-dev-auth-c3d4").mkdir(parents=True)
+
+        with pytest.raises(ValueError, match="Ambiguous prefix"):
+            run_manager.get_run("260301-1430-dev-auth")
+
+    def test_resolved_data_correct(
+        self, run_manager: RunManager, config: BaseComponentConfig, result: BaseResult
+    ) -> None:
+        run_id = run_manager.start_run("dev", config)
+        result.run_id = run_id
+        run_manager.save_result(run_id, result)
+
+        # Use a short prefix
+        prefix = run_id[:11]  # YYMMDD-HHMM
+        detail = run_manager.get_run(prefix)
+        assert detail.run_id == run_id
+        assert detail.status == "completed"

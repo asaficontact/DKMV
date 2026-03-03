@@ -132,4 +132,58 @@ class TestBuiltinResolution:
             assert name in msg
 
     def test_all_builtins_recognized(self) -> None:
-        assert BUILTIN_COMPONENTS == {"dev", "qa", "judge", "docs"}
+        assert BUILTIN_COMPONENTS == {"dev", "qa", "docs", "plan"}
+
+
+class TestRegistryResolution:
+    def _setup_registry(self, tmp_path: Path, entries: dict[str, str]) -> None:
+        import json
+
+        dkmv_dir = tmp_path / ".dkmv"
+        dkmv_dir.mkdir(exist_ok=True)
+        (dkmv_dir / "components.json").write_text(json.dumps(entries) + "\n")
+
+    def test_registered_component_resolves(self, tmp_path: Path) -> None:
+        comp_dir = tmp_path / "my-component"
+        comp_dir.mkdir()
+        (comp_dir / "01-task.yaml").write_text("")
+        self._setup_registry(tmp_path, {"my-comp": str(comp_dir)})
+        result = resolve_component("my-comp", project_root=tmp_path)
+        assert result == comp_dir
+
+    def test_relative_path_resolved_from_project_root(self, tmp_path: Path) -> None:
+        comp_dir = tmp_path / "components" / "custom"
+        comp_dir.mkdir(parents=True)
+        (comp_dir / "task.yaml").write_text("")
+        self._setup_registry(tmp_path, {"custom": "components/custom"})
+        result = resolve_component("custom", project_root=tmp_path)
+        assert result == comp_dir.resolve()
+
+    def test_stale_path_raises(self, tmp_path: Path) -> None:
+        self._setup_registry(tmp_path, {"stale": "/nonexistent/path"})
+        with pytest.raises(ComponentNotFoundError, match="path not found"):
+            resolve_component("stale", project_root=tmp_path)
+
+    def test_no_yaml_raises(self, tmp_path: Path) -> None:
+        comp_dir = tmp_path / "empty-comp"
+        comp_dir.mkdir()
+        (comp_dir / "readme.md").write_text("hi")
+        self._setup_registry(tmp_path, {"empty": str(comp_dir)})
+        with pytest.raises(ComponentNotFoundError, match="no YAML files"):
+            resolve_component("empty", project_root=tmp_path)
+
+    def test_error_message_includes_registered_names(self, tmp_path: Path) -> None:
+        comp_dir = tmp_path / "comp"
+        comp_dir.mkdir()
+        (comp_dir / "01.yaml").write_text("")
+        self._setup_registry(tmp_path, {"my-comp": str(comp_dir)})
+        with pytest.raises(ComponentNotFoundError) as exc_info:
+            resolve_component("notreal", project_root=tmp_path)
+        msg = str(exc_info.value)
+        assert "my-comp" in msg
+        for name in BUILTIN_COMPONENTS:
+            assert name in msg
+
+    def test_without_project_root_unchanged(self) -> None:
+        with pytest.raises(ComponentNotFoundError, match="Unknown component"):
+            resolve_component("custom-thing")

@@ -1,0 +1,64 @@
+<svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      @keyframes draw-pulse {
+        0% {
+          stroke-dashoffset: 500;
+        }
+        100% {
+          stroke-dashoffset: 0;
+        }
+      }
+
+      .pulse-line {
+        stroke-dasharray: 500;
+        animation: draw-pulse 3s ease-in-out forwards;
+        animation-fill-mode: forwards;
+      }
+
+      .flat-part {
+        stroke: #4b5563;
+        stroke-width: 8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .spike-part {
+        stroke: #06b6d4;
+        stroke-width: 8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+    </style>
+
+    <!-- Glow filter for spikes -->
+    <filter id="spike-glow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Dark background with rounded corners -->
+  <rect width="400" height="400" fill="#09090b" rx="48"/>
+
+  <!-- Flat line (left) -->
+  <line class="pulse-line flat-part" x1="30" y1="200" x2="90" y2="200"/>
+
+  <!-- First spike -->
+  <polyline class="pulse-line spike-part" filter="url(#spike-glow)" points="90,200 105,140 120,200 140,100 160,200"/>
+
+  <!-- Smaller spikes in pattern (ECG style) -->
+  <polyline class="pulse-line spike-part" filter="url(#spike-glow)" points="160,200 175,160 190,200 205,80 225,200"/>
+
+  <!-- Larger spike (main heartbeat) -->
+  <polyline class="pulse-line spike-part" filter="url(#spike-glow)" points="225,200 245,120 260,200 275,60 290,200"/>
+
+  <!-- Descending spikes -->
+  <polyline class="pulse-line spike-part" filter="url(#spike-glow)" points="290,200 305,150 320,200 335,110 350,200"/>
+
+  <!-- Flat line (right) -->
+  <line class="pulse-line flat-part" x1="350" y1="200" x2="370" y2="200"/>
+</svg>
