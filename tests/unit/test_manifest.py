@@ -465,7 +465,7 @@ class TestBuiltinManifestLoading:
         component_dir = resolve_component("plan")
         loader = TaskLoader()
         manifest = loader.load_manifest(component_dir / "component.yaml", self.SAMPLE_VARS)
-        assert manifest.model == "claude-sonnet-4-6"
+        assert manifest.model == "claude-opus-4-6"
 
     def test_plan_manifest_task_ref_overrides(self) -> None:
         from dkmv.tasks.discovery import resolve_component
