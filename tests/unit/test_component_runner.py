@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from rich.console import Console
@@ -2327,7 +2327,7 @@ class TestBuildSandboxConfigGithubToken:
         runner = ComponentRunner(
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
-        result = runner._build_sandbox_config(config, 30)
+        result, _ = runner._build_sandbox_config(config, 30)
         assert result.env_vars["GITHUB_TOKEN"] == "ghp_abc"
 
     def test_build_sandbox_config_unit_without_token(self) -> None:
@@ -2337,11 +2337,11 @@ class TestBuildSandboxConfigGithubToken:
         runner = ComponentRunner(
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
-        result = runner._build_sandbox_config(config, 30)
+        result, _ = runner._build_sandbox_config(config, 30)
         assert "GITHUB_TOKEN" not in result.env_vars
 
-    def test_build_sandbox_config_oauth_token(self) -> None:
-        """auth_method=oauth → CLAUDE_CODE_OAUTH_TOKEN passed, not ANTHROPIC_API_KEY."""
+    def test_build_sandbox_config_oauth_keychain(self, tmp_path: Path) -> None:
+        """auth_method=oauth + Keychain credentials → temp file bind-mount."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2349,9 +2349,65 @@ class TestBuildSandboxConfigGithubToken:
         runner = ComponentRunner(
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
-        result = runner._build_sandbox_config(config, 30)
+        creds_json = '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}'
+        with patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=creds_json):
+            result, temp_file = runner._build_sandbox_config(config, 30)
+        try:
+            assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
+            assert "ANTHROPIC_API_KEY" not in result.env_vars
+            assert "-v" in result.docker_args
+            assert temp_file is not None
+            assert temp_file.read_text() == creds_json
+            mount_arg = result.docker_args[result.docker_args.index("-v") + 1]
+            assert mount_arg.endswith(":/home/dkmv/.claude/.credentials.json:ro")
+            assert mount_arg.startswith(str(temp_file))
+        finally:
+            if temp_file:
+                temp_file.unlink(missing_ok=True)
+
+    def test_build_sandbox_config_oauth_linux_creds_file(self, tmp_path: Path) -> None:
+        """auth_method=oauth + no Keychain + Linux creds file → bind-mount file."""
+        config = _mock_config()
+        config.auth_method = "oauth"
+        config.claude_oauth_token = "sk-ant-oat01-test"
+        runner = ComponentRunner(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
+        )
+        # Create a fake credentials file at fake home
+        fake_claude = tmp_path / ".claude"
+        fake_claude.mkdir()
+        creds_file = fake_claude / ".credentials.json"
+        creds_file.write_text("{}")
+        with (
+            patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=""),
+            patch("dkmv.tasks.component.Path.home", return_value=tmp_path),
+        ):
+            result, temp_file = runner._build_sandbox_config(config, 30)
+        assert temp_file is None
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
+        assert "-v" in result.docker_args
+        mount_arg = result.docker_args[result.docker_args.index("-v") + 1]
+        assert str(creds_file) in mount_arg
+        assert mount_arg.endswith(":ro")
+
+    def test_build_sandbox_config_oauth_env_var_fallback(self) -> None:
+        """auth_method=oauth + no Keychain + no creds file → env var fallback."""
+        config = _mock_config()
+        config.auth_method = "oauth"
+        config.claude_oauth_token = "sk-ant-oat01-test"
+        config.anthropic_api_key = "sk-ant-api-key"
+        runner = ComponentRunner(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
+        )
+        with (
+            patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=""),
+            patch("dkmv.tasks.component.Path.home", return_value=Path("/nonexistent")),
+        ):
+            result, temp_file = runner._build_sandbox_config(config, 30)
+        assert temp_file is None
         assert result.env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-test"
         assert "ANTHROPIC_API_KEY" not in result.env_vars
+        assert result.docker_args == []
 
     def test_build_sandbox_config_api_key_when_no_oauth(self) -> None:
         """auth_method=api_key → ANTHROPIC_API_KEY passed, not CLAUDE_CODE_OAUTH_TOKEN."""
@@ -2362,7 +2418,8 @@ class TestBuildSandboxConfigGithubToken:
         runner = ComponentRunner(
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
-        result = runner._build_sandbox_config(config, 30)
+        result, temp_file = runner._build_sandbox_config(config, 30)
+        assert temp_file is None
         assert result.env_vars["ANTHROPIC_API_KEY"] == "sk-ant-api-key"
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
 

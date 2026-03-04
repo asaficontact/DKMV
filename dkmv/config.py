@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import typer
@@ -35,6 +36,31 @@ def _fetch_gh_auth_token() -> str:
     try:
         result = subprocess.run(
             ["gh", "auth", "token"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return ""
+
+
+def _fetch_oauth_credentials() -> str:
+    """Read Claude Code OAuth credentials from macOS Keychain.
+
+    On macOS, Claude Code stores credentials in the system Keychain under
+    the service name "Claude Code-credentials".  On Linux the credentials
+    live in ~/.claude/.credentials.json (handled elsewhere).
+
+    Returns the raw JSON string on success, or empty string on failure.
+    """
+    if sys.platform != "darwin":
+        return ""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -102,13 +128,16 @@ def load_config(require_api_key: bool = True) -> DKMVConfig:
 
     if require_api_key:
         if auth_method == "oauth" and not config.claude_oauth_token:
-            typer.echo(
-                "Error: CLAUDE_CODE_OAUTH_TOKEN not set. "
-                "Run 'claude setup-token' to generate one, then set it via "
-                "environment variable or .env file.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
+            has_creds = bool(_fetch_oauth_credentials())
+            if not has_creds:
+                has_creds = (Path.home() / ".claude" / ".credentials.json").exists()
+            if not has_creds:
+                typer.echo(
+                    "Error: CLAUDE_CODE_OAUTH_TOKEN not set and no OAuth credentials found. "
+                    "Log in with 'claude' or run 'claude setup-token' to generate credentials.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
         if auth_method == "api_key" and not config.anthropic_api_key:
             typer.echo(
                 "Error: ANTHROPIC_API_KEY not set. Set it via environment variable or .env file.",

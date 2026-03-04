@@ -190,10 +190,10 @@ class TestOAuthAuthentication:
         assert config.claude_oauth_token == "sk-ant-oat01-test"
         assert config.anthropic_api_key == ""
 
-    def test_oauth_auth_method_fails_without_token(
+    def test_oauth_auth_method_fails_without_token_or_creds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """OAuth auth method without token should exit with error."""
+        """OAuth without token, no Keychain, no creds file → exit."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
 
@@ -204,9 +204,61 @@ class TestOAuthAuthentication:
 
         with (
             patch("dkmv.project.load_project_config", return_value=project),
+            patch("dkmv.config._fetch_oauth_credentials", return_value=""),
+            patch("dkmv.config.Path.home", return_value=tmp_path),
             pytest.raises(click.exceptions.Exit),
         ):
             load_config()
+
+    def test_oauth_auth_method_succeeds_with_keychain(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OAuth without token but with Keychain credentials → no exit."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+        from dkmv.project import ProjectConfig
+
+        project = ProjectConfig(project_name="test", repo="owner/repo")
+        project.credentials.auth_method = "oauth"
+
+        with (
+            patch("dkmv.project.load_project_config", return_value=project),
+            patch(
+                "dkmv.config._fetch_oauth_credentials",
+                return_value='{"claudeAiOauth":{}}',
+            ),
+        ):
+            config = load_config()
+
+        assert config.auth_method == "oauth"
+        assert config.claude_oauth_token == ""
+
+    def test_oauth_auth_method_succeeds_with_credentials_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OAuth without token, no Keychain, but Linux creds file → no exit."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+        from dkmv.project import ProjectConfig
+
+        project = ProjectConfig(project_name="test", repo="owner/repo")
+        project.credentials.auth_method = "oauth"
+
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".credentials.json").write_text("{}")
+
+        with (
+            patch("dkmv.project.load_project_config", return_value=project),
+            patch("dkmv.config._fetch_oauth_credentials", return_value=""),
+            patch("dkmv.config.Path.home", return_value=tmp_path),
+        ):
+            config = load_config()
+
+        assert config.auth_method == "oauth"
+        assert config.claude_oauth_token == ""
 
     def test_api_key_auth_method_ignores_oauth_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """API key auth method still requires ANTHROPIC_API_KEY even if OAuth token is set."""

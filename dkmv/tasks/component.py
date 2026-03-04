@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import shlex
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 
 from rich.console import Console
 
-from dkmv.config import DKMVConfig
+from dkmv.config import DKMVConfig, _fetch_oauth_credentials
 from dkmv.core.models import BaseComponentConfig, BaseResult, SandboxConfig
 from dkmv.core.runner import RunManager
 from dkmv.core.sandbox import SandboxManager, SandboxSession
@@ -56,20 +57,60 @@ class ComponentRunner:
             p for p in scan_dir.iterdir() if p.suffix in (".yaml", ".yml") and p.is_file()
         )
 
-    def _build_sandbox_config(self, config: DKMVConfig, timeout_minutes: int) -> SandboxConfig:
+    def _build_sandbox_config(
+        self, config: DKMVConfig, timeout_minutes: int
+    ) -> tuple[SandboxConfig, Path | None]:
+        """Build sandbox config and return (config, temp_credentials_file).
+
+        The caller must delete the temp file (if not None) after the
+        container stops.
+        """
         env_vars: dict[str, str] = {}
+        docker_args: list[str] = []
+        temp_creds_file: Path | None = None
+
         if config.auth_method == "oauth":
-            env_vars["CLAUDE_CODE_OAUTH_TOKEN"] = config.claude_oauth_token
+            creds_json = _fetch_oauth_credentials()
+            host_creds_path = Path.home() / ".claude" / ".credentials.json"
+
+            if creds_json:
+                # macOS: write Keychain credentials to a temp file and bind-mount it
+                tf = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", prefix="dkmv-creds-", delete=False
+                )
+                tf.write(creds_json)
+                tf.close()
+                temp_creds_file = Path(tf.name)
+                docker_args.extend(
+                    [
+                        "-v",
+                        f"{temp_creds_file}:/home/dkmv/.claude/.credentials.json:ro",
+                    ]
+                )
+            elif host_creds_path.exists():
+                # Linux: bind-mount the credentials file directly
+                docker_args.extend(
+                    [
+                        "-v",
+                        f"{host_creds_path}:/home/dkmv/.claude/.credentials.json:ro",
+                    ]
+                )
+            else:
+                env_vars["CLAUDE_CODE_OAUTH_TOKEN"] = config.claude_oauth_token
         else:
             env_vars["ANTHROPIC_API_KEY"] = config.anthropic_api_key
+
         if config.github_token:
             env_vars["GITHUB_TOKEN"] = config.github_token
-        return SandboxConfig(
+
+        sandbox_config = SandboxConfig(
             image=config.image_name,
             env_vars=env_vars,
+            docker_args=docker_args,
             memory_limit=config.memory_limit,
             timeout_minutes=timeout_minutes,
         )
+        return sandbox_config, temp_creds_file
 
     async def _setup_workspace(
         self,
@@ -319,6 +360,7 @@ class ComponentRunner:
         error_message = ""
         task_results: list[TaskResult] = []
         run_id = ""
+        temp_creds_file: Path | None = None
 
         try:
             yaml_files = self._scan_yaml_files(component_dir)
@@ -356,7 +398,7 @@ class ComponentRunner:
                 if cli_overrides.timeout_minutes is not None
                 else config.timeout_minutes
             )
-            sandbox_config = self._build_sandbox_config(config, timeout)
+            sandbox_config, temp_creds_file = self._build_sandbox_config(config, timeout)
             session = await self._sandbox.start(sandbox_config, component_dir.name)
 
             container_name = self._sandbox.get_container_name(session)
@@ -525,6 +567,8 @@ class ComponentRunner:
         finally:
             if session is not None:
                 await self._sandbox.stop(session, keep_alive=keep_alive)
+            if temp_creds_file is not None:
+                temp_creds_file.unlink(missing_ok=True)
 
         total_cost = sum(r.total_cost_usd for r in task_results)
         duration = time.monotonic() - start_time
