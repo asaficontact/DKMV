@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
+  <a href="#workflow">Workflow</a> ·
   <a href="#how-it-works">How It Works</a> ·
   <a href="#build-your-own">Build Your Own</a> ·
   <a href="#built-in-pipelines">Built-in Pipelines</a> ·
@@ -51,17 +52,6 @@ outputs:
 dkmv run ./my-security-audit --branch feature/security --var checklist_path=./owasp.md
 ```
 
-DKMV ships with built-in components for a complete development pipeline:
-
-```bash
-dkmv plan --branch feature/auth --prd auth.md          # PRD -> implementation docs
-dkmv dev  --branch feature/auth --impl-docs docs/auth/  # implement code phase by phase
-dkmv qa   --branch feature/auth --impl-docs docs/auth/  # evaluate -> fix -> re-evaluate
-dkmv docs --branch feature/auth                          # generate docs + open a PR
-```
-
-> **Best practice:** Always create a branch with your PRD, implementation docs, or code changes pushed to GitHub, then pass `--branch` to every command. DKMV clones and checks out that branch inside the container.
-
 | | Ad-hoc Agent Sessions | DKMV Components |
 |---|---|---|
 | **Sessions** | Ephemeral, lost on close | Declarative, versioned in git |
@@ -79,23 +69,64 @@ dkmv docs --branch feature/auth                          # generate docs + open 
 ```bash
 git clone https://github.com/your-org/dkmv.git && cd dkmv
 uv sync
-uv run dkmv init    # guided setup — detects credentials, checks Docker, creates .dkmv/
 uv run dkmv build   # build the sandbox image
 ```
 
-**Run a built-in component:**
+---
+
+## Workflow
+
+DKMV works through **git branches**. You create a branch, push your inputs (PRD, code, docs), and point DKMV at it. Each command clones the branch inside a fresh container, does its work, commits, and pushes. The next command picks up where the last one left off.
+
+### 1. Initialize your project
+
+Run `dkmv init` in your project's root directory. It detects credentials, checks Docker, and creates `.dkmv/` with your project config.
 
 ```bash
-uv run dkmv dev --branch feature/auth --impl-docs docs/implementation/auth/
+cd ~/your-project
+dkmv init
 ```
 
-**Run your own component:**
+Once initialized, `--repo` becomes optional on all commands — DKMV reads it from `.dkmv/config.json`.
+
+### 2. Create a branch and push your starting point
+
+Create a feature branch with whatever inputs the agent needs — a PRD, existing code, design docs — and push it to GitHub.
 
 ```bash
-uv run dkmv run ./my-component --branch feature/auth --var some_input=value
+git checkout -b feature/auth
+# add your PRD, implementation docs, or code changes
+git add . && git commit -m "docs: add auth PRD"
+git push -u origin feature/auth
 ```
 
-See [Build Your Own](#build-your-own) to create custom components.
+### 3. Run the pipeline
+
+Pass `--branch` to every command. Each component runs in its own isolated container and communicates exclusively through git.
+
+```bash
+# PRD -> structured implementation docs
+dkmv plan --branch feature/auth --prd docs/prds/auth.md
+
+# Implementation docs -> working code (phase by phase)
+dkmv dev --branch feature/auth --impl-docs docs/implementation/auth/
+
+# Evaluate -> fix -> re-evaluate
+dkmv qa --branch feature/auth --impl-docs docs/implementation/auth/
+
+# Generate docs + open a PR
+dkmv docs --branch feature/auth
+```
+
+You can run any component individually — `plan` without `dev`, or `qa` on code you wrote yourself. The pipeline is a sequence, not a requirement.
+
+**Run a custom component:**
+
+```bash
+dkmv run ./my-component --branch feature/auth --var some_input=value
+```
+
+See [Build Your Own](#build-your-own) to create custom components, or [Built-in Pipelines](#built-in-pipelines) for details on each built-in component.
 
 ---
 
@@ -303,9 +334,9 @@ DKMV supports two authentication methods:
 | Method | Best For | Setup |
 |--------|----------|-------|
 | **API Key** | Pay-per-token usage | Set `ANTHROPIC_API_KEY` |
-| **OAuth** | Claude Code subscription (flat rate) | Run `claude setup-token`, set `CLAUDE_CODE_OAUTH_TOKEN` |
+| **OAuth** | Claude Code subscription (flat rate) | Log in with `claude` (credentials auto-detected from Keychain / `~/.claude/.credentials.json`) |
 
-`dkmv init` walks you through choosing and configuring your auth method. GitHub tokens are auto-discovered from `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`.
+`dkmv init` walks you through choosing and configuring your auth method. You can also set `CLAUDE_CODE_OAUTH_TOKEN` explicitly. GitHub tokens are auto-discovered from `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`.
 
 </details>
 
