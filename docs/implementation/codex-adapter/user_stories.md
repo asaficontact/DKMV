@@ -8,27 +8,27 @@
 
 | US ID | Title | Feature | Task(s) | Status |
 |-------|-------|---------|---------|--------|
-| US-01 | Adapter protocol defines extensible agent interface | F1 | TBD | [ ] |
-| US-02 | Adapter registry resolves agents by name | F1 | TBD | [ ] |
-| US-03 | Claude adapter produces identical behavior | F2 | TBD | [ ] |
-| US-04 | Existing tests pass after refactor | F2 | TBD | [ ] |
-| US-05 | Codex adapter constructs exec commands | F3 | TBD | [ ] |
-| US-06 | Codex adapter parses JSONL stream events | F3 | TBD | [ ] |
-| US-07 | Codex adapter handles resume sessions | F3 | TBD | [ ] |
-| US-08 | Agent resolved from task YAML field | F4 | TBD | [ ] |
-| US-09 | Agent resolved through full 7-level cascade | F4 | TBD | [ ] |
-| US-10 | Agent inferred from model prefix | F5 | TBD | [ ] |
-| US-11 | Model-agent mismatch produces clear error | F5 | TBD | [ ] |
-| US-12 | Docker image contains both agents | F6 | TBD | [ ] |
-| US-13 | Build command accepts codex version flag | F6 | TBD | [ ] |
-| US-14 | Init discovers Codex credentials | F7 | TBD | [ ] |
-| US-15 | Non-interactive init auto-detects credentials | F7 | TBD | [ ] |
-| US-16 | Mixed-agent component passes all credentials | F8 | TBD | [ ] |
-| US-17 | Per-task adapter instantiation in mixed components | F8 | TBD | [ ] |
-| US-18 | Codex events normalized to StreamEvent | F9 | TBD | [ ] |
-| US-19 | Stream rendering works for both agents | F9 | TBD | [ ] |
-| US-20 | CLI --agent flag selects agent for run | F10 | TBD | [ ] |
-| US-21 | Existing CLI commands work without --agent | F10 | TBD | [ ] |
+| US-01 | Adapter protocol defines extensible agent interface | F1 | T010 | [ ] |
+| US-02 | Adapter registry resolves agents by name | F1 | T011, T020 | [ ] |
+| US-03 | Claude adapter produces identical behavior | F2 | T012-T015, T021 | [ ] |
+| US-04 | Existing tests pass after refactor | F2 | T016-T019, T022 | [ ] |
+| US-05 | Codex adapter constructs exec commands | F3 | T030, T033, T044, T046 | [ ] |
+| US-06 | Codex adapter parses JSONL stream events | F3 | T031-T032, T046 | [ ] |
+| US-07 | Codex adapter handles resume sessions | F3 | T032, T046 | [ ] |
+| US-08 | Agent resolved from task YAML field | F4 | T034-T035, T039, T047 | [ ] |
+| US-09 | Agent resolved through full 7-level cascade | F4 | T037-T040, T047 | [ ] |
+| US-10 | Agent inferred from model prefix | F5 | T041, T048 | [ ] |
+| US-11 | Model-agent mismatch produces clear error | F5 | T042, T048, T091 | [ ] |
+| US-12 | Docker image contains both agents | F6 | T060-T061, T070 | [ ] |
+| US-13 | Build command accepts codex version flag | F6 | T062, T071 | [ ] |
+| US-14 | Init discovers Codex credentials | F7 | T063-T064, T072 | [ ] |
+| US-15 | Non-interactive init auto-detects credentials | F7 | T065-T066, T072-T073 | [ ] |
+| US-16 | Mixed-agent component passes all credentials | F8 | T067-T069, T074 | [ ] |
+| US-17 | Per-task adapter instantiation in mixed components | F8 | T040, T074 | [ ] |
+| US-18 | Codex events normalized to StreamEvent | F9 | T031-T032, T045, T046 | [ ] |
+| US-19 | Stream rendering works for both agents | F9 | T045, T046 | [ ] |
+| US-20 | CLI --agent flag selects agent for run | F10 | T043, T049, T094 | [ ] |
+| US-21 | Existing CLI commands work without --agent | F10 | T043, T049, T050 | [ ] |
 
 ---
 
@@ -47,7 +47,7 @@
 - [ ] `mypy` validates that concrete adapters satisfy the Protocol at type-check time
 - [ ] A class implementing all Protocol methods passes `isinstance` checks when `runtime_checkable` is used (or satisfies structural typing in mypy)
 
-**Feature:** F1 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F1 | **Tasks:** T010 | **Priority:** Must-have
 
 #### US-02: Adapter registry resolves agents by name
 
@@ -60,7 +60,7 @@
 - [ ] The registry is defined in `dkmv/adapters/__init__.py`
 - [ ] Registry tests cover valid lookups, invalid lookups, and error messages
 
-**Feature:** F1 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F1 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-03: Claude adapter produces identical behavior
 
@@ -74,7 +74,7 @@
 - [ ] `gitignore_entries` returns `['.claude/']`
 - [ ] A regression test asserts the exact command string output
 
-**Feature:** F2 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F2 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-04: Existing tests pass after refactor
 
@@ -87,7 +87,7 @@
 - [ ] `uv run ruff check . && uv run ruff format --check . && uv run mypy dkmv/` all pass clean
 - [ ] Coverage remains >= 80% (current: 91.89%)
 
-**Feature:** F2 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F2 | **Tasks:** see matrix | **Priority:** Must-have
 
 ### Codex Adapter (US-05 through US-07)
 
@@ -105,7 +105,7 @@
 - [ ] `supports_max_turns()` returns `False`
 - [ ] `supports_budget()` returns `False`
 
-**Feature:** F3 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F3 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-06: Codex adapter parses JSONL stream events
 
@@ -120,7 +120,7 @@
 - [ ] `error` event maps to `StreamEvent(type="result", is_error=True)`
 - [ ] Unknown event types are handled gracefully (logged, not crash)
 
-**Feature:** F3 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F3 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-07: Codex adapter handles resume sessions
 
@@ -132,7 +132,7 @@
 - [ ] `extract_result()` captures `thread_id` from `thread.started` for use as session_id
 - [ ] Session data persists in container since `--ephemeral` is omitted
 
-**Feature:** F3 | **Tasks:** TBD | **Priority:** Should-have
+**Feature:** F3 | **Tasks:** see matrix | **Priority:** Should-have
 
 ### Agent Selection (US-08 through US-11)
 
@@ -149,7 +149,7 @@
 - [ ] Manifest `agent` overrides CLI, config, and defaults
 - [ ] Existing YAML files without `agent` field load without errors (defaults to `None`)
 
-**Feature:** F4 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F4 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-09: Agent resolved through full 7-level cascade
 
@@ -163,7 +163,7 @@
 - [ ] Each level can be independently tested
 - [ ] Resolution mirrors the existing model resolution pattern for consistency
 
-**Feature:** F4 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F4 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-10: Agent inferred from model prefix
 
@@ -179,7 +179,7 @@
 - [ ] `infer_agent_from_model("unknown-model")` returns `None`
 - [ ] Inference only runs when `agent` is not explicitly set
 
-**Feature:** F5 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F5 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-11: Model-agent mismatch produces clear error
 
@@ -193,7 +193,7 @@
 - [ ] Auto-substitution example: `agent=codex` (from CLI) + `model=claude-sonnet-4-6` (from YAML default) → model becomes `gpt-5.3-codex` with info message
 - [ ] No error when model and agent are compatible
 
-**Feature:** F5 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F5 | **Tasks:** see matrix | **Priority:** Must-have
 
 ### Docker & Infrastructure (US-12 through US-13)
 
@@ -210,7 +210,7 @@
 - [ ] `claude --version` continues to succeed inside the built container
 - [ ] Image size stays under 5GB
 
-**Feature:** F6 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F6 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-13: Build command accepts codex version flag
 
@@ -222,7 +222,7 @@
 - [ ] Existing `--claude-version` flag continues to work unchanged
 - [ ] `dkmv build` without `--codex-version` defaults to `"latest"`
 
-**Feature:** F6 | **Tasks:** TBD | **Priority:** Should-have
+**Feature:** F6 | **Tasks:** see matrix | **Priority:** Should-have
 
 ### Credential Discovery (US-14 through US-15)
 
@@ -238,7 +238,7 @@
 - [ ] `CredentialSources.codex_api_key_source` records the source (`"env"`, `"env:OPENAI_API_KEY"`, or `"none"`)
 - [ ] `.dkmv/config.json` includes `codex_api_key_source` in the `credentials` section
 
-**Feature:** F7 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F7 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-15: Non-interactive init auto-detects credentials
 
@@ -251,7 +251,7 @@
 - [ ] If only Codex credentials are found, Claude auth fields remain at their defaults
 - [ ] `load_config()` resolves `codex_api_key` from `CODEX_API_KEY` first, then `OPENAI_API_KEY`
 
-**Feature:** F7 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F7 | **Tasks:** see matrix | **Priority:** Must-have
 
 ### Mixed-Agent Components (US-16 through US-17)
 
@@ -267,7 +267,7 @@
 - [ ] Docker args include Claude OAuth credential bind-mount when Claude tasks use OAuth
 - [ ] Both `.claude/` and `.codex/` are added to workspace `.gitignore` for mixed-agent components
 
-**Feature:** F8 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F8 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-17: Per-task adapter instantiation in mixed components
 
@@ -280,7 +280,7 @@
 - [ ] Each task writes instructions to the correct file (`.claude/CLAUDE.md` vs `AGENTS.md`)
 - [ ] Stream parsing uses the correct adapter for each task's output
 
-**Feature:** F8 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F8 | **Tasks:** see matrix | **Priority:** Must-have
 
 ### Stream Normalization (US-18 through US-19)
 
@@ -297,7 +297,7 @@
 - [ ] Token counts are accumulated across multiple `turn.completed` events
 - [ ] Snapshot tests verify Codex event → StreamEvent mapping for all documented event types
 
-**Feature:** F9 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F9 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-19: Stream rendering works for both agents
 
@@ -310,7 +310,7 @@
 - [ ] Assistant messages, tool use, and tool results render for both agents
 - [ ] No changes needed to `render_event()` (validates the normalization is correct)
 
-**Feature:** F9 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F9 | **Tasks:** see matrix | **Priority:** Must-have
 
 ### CLI Integration (US-20 through US-21)
 
@@ -326,7 +326,7 @@
 - [ ] Invalid agent names produce a clear error with the list of registered agents
 - [ ] `--agent` and `--model` can be used together; model-agent compatibility is validated
 
-**Feature:** F10 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F10 | **Tasks:** see matrix | **Priority:** Must-have
 
 #### US-21: Existing CLI commands work without --agent
 
@@ -339,4 +339,4 @@
 - [ ] Default model remains `claude-sonnet-4-6` when no agent override is specified
 - [ ] Existing `--model` flag continues to work independently of `--agent`
 
-**Feature:** F10 | **Tasks:** TBD | **Priority:** Must-have
+**Feature:** F10 | **Tasks:** see matrix | **Priority:** Must-have

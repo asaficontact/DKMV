@@ -1,0 +1,5 @@
+Output directory: docs/implementation/codex-adapter
+Phases: 4
+Total tasks: 59
+Phase documents: phase1_adapter_foundation.md, phase2_codex_agent_selection.md, phase3_docker_init_integration.md, phase4_polish_verification.md
+Task ID range: T010-T098

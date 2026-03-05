@@ -66,7 +66,7 @@ Phase 4: Polish                      │
 - **Depends on:** None
 - **Blocks:** F2, F3, F4, F5, F9, F10
 - **User Stories:** US-01, US-02
-- **Tasks:** TBD
+- **Tasks:** T010, T011, T020
 - **PRD Reference:** Section 5 (Target Architecture), Section 6 (Agent Adapter Interface)
 - **Key Deliverables:**
   - `dkmv/adapters/base.py` with `AgentAdapter` Protocol class
@@ -82,7 +82,7 @@ Phase 4: Polish                      │
 - **Depends on:** F1
 - **Blocks:** F3, F8, F9
 - **User Stories:** US-03, US-04
-- **Tasks:** TBD
+- **Tasks:** T012-T019, T021-T022
 - **PRD Reference:** Section 4 (Current Architecture Analysis — CP-1 through CP-4), Section 8 (Changes by File — Phase 1 modifications)
 - **Key Deliverables:**
   - `dkmv/adapters/claude.py` implementing `AgentAdapter` — extracts logic from `sandbox.py`, `stream.py`, `component.py`, `runner.py`
@@ -103,7 +103,7 @@ Phase 4: Polish                      │
 - **Depends on:** F1, F2
 - **Blocks:** F8, F9
 - **User Stories:** US-05, US-06, US-07
-- **Tasks:** TBD
+- **Tasks:** T030-T033, T046
 - **PRD Reference:** Section 7 (Codex CLI Adapter Specification), Appendix A (Reference), Appendix B (JSONL Format)
 - **Key Deliverables:**
   - `dkmv/adapters/codex.py` implementing `AgentAdapter`
@@ -123,7 +123,7 @@ Phase 4: Polish                      │
 - **Depends on:** F1
 - **Blocks:** F5, F8, F10
 - **User Stories:** US-08, US-09
-- **Tasks:** TBD
+- **Tasks:** T034-T040, T047
 - **PRD Reference:** Section 5 (Agent Resolution Cascade — 7 levels), Section 10 (YAML Schema Changes)
 - **Key Deliverables:**
   - `agent: str | None = None` field on `TaskDefinition`, `ManifestTaskRef`, `ComponentManifest`
@@ -142,7 +142,7 @@ Phase 4: Polish                      │
 - **Depends on:** F1, F3, F4
 - **Blocks:** None
 - **User Stories:** US-10, US-11
-- **Tasks:** TBD
+- **Tasks:** T041-T042, T048
 - **PRD Reference:** Section 5 (Agent-Model Validation), Section 10.4 (Agent Inference from Model)
 - **Key Deliverables:**
   - `infer_agent_from_model()` in `dkmv/adapters/__init__.py` — infers `claude` from `claude-*`, `codex` from `gpt-*` and `o\d*` prefixes
@@ -159,7 +159,7 @@ Phase 4: Polish                      │
 - **Depends on:** F3
 - **Blocks:** F8
 - **User Stories:** US-12, US-13
-- **Tasks:** TBD
+- **Tasks:** T060-T062, T070-T071
 - **PRD Reference:** Section 11 (Dockerfile Changes), Appendix D (Codex Docker/CI Config)
 - **Key Deliverables:**
   - Updated `dkmv/images/Dockerfile` installing both `@anthropic-ai/claude-code` and `@openai/codex` with version-pinned build args
@@ -176,7 +176,7 @@ Phase 4: Polish                      │
 - **Depends on:** F3, F4
 - **Blocks:** None
 - **User Stories:** US-14, US-15
-- **Tasks:** TBD
+- **Tasks:** T063-T066, T072-T073
 - **PRD Reference:** Section 9.4 (Init Flow Changes), Section 9.5 (Credential Validation)
 - **Key Deliverables:**
   - Extended `dkmv init` credential discovery: detect `CODEX_API_KEY` and `OPENAI_API_KEY`
@@ -195,7 +195,7 @@ Phase 4: Polish                      │
 - **Depends on:** F2, F3, F4, F6
 - **Blocks:** None
 - **User Stories:** US-16, US-17
-- **Tasks:** TBD
+- **Tasks:** T067-T069, T074
 - **PRD Reference:** Section 5 (Adapter Lifecycle & Threading), Section 14 (R7: Mixed-Agent Credential Handling)
 - **Key Deliverables:**
   - `_build_sandbox_config()` scans all task refs to determine `agents_needed` set
@@ -213,7 +213,7 @@ Phase 4: Polish                      │
 - **Depends on:** F1, F2, F3
 - **Blocks:** None
 - **User Stories:** US-18, US-19
-- **Tasks:** TBD
+- **Tasks:** T017, T031-T032, T045
 - **PRD Reference:** Section 12 (Stream Parsing & Normalization), Appendix B (Codex JSONL Format)
 - **Key Deliverables:**
   - `StreamParser` gains optional `adapter` parameter for delegated parsing
@@ -232,7 +232,7 @@ Phase 4: Polish                      │
 - **Depends on:** F1, F4
 - **Blocks:** None
 - **User Stories:** US-20, US-21
-- **Tasks:** TBD
+- **Tasks:** T036, T043, T049
 - **PRD Reference:** Section 8 (Changes by File — Phase 2 CLI), Section 10.3 (Agent Resolution in Code)
 - **Key Deliverables:**
   - `--agent` option on all 5 run commands (`dev`, `qa`, `docs`, `plan`, `run_component`)

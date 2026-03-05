@@ -1,0 +1,11 @@
+{
+  "phase_count": 4,
+  "task_count": 59,
+  "task_id_range": "T010-T098",
+  "phase_filenames": [
+    "phase1_adapter_foundation.md",
+    "phase2_codex_agent_selection.md",
+    "phase3_docker_init_integration.md",
+    "phase4_polish_verification.md"
+  ]
+}
