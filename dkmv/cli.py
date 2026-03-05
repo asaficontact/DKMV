@@ -266,6 +266,10 @@ async def dev(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    start_phase: Annotated[
+        int | None,
+        typer.Option("--start-phase", help="Phase number to start from (skip earlier phases)."),
+    ] = None,
     context: Annotated[
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
@@ -275,6 +279,7 @@ async def dev(
     """Run the Dev agent to implement phases from implementation docs.
 
     Takes the output of 'dkmv plan' and implements each phase sequentially.
+    Use --start-phase to resume from a specific phase after a failure.
     """
     from dkmv.project import find_project_root, get_repo
     from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
@@ -293,6 +298,23 @@ async def dev(
         raise typer.Exit(code=1)
 
     phases = _discover_phases(impl_docs_dir)
+
+    if start_phase is not None:
+        total = len(phases)
+        phases = [p for p in phases if p["phase_number"] >= start_phase]
+        if not phases:
+            console.print(
+                f"Error: No phases with number >= {start_phase}. "
+                f"Available: {', '.join(str(p['phase_number']) for p in _discover_phases(impl_docs_dir))}",
+                style="bold red",
+            )
+            raise typer.Exit(code=1)
+        skipped = total - len(phases)
+        if skipped:
+            console.print(
+                f"Resuming from phase {start_phase} (skipping {skipped} earlier phase{'s' if skipped != 1 else ''})",
+                style="cyan",
+            )
 
     resolved_feature = feature_name or impl_docs_dir.name
     resolved_branch = branch or f"feature/{resolved_feature}-dev"

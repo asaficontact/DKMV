@@ -8,7 +8,7 @@ push: true
 
 outputs:
   - path: "phase_{{ item.phase_number }}_result.json"
-    required: true
+    required: false
     save: true
     required_fields:
       - status
@@ -26,7 +26,7 @@ instructions: |
   - Follow existing code style and patterns in the codebase
   - Do not push to main/master directly
   - Do not modify unrelated files
-  {% if item_index > 0 %}
+  {% if item.phase_number > 1 %}
   - Previous phases have already been implemented and committed
   - Check `.agent/` for results from prior phases
   {% endif %}
@@ -42,7 +42,7 @@ prompt: |
   - `tasks.md` — master task list across all phases
   - `{{ item.phase_file }}` — YOUR phase document with specific tasks
 
-  {% if item_index > 0 %}
+  {% if item.phase_number > 1 %}
   ## Prior Work
   Previous phases have been implemented and committed. Review what exists before starting.
   Check `.agent/` for phase result files from prior phases.

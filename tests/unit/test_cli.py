@@ -318,6 +318,110 @@ class TestComponentInvocations:
         assert result.exit_code == 0
         mock_runner.run.assert_awaited_once()
 
+    def test_dev_start_phase_filters_phases(self, tmp_path: Path) -> None:
+        impl_docs = tmp_path / "feature-impl"
+        impl_docs.mkdir()
+        (impl_docs / "phase1_foundation.md").write_text("# Phase 1\n")
+        (impl_docs / "phase2_core.md").write_text("# Phase 2\n")
+        (impl_docs / "phase3_polish.md").write_text("# Phase 3\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "dev",
+                    "--repo",
+                    str(tmp_path),
+                    "--impl-docs",
+                    str(impl_docs),
+                    "--start-phase",
+                    "2",
+                ],
+            )
+
+        assert result.exit_code == 0
+        call_kwargs = mock_runner.run.call_args[1]
+        phases = call_kwargs["variables"]["phases"]
+        assert len(phases) == 2
+        assert phases[0]["phase_number"] == 2
+        assert phases[1]["phase_number"] == 3
+
+    def test_dev_start_phase_invalid_shows_error(self, tmp_path: Path) -> None:
+        impl_docs = tmp_path / "feature-impl"
+        impl_docs.mkdir()
+        (impl_docs / "phase1_foundation.md").write_text("# Phase 1\n")
+        (impl_docs / "phase2_core.md").write_text("# Phase 2\n")
+
+        with patch("dkmv.cli.load_config", return_value=_mock_config()):
+            result = runner.invoke(
+                app,
+                [
+                    "dev",
+                    "--repo",
+                    str(tmp_path),
+                    "--impl-docs",
+                    str(impl_docs),
+                    "--start-phase",
+                    "5",
+                ],
+            )
+
+        assert result.exit_code == 1
+        assert "No phases" in result.output
+
+    def test_dev_start_phase_1_runs_all(self, tmp_path: Path) -> None:
+        impl_docs = tmp_path / "feature-impl"
+        impl_docs.mkdir()
+        (impl_docs / "phase1_foundation.md").write_text("# Phase 1\n")
+        (impl_docs / "phase2_core.md").write_text("# Phase 2\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "dev",
+                    "--repo",
+                    str(tmp_path),
+                    "--impl-docs",
+                    str(impl_docs),
+                    "--start-phase",
+                    "1",
+                ],
+            )
+
+        assert result.exit_code == 0
+        call_kwargs = mock_runner.run.call_args[1]
+        phases = call_kwargs["variables"]["phases"]
+        assert len(phases) == 2
+
+    def test_dev_help_shows_start_phase(self) -> None:
+        result = runner.invoke(app, ["dev", "--help"])
+        assert "--start-phase" in result.output
+
     def test_qa_invocation(self, tmp_path: Path) -> None:
         impl_docs = tmp_path / "impl-docs"
         impl_docs.mkdir()

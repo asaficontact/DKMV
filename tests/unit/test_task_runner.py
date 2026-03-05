@@ -736,6 +736,145 @@ class TestGitPushFailurePropagation:
         await runner._git_teardown(task, session)
 
 
+class TestGitTeardownBeforeOutputValidation:
+    """Git teardown must run before output validation so work is never lost."""
+
+    async def test_git_push_happens_when_output_missing(
+        self,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+        session: MagicMock,
+        config: DKMVConfig,
+    ) -> None:
+        """Even when required output is missing, git push should still happen."""
+        push_called = False
+
+        async def success_stream(**kwargs: Any) -> Any:
+            yield {
+                "type": "result",
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "session_id": "",
+            }
+
+        async def tracking_execute(sess: Any, command: str, **kw: Any) -> MagicMock:
+            nonlocal push_called
+            if "git push" in command:
+                push_called = True
+            return MagicMock(output="", exit_code=0)
+
+        sandbox = _make_sandbox()
+        sandbox.stream_claude = success_stream
+        sandbox.execute = AsyncMock(side_effect=tracking_execute)
+        sandbox.file_exists = AsyncMock(return_value=False)
+
+        runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
+        task = _make_task(
+            commit=True,
+            push=True,
+            outputs=[TaskOutput(path="/workspace/missing.json", required=True)],
+        )
+        run_id = run_manager.start_run(
+            "dev", MagicMock(feature_name="test", model_dump=MagicMock(return_value={}))
+        )
+
+        result = await runner.run(task, session, run_id, config, CLIOverrides())
+
+        assert result.status == "failed"
+        assert "Required output missing" in result.error_message
+        assert push_called, "git push should have been called before output validation"
+
+    async def test_git_commit_happens_when_output_missing(
+        self,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+        session: MagicMock,
+        config: DKMVConfig,
+    ) -> None:
+        """Git commit should happen even when required output is missing."""
+        committed = False
+
+        async def success_stream(**kwargs: Any) -> Any:
+            yield {
+                "type": "result",
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "session_id": "",
+            }
+
+        async def tracking_execute(sess: Any, command: str, **kw: Any) -> MagicMock:
+            nonlocal committed
+            if "git commit" in command:
+                committed = True
+            if "git status --porcelain" in command:
+                return MagicMock(output="M file.py", exit_code=0)
+            return MagicMock(output="", exit_code=0)
+
+        sandbox = _make_sandbox()
+        sandbox.stream_claude = success_stream
+        sandbox.execute = AsyncMock(side_effect=tracking_execute)
+        sandbox.file_exists = AsyncMock(return_value=False)
+
+        runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
+        task = _make_task(
+            commit=True,
+            push=False,
+            outputs=[TaskOutput(path="/workspace/missing.json", required=True)],
+        )
+        run_id = run_manager.start_run(
+            "dev", MagicMock(feature_name="test", model_dump=MagicMock(return_value={}))
+        )
+
+        result = await runner.run(task, session, run_id, config, CLIOverrides())
+
+        assert result.status == "failed"
+        assert committed, "git commit should have been called before output validation"
+
+    async def test_push_failure_still_reports_error_not_output_error(
+        self,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+        session: MagicMock,
+        config: DKMVConfig,
+    ) -> None:
+        """If push fails, the error should be about push, not about missing outputs."""
+
+        async def success_stream(**kwargs: Any) -> Any:
+            yield {
+                "type": "result",
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "session_id": "",
+            }
+
+        async def failing_push(sess: Any, command: str, **kw: Any) -> MagicMock:
+            if "git push" in command:
+                return MagicMock(output="remote: Permission denied", exit_code=1)
+            return MagicMock(output="", exit_code=0)
+
+        sandbox = _make_sandbox()
+        sandbox.stream_claude = success_stream
+        sandbox.execute = AsyncMock(side_effect=failing_push)
+        # Output WOULD be present, but push fails first
+        sandbox.file_exists = AsyncMock(return_value=True)
+        sandbox.read_file = AsyncMock(return_value='{"status": "ok"}')
+
+        runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
+        task = _make_task(
+            commit=True,
+            push=True,
+            outputs=[TaskOutput(path="/workspace/result.json", required=True)],
+        )
+        run_id = run_manager.start_run(
+            "dev", MagicMock(feature_name="test", model_dump=MagicMock(return_value={}))
+        )
+
+        result = await runner.run(task, session, run_id, config, CLIOverrides())
+
+        assert result.status == "failed"
+        assert "git push failed" in result.error_message
+
+
 class TestErrorHandling:
     async def test_timeout_returns_timed_out(
         self,

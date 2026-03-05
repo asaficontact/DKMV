@@ -8,7 +8,7 @@ push: true
 
 outputs:
   - path: assembly_done.txt
-    required: true
+    required: false
     save: true
 
 instructions: |

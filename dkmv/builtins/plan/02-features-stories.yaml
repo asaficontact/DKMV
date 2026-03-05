@@ -7,10 +7,10 @@ push: true
 
 outputs:
   - path: features_stories_done.txt
-    required: true
+    required: false
     save: true
   - path: features_stories_summary.json
-    required: true
+    required: false
     save: true
     required_fields:
       - feature_count

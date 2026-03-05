@@ -244,7 +244,7 @@ class TestYAMLValidation:
         assert task.model is None  # now in manifest
         assert task.inputs == []  # now in manifest
         assert len(task.outputs) == 1
-        assert task.outputs[0].required is True
+        assert task.outputs[0].required is False
 
 
 class TestComponentLoading:

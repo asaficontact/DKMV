@@ -308,6 +308,10 @@ class TaskRunner:
             result.num_turns = stream_result.turns
             result.session_id = stream_result.session_id
 
+            # Push the agent's work BEFORE validating outputs so code is
+            # never lost when a metadata file is missing.
+            await self._git_teardown(task, session)
+
             outputs, error = await self._collect_outputs(task, session, run_id)
             if error and stream_result.session_id:
                 logger.info("Output collection failed (%s), retrying with --resume", error)
@@ -332,8 +336,6 @@ class TaskRunner:
                 result.duration_seconds = time.monotonic() - start_time
                 return result
             result.outputs = outputs
-
-            await self._git_teardown(task, session)
             result.status = "completed"
 
         except TimeoutError:
