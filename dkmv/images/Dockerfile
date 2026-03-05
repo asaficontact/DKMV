@@ -44,6 +44,7 @@ FROM node:20-bookworm
 #   - npm install produces deterministic, cache-friendly Docker layers
 #   - Anthropic's own .devcontainer/Dockerfile still uses npm install
 ARG CLAUDE_CODE_VERSION=2.1.47
+ARG CODEX_VERSION=0.110.0
 
 # ---------------------------------------------------------------------------
 # System packages
@@ -105,6 +106,18 @@ RUN apt-get update \
 # We install globally via npm so it is available to all users.
 # Version pinning: use --build-arg CLAUDE_CODE_VERSION=X.Y.Z at build time.
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+
+# ---------------------------------------------------------------------------
+# Codex CLI installation (as root, before USER switch)
+# ---------------------------------------------------------------------------
+# Install Codex CLI globally. Version is pinned via --build-arg CODEX_VERSION.
+RUN npm install -g @openai/codex@${CODEX_VERSION}
+
+# Pre-configure Codex for headless Docker usage
+RUN mkdir -p /home/dkmv/.codex \
+    && printf '[sandbox_workspace_write]\nnetwork_access = true\n' \
+       > /home/dkmv/.codex/config.toml \
+    && chown -R dkmv:dkmv /home/dkmv/.codex
 
 # ---------------------------------------------------------------------------
 # Non-root user: dkmv

@@ -61,26 +61,32 @@ class ComponentRunner:
         self,
         config: DKMVConfig,
         timeout_minutes: int,
-        adapter: AgentAdapter | None = None,
+        agents_needed: set[str] | None = None,
     ) -> tuple[SandboxConfig, Path | None]:
         """Build sandbox config and return (config, temp_credentials_file).
 
         The caller must delete the temp file (if not None) after the
         container stops.
         """
-        if adapter is None:
-            from dkmv.adapters.claude import ClaudeCodeAdapter
+        from dkmv.adapters import get_adapter
 
-            adapter = ClaudeCodeAdapter()
+        if agents_needed is None:
+            agents_needed = {"claude"}
 
         env_vars: dict[str, str] = {}
         docker_args: list[str] = []
+        temp_creds_file: Path | None = None
 
-        # Auth from adapter
-        env_vars.update(adapter.get_auth_env_vars(config))
-        extra_args, temp_creds_file = adapter.get_docker_args(config)
-        docker_args.extend(extra_args)
+        # Collect credentials for all needed agents
+        for agent_name in agents_needed:
+            agent_adapter = get_adapter(agent_name)
+            env_vars.update(agent_adapter.get_auth_env_vars(config))
+            extra_args, creds_file = agent_adapter.get_docker_args(config)
+            docker_args.extend(extra_args)
+            if creds_file is not None:
+                temp_creds_file = creds_file
 
+        # GitHub token always included (agent-agnostic)
         if config.github_token:
             env_vars["GITHUB_TOKEN"] = config.github_token
 
@@ -102,6 +108,7 @@ class ComponentRunner:
         *,
         has_github_token: bool = True,
         adapter: AgentAdapter | None = None,
+        agents_needed: set[str] | None = None,
     ) -> None:
         if has_github_token:
             auth_result = await self._sandbox.setup_git_auth(session)
@@ -131,7 +138,22 @@ class ComponentRunner:
             f" && git config user.email {shlex.quote(AGENT_EMAIL)}",
         )
 
-        gitignore_entries = adapter.gitignore_entries if adapter is not None else [".claude/"]
+        # Collect gitignore entries from all needed agents
+        if agents_needed:
+            from dkmv.adapters import get_adapter as _get_adapter
+
+            seen: set[str] = set()
+            gitignore_entries: list[str] = []
+            for agent_name in agents_needed:
+                for entry in _get_adapter(agent_name).gitignore_entries:
+                    if entry not in seen:
+                        seen.add(entry)
+                        gitignore_entries.append(entry)
+        elif adapter is not None:
+            gitignore_entries = adapter.gitignore_entries
+        else:
+            gitignore_entries = [".claude/"]
+
         gitignore_cmds = [f"cd {WORKSPACE_DIR} && mkdir -p .agent"]
         for entry in gitignore_entries:
             gitignore_cmds.append(
@@ -430,7 +452,27 @@ class ComponentRunner:
 
             _agent_name = cli_overrides.agent or config.default_agent
             adapter: AgentAdapter = get_adapter(_agent_name)
-            sandbox_config, temp_creds_file = self._build_sandbox_config(config, timeout, adapter)
+
+            # Pre-scan manifest to determine agents_needed before sandbox start
+            agents_needed: set[str] = {_agent_name}
+            _manifest_path_prescan = component_dir / "component.yaml"
+            if _manifest_path_prescan.exists():
+                try:
+                    import yaml as _yaml
+
+                    _raw = _yaml.safe_load(_manifest_path_prescan.read_text())
+                    if isinstance(_raw, dict):
+                        if _raw.get("agent"):
+                            agents_needed.add(str(_raw["agent"]))
+                        for _ref in _raw.get("tasks", []):
+                            if isinstance(_ref, dict) and _ref.get("agent"):
+                                agents_needed.add(str(_ref["agent"]))
+                except Exception:
+                    pass  # Pre-scan failures are non-fatal
+
+            sandbox_config, temp_creds_file = self._build_sandbox_config(
+                config, timeout, agents_needed
+            )
             session = await self._sandbox.start(sandbox_config, component_dir.name)
 
             container_name = self._sandbox.get_container_name(session)
@@ -444,6 +486,7 @@ class ComponentRunner:
                 component_dir.name,
                 has_github_token=bool(config.github_token),
                 adapter=adapter,
+                agents_needed=agents_needed,
             )
 
             # Inject ad-hoc context files

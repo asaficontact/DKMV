@@ -115,16 +115,19 @@ def load_config(require_api_key: bool = True) -> DKMVConfig:
             config.memory_limit = project.defaults.memory
         if project.sandbox.image is not None and "image_name" not in config.model_fields_set:
             config.image_name = project.sandbox.image
-        if (
-            project.defaults.agent is not None
-            and "default_agent" not in config.model_fields_set
-        ):
+        if project.defaults.agent is not None and "default_agent" not in config.model_fields_set:
             config.default_agent = project.defaults.agent
 
         # Relocate output_dir to .dkmv/ when project config exists,
         # unless DKMV_OUTPUT_DIR was explicitly set
         if "output_dir" not in config.model_fields_set:
             config.output_dir = project_root / ".dkmv"
+
+    # OPENAI_API_KEY fallback for Codex
+    if not config.codex_api_key:
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        if openai_key:
+            config.codex_api_key = openai_key
 
     if not config.github_token:
         gh_token = os.environ.get("GH_TOKEN", "")

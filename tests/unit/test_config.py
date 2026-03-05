@@ -275,3 +275,82 @@ class TestOAuthAuthentication:
 
         with pytest.raises(click.exceptions.Exit):
             load_config()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# OPENAI_API_KEY Fallback Tests (T073)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestCodexAPIKeyFallback:
+    def test_codex_api_key_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CODEX_API_KEY", "sk-codex-direct")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = load_config()
+        assert config.codex_api_key == "sk-codex-direct"
+
+    def test_codex_api_key_openai_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-fallback")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        config = load_config()
+        assert config.codex_api_key == "sk-openai-fallback"
+
+    def test_codex_api_key_empty_when_neither_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        config = load_config()
+        assert config.codex_api_key == ""
+
+    def test_codex_key_takes_precedence_over_openai(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CODEX_API_KEY", "sk-codex-direct")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-fallback")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        config = load_config()
+        assert config.codex_api_key == "sk-codex-direct"
+
+    def test_project_defaults_agent_applied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        monkeypatch.delenv("DKMV_AGENT", raising=False)
+        dkmv_dir = tmp_path / ".dkmv"
+        dkmv_dir.mkdir()
+        cfg = {
+            "version": 1,
+            "project_name": "test",
+            "repo": "https://github.com/org/repo",
+            "default_branch": "main",
+            "defaults": {"agent": "codex"},
+            "credentials": {"auth_method": "api_key"},
+        }
+        (dkmv_dir / "config.json").write_text(json.dumps(cfg))
+        config = load_config()
+        assert config.default_agent == "codex"
+
+    def test_dkmv_agent_env_overrides_project_defaults(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        monkeypatch.setenv("DKMV_AGENT", "claude")
+        dkmv_dir = tmp_path / ".dkmv"
+        dkmv_dir.mkdir()
+        cfg = {
+            "version": 1,
+            "project_name": "test",
+            "repo": "https://github.com/org/repo",
+            "default_branch": "main",
+            "defaults": {"agent": "codex"},
+            "credentials": {"auth_method": "api_key"},
+        }
+        (dkmv_dir / "config.json").write_text(json.dumps(cfg))
+        config = load_config()
+        assert config.default_agent == "claude"

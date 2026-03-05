@@ -18,6 +18,7 @@ from dkmv.init import (
     detect_project_name,
     detect_repo,
     discover_anthropic_key,
+    discover_codex_key,
     discover_github_token,
     discover_oauth_token,
     update_gitignore,
@@ -31,6 +32,8 @@ _ENV_VARS = [
     "CLAUDE_CODE_OAUTH_TOKEN",
     "GITHUB_TOKEN",
     "GH_TOKEN",
+    "CODEX_API_KEY",
+    "OPENAI_API_KEY",
     "DKMV_MODEL",
     "DKMV_MAX_TURNS",
     "DKMV_IMAGE",
@@ -695,3 +698,119 @@ class TestInitOAuth:
         assert "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-pasted" in env_content
         data = json.loads((tmp_path / ".dkmv" / "config.json").read_text())
         assert data["credentials"]["auth_method"] == "oauth"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Group: Codex Credential Discovery (T072)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestDiscoverCodexKey:
+    def test_found_in_codex_env_var(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CODEX_API_KEY", "sk-codex-test")
+        source, found = discover_codex_key(tmp_path)
+        assert found is True
+        assert source == "env"
+
+    def test_openai_api_key_fallback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        source, found = discover_codex_key(tmp_path)
+        assert found is True
+        assert source == "env:OPENAI_API_KEY"
+
+    def test_codex_key_takes_precedence_over_openai(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODEX_API_KEY", "sk-codex")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        source, found = discover_codex_key(tmp_path)
+        assert found is True
+        assert source == "env"
+
+    def test_found_in_dotenv_codex_key(self, tmp_path: Path) -> None:
+        (tmp_path / ".env").write_text("CODEX_API_KEY=sk-codex-from-dotenv\n")
+        source, found = discover_codex_key(tmp_path)
+        assert found is True
+        assert source == ".env"
+
+    def test_found_in_dotenv_openai_key(self, tmp_path: Path) -> None:
+        (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-openai-from-dotenv\n")
+        source, found = discover_codex_key(tmp_path)
+        assert found is True
+        assert source == ".env:OPENAI_API_KEY"
+
+    def test_not_found_returns_none(self, tmp_path: Path) -> None:
+        source, found = discover_codex_key(tmp_path)
+        assert found is False
+        assert source == "none"
+
+    def test_dotenv_codex_takes_precedence_over_openai_in_file(self, tmp_path: Path) -> None:
+        (tmp_path / ".env").write_text("CODEX_API_KEY=sk-codex\nOPENAI_API_KEY=sk-openai\n")
+        source, found = discover_codex_key(tmp_path)
+        assert found is True
+        assert source == ".env"
+
+    def test_env_var_takes_precedence_over_dotenv(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODEX_API_KEY", "sk-env")
+        (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-dotenv\n")
+        source, found = discover_codex_key(tmp_path)
+        assert found is True
+        assert source == "env"
+
+    def test_empty_value_in_dotenv_not_found(self, tmp_path: Path) -> None:
+        (tmp_path / ".env").write_text("CODEX_API_KEY=\n")
+        source, found = discover_codex_key(tmp_path)
+        assert found is False
+        assert source == "none"
+
+
+class TestInitYesModeCodexAutoDetect:
+    """Test --yes mode auto-detects Codex credentials (T065)."""
+
+    def test_yes_detects_codex_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_subprocess_for_init(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("CODEX_API_KEY", "sk-codex-test")
+        result = cli_runner.invoke(app, ["init", "--yes"])
+        assert result.exit_code == 0
+        data = json.loads((tmp_path / ".dkmv" / "config.json").read_text())
+        assert data["credentials"]["codex_api_key_source"] == "env"
+
+    def test_yes_detects_openai_api_key_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_subprocess_for_init(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        result = cli_runner.invoke(app, ["init", "--yes"])
+        assert result.exit_code == 0
+        data = json.loads((tmp_path / ".dkmv" / "config.json").read_text())
+        assert data["credentials"]["codex_api_key_source"] == "env:OPENAI_API_KEY"
+
+    def test_yes_sets_codex_source_none_when_not_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_subprocess_for_init(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        result = cli_runner.invoke(app, ["init", "--yes"])
+        assert result.exit_code == 0
+        data = json.loads((tmp_path / ".dkmv" / "config.json").read_text())
+        assert data["credentials"]["codex_api_key_source"] == "none"
+
+    def test_yes_stores_both_claude_and_codex_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_subprocess_for_init(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("CODEX_API_KEY", "sk-codex-test")
+        result = cli_runner.invoke(app, ["init", "--yes"])
+        assert result.exit_code == 0
+        data = json.loads((tmp_path / ".dkmv" / "config.json").read_text())
+        assert data["credentials"]["auth_method"] == "api_key"
+        assert data["credentials"]["anthropic_api_key_source"] == "env"
+        assert data["credentials"]["codex_api_key_source"] == "env"

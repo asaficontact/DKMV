@@ -182,6 +182,9 @@ def build(
     claude_version: Annotated[
         str, typer.Option("--claude-version", help="Claude Code version to install.")
     ] = "latest",
+    codex_version: Annotated[
+        str, typer.Option("--codex-version", help="Codex CLI version to install.")
+    ] = "latest",
 ) -> None:
     """Build the DKMV sandbox Docker image."""
     if _dry_run:
@@ -207,6 +210,8 @@ def build(
         config.image_name,
         "--build-arg",
         f"CLAUDE_CODE_VERSION={claude_version}",
+        "--build-arg",
+        f"CODEX_VERSION={codex_version}",
     ]
     if no_cache:
         cmd.append("--no-cache")
@@ -274,7 +279,9 @@ async def dev(
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
-    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Dev agent to implement phases from implementation docs.
@@ -433,7 +440,9 @@ async def plan(
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
-    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Plan agent to convert a PRD into implementation documents.
@@ -604,7 +613,9 @@ async def qa(
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
-    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the QA agent to evaluate, fix, and re-evaluate a branch.
@@ -718,7 +729,9 @@ async def docs(
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
-    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Docs agent to update documentation and create a PR.
@@ -849,7 +862,9 @@ async def run_component(
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
-    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run a component (directory of task YAML files)."""

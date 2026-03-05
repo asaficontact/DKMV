@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from dkmv.adapters.codex import CodexCLIAdapter
 
 
@@ -36,9 +34,7 @@ def test_build_command_no_yolo_no_ephemeral():
 
 def test_build_command_resume():
     adapter = CodexCLIAdapter()
-    cmd = adapter.build_command(
-        "/tmp/p.md", "gpt-5.3-codex", 100, 30, resume_session_id="sess-123"
-    )
+    cmd = adapter.build_command("/tmp/p.md", "gpt-5.3-codex", 100, 30, resume_session_id="sess-123")
     assert "codex exec resume sess-123" in cmd
     assert "--json" in cmd
     assert "--full-auto" in cmd
@@ -156,9 +152,13 @@ def test_parse_event_thread_closed():
     adapter = CodexCLIAdapter()
     # Accumulate some turns
     adapter.parse_event({"type": "turn.started"})
-    adapter.parse_event({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}})
+    adapter.parse_event(
+        {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}}
+    )
     adapter.parse_event({"type": "turn.started"})
-    adapter.parse_event({"type": "turn.completed", "usage": {"input_tokens": 20, "output_tokens": 10}})
+    adapter.parse_event(
+        {"type": "turn.completed", "usage": {"input_tokens": 20, "output_tokens": 10}}
+    )
 
     event = adapter.parse_event({"type": "thread.closed"})
     assert event is not None
@@ -253,7 +253,9 @@ def test_extract_result():
     adapter = CodexCLIAdapter()
     adapter.parse_event({"type": "thread.started", "thread_id": "sess-xyz"})
     adapter.parse_event({"type": "turn.started"})
-    adapter.parse_event({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}})
+    adapter.parse_event(
+        {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}}
+    )
 
     result = adapter.extract_result({"type": "thread.closed"})
     assert result.cost == 0.0

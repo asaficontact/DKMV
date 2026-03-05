@@ -4,7 +4,13 @@ import logging
 
 import pytest
 
-from dkmv.adapters import AgentAdapter, StreamResult, get_adapter, infer_agent_from_model, validate_agent_model
+from dkmv.adapters import (
+    AgentAdapter,
+    StreamResult,
+    get_adapter,
+    infer_agent_from_model,
+    validate_agent_model,
+)
 from dkmv.adapters.claude import ClaudeCodeAdapter
 from dkmv.adapters.codex import CodexCLIAdapter
 
@@ -94,9 +100,7 @@ def test_validate_agent_model_codex_compatible():
 
 def test_validate_agent_model_explicit_mismatch_raises():
     with pytest.raises(ValueError, match="not compatible"):
-        validate_agent_model(
-            "codex", "claude-opus-4-6", agent_explicit=True, model_explicit=True
-        )
+        validate_agent_model("codex", "claude-opus-4-6", agent_explicit=True, model_explicit=True)
 
 
 def test_validate_agent_model_auto_substitute_returns_default(caplog):
@@ -105,7 +109,11 @@ def test_validate_agent_model_auto_substitute_returns_default(caplog):
             "codex", "claude-sonnet-4-6", agent_explicit=True, model_explicit=False
         )
     assert result == "gpt-5.3-codex"
-    assert "gpt-5.3-codex" in caplog.text or "using default" in caplog.text or "not compatible" in caplog.text
+    assert (
+        "gpt-5.3-codex" in caplog.text
+        or "using default" in caplog.text
+        or "not compatible" in caplog.text
+    )
 
 
 def test_validate_agent_model_auto_substitute_claude(caplog):

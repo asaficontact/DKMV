@@ -55,6 +55,34 @@ def discover_oauth_token(project_root: Path) -> tuple[str, bool]:
     return ("none", False)
 
 
+def discover_codex_key(project_root: Path) -> tuple[str, bool]:
+    """Discover Codex API key from env or .env file.
+
+    Returns (source, found) where source is one of:
+    "env", "env:OPENAI_API_KEY", ".env", ".env:OPENAI_API_KEY", "none"
+    """
+    # 1. Check CODEX_API_KEY env var
+    if os.environ.get("CODEX_API_KEY"):
+        return ("env", True)
+
+    # 2. Check OPENAI_API_KEY env var (fallback)
+    if os.environ.get("OPENAI_API_KEY"):
+        return ("env:OPENAI_API_KEY", True)
+
+    # 3. Check .env file
+    env_path = project_root / ".env"
+    if env_path.exists():
+        content = env_path.read_text()
+        for line in content.splitlines():
+            line = line.strip()
+            if line.startswith("CODEX_API_KEY=") and line.split("=", 1)[1].strip():
+                return (".env", True)
+            if line.startswith("OPENAI_API_KEY=") and line.split("=", 1)[1].strip():
+                return (".env:OPENAI_API_KEY", True)
+
+    return ("none", False)
+
+
 def discover_github_token(project_root: Path) -> tuple[str, bool]:
     """Discover GitHub token source. Returns (source_name, found)."""
     if os.environ.get("GITHUB_TOKEN"):
@@ -340,8 +368,11 @@ def run_init(
     oauth_source, oauth_found = discover_oauth_token(project_root)
     gh_token_source, gh_token_found = discover_github_token(project_root)
 
-    # Determine auth method
-    auth_method: AuthMethod
+    # Determine auth method and Codex credentials
+    auth_method: AuthMethod = "api_key"
+    codex_api_key_source: str = "none"
+    _do_claude_auth: bool = True  # whether to validate Claude credentials
+
     if yes:
         # Auto-detect: prefer API key if available, then OAuth
         if api_key_found:
@@ -354,56 +385,81 @@ def run_init(
                 "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN."
             )
             raise typer.Exit(code=1)
-    else:
-        # Interactive: let user choose
-        console.print("  Authentication methods:")
-        console.print("    [bold]1.[/bold] API Key (ANTHROPIC_API_KEY) — pay-per-token")
-        console.print(
-            "    [bold]2.[/bold] Claude Code subscription (OAuth) — flat rate, requires setup-token"
-        )
-        auth_choice = typer.prompt("  Choose auth method", default="1")
-        auth_method = "oauth" if auth_choice.strip() == "2" else "api_key"
 
-    # Validate and discover credentials for chosen method
-    if auth_method == "api_key":
-        if api_key_found:
-            console.print(f"  Anthropic API key: [green]found[/green] ({api_key_source})")
+        # Auto-detect Codex credentials
+        codex_source, codex_found = discover_codex_key(project_root)
+        codex_api_key_source = codex_source if codex_found else "none"
+        if codex_found:
+            console.print(f"  Codex API key:     [green]found[/green] ({codex_source})")
         else:
-            if yes:
-                # Unreachable in current flow but defensive
-                console.print(
-                    "[red]Error:[/red] ANTHROPIC_API_KEY not found. "
-                    "Set it via environment variable or .env file."
-                )
-                raise typer.Exit(code=1)
-            console.print("  Anthropic API key: [yellow]not found[/yellow]")
-            _prompt_and_write_credential(
-                project_root, "ANTHROPIC_API_KEY", "Enter your Anthropic API key"
-            )
-            api_key_source = ".env"
-            console.print("  Anthropic API key: [green]saved to .env[/green]")
+            console.print("  Codex API key:     [dim]not found (optional)[/dim]")
     else:
-        # OAuth flow
-        if oauth_found:
-            console.print(f"  OAuth token:       [green]found[/green] ({oauth_source})")
+        # Interactive: let user choose auth method
+        console.print("  Authentication methods:")
+        console.print("    [bold]1.[/bold] Claude Code — API Key (ANTHROPIC_API_KEY)")
+        console.print("    [bold]2.[/bold] Claude Code — OAuth (subscription)")
+        console.print("    [bold]3.[/bold] Codex CLI — API Key (CODEX_API_KEY / OPENAI_API_KEY)")
+        console.print("    [bold]4.[/bold] Both Claude Code + Codex CLI")
+        auth_choice_raw = typer.prompt("  Choose auth method", default="1")
+        auth_choice_raw = auth_choice_raw.strip()
+
+        if auth_choice_raw == "2":
+            auth_method = "oauth"
+        elif auth_choice_raw == "3":
+            auth_method = "api_key"
+            _do_claude_auth = False
+        elif auth_choice_raw == "4":
+            auth_method = "api_key"
         else:
-            if yes:
-                # Unreachable in current flow but defensive
-                console.print("[red]Error:[/red] CLAUDE_CODE_OAUTH_TOKEN not found.")
-                raise typer.Exit(code=1)
-            console.print("  OAuth token:       [yellow]not found[/yellow]")
-            console.print(
-                "\n  [dim]Run [bold]claude setup-token[/bold] in your terminal to "
-                "generate a long-lived token,[/dim]"
-            )
-            console.print("  [dim]then paste it below.[/dim]\n")
-            _prompt_and_write_credential(
-                project_root,
-                "CLAUDE_CODE_OAUTH_TOKEN",
-                "Enter your OAuth token (sk-ant-oat01-...)",
-            )
-            oauth_source = ".env"
-            console.print("  OAuth token:       [green]saved to .env[/green]")
+            auth_method = "api_key"
+
+        if auth_choice_raw in ("3", "4"):
+            codex_source, codex_found = discover_codex_key(project_root)
+            codex_api_key_source = codex_source if codex_found else "none"
+            if codex_found:
+                console.print(f"  Codex API key:     [green]found[/green] ({codex_source})")
+            else:
+                console.print("  Codex API key:     [yellow]not found[/yellow]")
+
+    # Validate Claude credentials if needed
+    if _do_claude_auth:
+        if auth_method == "api_key":
+            if api_key_found:
+                console.print(f"  Anthropic API key: [green]found[/green] ({api_key_source})")
+            else:
+                if yes:
+                    console.print(
+                        "[red]Error:[/red] ANTHROPIC_API_KEY not found. "
+                        "Set it via environment variable or .env file."
+                    )
+                    raise typer.Exit(code=1)
+                console.print("  Anthropic API key: [yellow]not found[/yellow]")
+                _prompt_and_write_credential(
+                    project_root, "ANTHROPIC_API_KEY", "Enter your Anthropic API key"
+                )
+                api_key_source = ".env"
+                console.print("  Anthropic API key: [green]saved to .env[/green]")
+        else:
+            # OAuth flow
+            if oauth_found:
+                console.print(f"  OAuth token:       [green]found[/green] ({oauth_source})")
+            else:
+                if yes:
+                    console.print("[red]Error:[/red] CLAUDE_CODE_OAUTH_TOKEN not found.")
+                    raise typer.Exit(code=1)
+                console.print("  OAuth token:       [yellow]not found[/yellow]")
+                console.print(
+                    "\n  [dim]Run [bold]claude setup-token[/bold] in your terminal to "
+                    "generate a long-lived token,[/dim]"
+                )
+                console.print("  [dim]then paste it below.[/dim]\n")
+                _prompt_and_write_credential(
+                    project_root,
+                    "CLAUDE_CODE_OAUTH_TOKEN",
+                    "Enter your OAuth token (sk-ant-oat01-...)",
+                )
+                oauth_source = ".env"
+                console.print("  OAuth token:       [green]saved to .env[/green]")
 
     console.print(f"  Auth method:       [bold]{auth_method}[/bold]")
 
@@ -442,6 +498,7 @@ def run_init(
             anthropic_api_key_source=api_key_source if auth_method == "api_key" else "none",
             oauth_token_source=oauth_source if auth_method == "oauth" else "none",
             github_token_source=gh_token_source,
+            codex_api_key_source=codex_api_key_source,
         ),
     )
 
