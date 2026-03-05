@@ -64,6 +64,7 @@ class ManifestDeliverable(BaseModel):
 
 class ManifestTaskRef(BaseModel):
     file: str
+    agent: str | None = None
     model: str | None = None
     max_turns: int | None = None
     timeout_minutes: int | None = None
@@ -80,6 +81,7 @@ class ComponentManifest(BaseModel):
     state_files: list[ManifestStateFile] = []
     agent_md: str | None = None
     agent_md_file: str | None = None
+    agent: str | None = None
     model: str | None = None
     max_turns: int | None = None
     timeout_minutes: int | None = None

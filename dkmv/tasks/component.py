@@ -274,6 +274,11 @@ class ComponentRunner:
         manifest: ComponentManifest,
         task_ref: ManifestTaskRef | None,
     ) -> None:
+        if task.agent is None:
+            if task_ref and task_ref.agent is not None:
+                task.agent = task_ref.agent
+            elif manifest.agent is not None:
+                task.agent = manifest.agent
         if task.model is None:
             if task_ref and task_ref.model is not None:
                 task.model = task_ref.model
@@ -421,9 +426,10 @@ class ComponentRunner:
                 if cli_overrides.timeout_minutes is not None
                 else config.timeout_minutes
             )
-            from dkmv.adapters.claude import ClaudeCodeAdapter
+            from dkmv.adapters import get_adapter
 
-            adapter: AgentAdapter = ClaudeCodeAdapter()
+            _agent_name = cli_overrides.agent or config.default_agent
+            adapter: AgentAdapter = get_adapter(_agent_name)
             sandbox_config, temp_creds_file = self._build_sandbox_config(config, timeout, adapter)
             session = await self._sandbox.start(sandbox_config, component_dir.name)
 

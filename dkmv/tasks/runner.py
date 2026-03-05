@@ -108,6 +108,13 @@ class TaskRunner:
         instructions_full_path = f"{WORKSPACE_DIR}/{instructions_rel_path}"
         parent_dir = str(Path(instructions_full_path).parent)
         await self._sandbox.execute(session, f"mkdir -p {parent_dir}")
+
+        if adapter is not None and adapter.prepend_instructions:
+            existing = ""
+            if await self._sandbox.file_exists(session, instructions_full_path):
+                existing = await self._sandbox.read_file(session, instructions_full_path)
+            if existing.strip():
+                content = content + "\n\n---\n\n" + existing
         await self._sandbox.write_file(session, instructions_full_path, content)
         return content
 
@@ -134,6 +141,14 @@ class TaskRunner:
 
         stream_result = StreamResult()
 
+        from dkmv.core.stream import StreamParser
+
+        task_parser = StreamParser(
+            console=self._stream_parser.console,
+            verbose=self._stream_parser.verbose,
+            adapter=adapter,
+        )
+
         async for event in self._sandbox.stream_agent(
             adapter=adapter,
             session=session,
@@ -145,9 +160,9 @@ class TaskRunner:
             env_vars=env_vars or None,
         ):
             self._run_manager.append_stream(run_id, event)
-            parsed = self._stream_parser.parse_line(json.dumps(event))
+            parsed = task_parser.parse_line(json.dumps(event))
             if parsed:
-                self._stream_parser.render_event(parsed)
+                task_parser.render_event(parsed)
             if adapter.is_result_event(event):
                 stream_result.cost = event.get("total_cost_usd", 0.0)
                 stream_result.turns = event.get("num_turns", 0)
@@ -239,6 +254,14 @@ class TaskRunner:
             task.max_budget_usd, cli_overrides.max_budget_usd, config.max_budget_usd
         )
 
+        from dkmv.core.stream import StreamParser
+
+        retry_parser = StreamParser(
+            console=self._stream_parser.console,
+            verbose=self._stream_parser.verbose,
+            adapter=adapter,
+        )
+
         stream_result = StreamResult()
         async for event in self._sandbox.stream_agent(
             adapter=adapter,
@@ -252,9 +275,9 @@ class TaskRunner:
             resume_session_id=session_id,
         ):
             self._run_manager.append_stream(run_id, event)
-            parsed = self._stream_parser.parse_line(json.dumps(event))
+            parsed = retry_parser.parse_line(json.dumps(event))
             if parsed:
-                self._stream_parser.render_event(parsed)
+                retry_parser.render_event(parsed)
             if adapter.is_result_event(event):
                 stream_result.cost = event.get("total_cost_usd", 0.0)
                 stream_result.turns = event.get("num_turns", 0)
@@ -336,9 +359,10 @@ class TaskRunner:
         adapter: AgentAdapter | None = None,
     ) -> TaskResult:
         if adapter is None:
-            from dkmv.adapters.claude import ClaudeCodeAdapter
+            from dkmv.adapters import get_adapter
 
-            adapter = ClaudeCodeAdapter()
+            agent_name = task.agent or cli_overrides.agent or config.default_agent or "claude"
+            adapter = get_adapter(agent_name)
 
         start_time = time.monotonic()
         result = TaskResult(task_name=task.name, description=task.description, status="failed")

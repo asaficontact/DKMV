@@ -274,6 +274,7 @@ async def dev(
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
+    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Dev agent to implement phases from implementation docs.
@@ -329,6 +330,7 @@ async def dev(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     component_dir = resolve_component("dev", project_root=project_root)
@@ -431,6 +433,7 @@ async def plan(
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
+    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Plan agent to convert a PRD into implementation documents.
@@ -465,6 +468,7 @@ async def plan(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     component_dir = resolve_component("plan", project_root=project_root)
@@ -600,6 +604,7 @@ async def qa(
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
+    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the QA agent to evaluate, fix, and re-evaluate a branch.
@@ -633,6 +638,7 @@ async def qa(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     component_dir = resolve_component("qa", project_root=project_root)
@@ -712,6 +718,7 @@ async def docs(
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
+    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Docs agent to update documentation and create a PR.
@@ -749,6 +756,7 @@ async def docs(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     component_dir = resolve_component("docs", project_root=project_root)
@@ -841,6 +849,7 @@ async def run_component(
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
+    agent: Annotated[str | None, typer.Option("--agent", help="Agent to use (claude, codex).")] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run a component (directory of task YAML files)."""
@@ -863,6 +872,7 @@ async def run_component(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     sandbox = SandboxManager()

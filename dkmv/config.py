@@ -26,6 +26,12 @@ class DKMVConfig(BaseSettings):
     memory_limit: str = Field(default="8g", validation_alias="DKMV_MEMORY")
     max_budget_usd: float | None = Field(default=None, validation_alias="DKMV_MAX_BUDGET_USD")
 
+    # Codex auth
+    codex_api_key: str = Field(default="", validation_alias="CODEX_API_KEY")
+
+    # Agent selection
+    default_agent: str = Field(default="claude", validation_alias="DKMV_AGENT")
+
     # Set by load_config() from project config; not loaded from env vars.
     # The validation_alias prevents pydantic-settings from reading AUTH_METHOD env var.
     auth_method: AuthMethod = Field(default="api_key", validation_alias="__DKMV_AUTH_METHOD")
@@ -109,6 +115,11 @@ def load_config(require_api_key: bool = True) -> DKMVConfig:
             config.memory_limit = project.defaults.memory
         if project.sandbox.image is not None and "image_name" not in config.model_fields_set:
             config.image_name = project.sandbox.image
+        if (
+            project.defaults.agent is not None
+            and "default_agent" not in config.model_fields_set
+        ):
+            config.default_agent = project.defaults.agent
 
         # Relocate output_dir to .dkmv/ when project config exists,
         # unless DKMV_OUTPUT_DIR was explicitly set

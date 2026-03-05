@@ -64,6 +64,7 @@ class TaskDefinition(BaseModel):
     commit: bool = True
     push: bool = True
 
+    agent: str | None = None
     model: str | None = None
     max_turns: int | None = None
     timeout_minutes: int | None = None
@@ -128,3 +129,4 @@ class CLIOverrides:
     max_turns: int | None = None
     timeout_minutes: int | None = None
     max_budget_usd: float | None = None
+    agent: str | None = None
