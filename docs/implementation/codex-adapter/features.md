@@ -103,7 +103,7 @@ Phase 4: Polish                      │
 - **Depends on:** F1, F2
 - **Blocks:** F8, F9
 - **User Stories:** US-05, US-06, US-07
-- **Tasks:** T030-T033, T046
+- **Tasks:** T030-T033, T044, T046
 - **PRD Reference:** Section 7 (Codex CLI Adapter Specification), Appendix A (Reference), Appendix B (JSONL Format)
 - **Key Deliverables:**
   - `dkmv/adapters/codex.py` implementing `AgentAdapter`
@@ -232,7 +232,7 @@ Phase 4: Polish                      │
 - **Depends on:** F1, F4
 - **Blocks:** None
 - **User Stories:** US-20, US-21
-- **Tasks:** T036, T043, T049
+- **Tasks:** T036, T043, T049, T094
 - **PRD Reference:** Section 8 (Changes by File — Phase 2 CLI), Section 10.3 (Agent Resolution in Code)
 - **Key Deliverables:**
   - `--agent` option on all 5 run commands (`dev`, `qa`, `docs`, `plan`, `run_component`)

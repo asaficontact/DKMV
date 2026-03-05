@@ -1134,7 +1134,7 @@ For manifest-level resolution (levels 1-3), test that `ComponentRunner` correctl
 
 **PRD Reference:** Section 5 (Agent-Model Validation), Section 10.4
 **Depends on:** T041, T042
-**Blocks:** T050
+**Blocks:** T049
 **User Stories:** US-10, US-11
 **Estimated scope:** 1 hour
 
@@ -1189,17 +1189,17 @@ def test_validate_agent_model_auto_substitute(caplog):
 
 ---
 
-### T049: Write CLI --agent Flag Tests
+### T049: Write CLI --agent Flag Tests and Full Test Suite Verification
 
-**PRD Reference:** Section 16.2, F10
-**Depends on:** T043
-**Blocks:** T050
-**User Stories:** US-20, US-21
-**Estimated scope:** 45 min
+**PRD Reference:** Section 16.2, Section 18 (Evaluation Criteria), F10
+**Depends on:** T043, T046, T047, T048
+**Blocks:** Nothing
+**User Stories:** US-04, US-20, US-21
+**Estimated scope:** 1 hour
 
 #### Description
 
-Write tests verifying the `--agent` CLI flag is available and correctly passed to `CLIOverrides`.
+Write tests verifying the `--agent` CLI flag is available and correctly passed to `CLIOverrides`. Then run the complete test suite and all quality gates to verify Phase 2 is complete with no regressions.
 
 #### Acceptance Criteria
 
@@ -1207,6 +1207,9 @@ Write tests verifying the `--agent` CLI flag is available and correctly passed t
 - [ ] Test `--agent` appears in help text
 - [ ] Test commands without `--agent` default to agent=None in CLIOverrides
 - [ ] Test existing commands work unchanged without --agent
+- [ ] `uv run pytest tests/ -v --cov --cov-fail-under=80 --tb=short` — all pass, coverage >= 80%
+- [ ] `uv run ruff check . && uv run ruff format --check . && uv run mypy dkmv/` — all clean
+- [ ] Both adapters registered and functional: `get_adapter("claude")`, `get_adapter("codex")`
 
 #### Files to Create/Modify
 
@@ -1214,7 +1217,7 @@ Write tests verifying the `--agent` CLI flag is available and correctly passed t
 
 #### Implementation Notes
 
-Use `typer.testing.CliRunner` to test CLI commands. Since the commands require Docker/config, test at the argument parsing level or mock the underlying functions:
+Use `typer.testing.CliRunner` to test CLI commands:
 
 ```python
 from typer.testing import CliRunner
@@ -1227,59 +1230,21 @@ def test_dev_accepts_agent_flag():
     assert "--agent" in result.output
 
 def test_dev_without_agent_flag():
-    # Verify that not passing --agent doesn't break anything
     result = runner.invoke(app, ["dev", "--help"])
     assert result.exit_code == 0
 ```
 
-#### Evaluation Checklist
-
-- [ ] `uv run pytest tests/unit/test_cli_agent.py -v` — all pass
-
----
-
-### T050: Full Test Suite Verification
-
-**PRD Reference:** Section 18 (Evaluation Criteria)
-**Depends on:** T046, T047, T048, T049
-**Blocks:** Nothing
-**User Stories:** US-04, US-21
-**Estimated scope:** 30 min
-
-#### Description
-
-Run the complete test suite and all quality gates to verify Phase 2 is complete with no regressions.
-
-#### Acceptance Criteria
-
-- [ ] `uv run pytest tests/ -v --cov --cov-fail-under=80 --tb=short` — all pass, coverage >= 80%
-- [ ] `uv run ruff check .` — clean
-- [ ] `uv run ruff format --check .` — clean
-- [ ] `uv run mypy dkmv/` — passes
-- [ ] `get_adapter("codex")` works
-- [ ] `infer_agent_from_model("gpt-5.3-codex")` returns `"codex"`
-- [ ] All 5 CLI run commands accept `--agent` flag
-
-#### Files to Create/Modify
-
-- None — verification only
-
-#### Implementation Notes
-
-Run the full quality gate suite:
+After tests pass, run full quality gate suite:
 ```bash
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy dkmv/
 uv run pytest tests/ -v --cov --cov-fail-under=80 --tb=short
-```
-
-Verify adapter registry:
-```bash
 python -c "from dkmv.adapters import get_adapter; print(get_adapter('claude').name, get_adapter('codex').name)"
 ```
 
 #### Evaluation Checklist
 
+- [ ] `uv run pytest tests/unit/test_cli_agent.py -v` — all pass
 - [ ] All quality gates pass
 - [ ] Both adapters registered and functional

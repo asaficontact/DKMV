@@ -28,7 +28,7 @@
 | US-18 | Codex events normalized to StreamEvent | F9 | T031-T032, T045, T046 | [ ] |
 | US-19 | Stream rendering works for both agents | F9 | T045, T046 | [ ] |
 | US-20 | CLI --agent flag selects agent for run | F10 | T043, T049, T094 | [ ] |
-| US-21 | Existing CLI commands work without --agent | F10 | T043, T049, T050 | [ ] |
+| US-21 | Existing CLI commands work without --agent | F10 | T043, T049 | [ ] |
 
 ---
 
@@ -100,8 +100,7 @@
 - [ ] Command includes flags: `--json`, `--full-auto`, `--sandbox danger-full-access`, `--skip-git-repo-check`, `-m <model>`
 - [ ] Command reads prompt via `"$(cat /tmp/dkmv_prompt.md)"`
 - [ ] Command redirects: `< /dev/null > /tmp/dkmv_stream.jsonl 2>/tmp/dkmv_stream.err & echo $!`
-- [ ] `--yolo` flag is NOT used (security concern)
-- [ ] `--ephemeral` flag is NOT used (preserves resume capability)
+- [ ] Neither `--yolo` nor `--ephemeral` flags are used (security and resume concerns)
 - [ ] `supports_max_turns()` returns `False`
 - [ ] `supports_budget()` returns `False`
 
@@ -170,12 +169,9 @@
 > As a Codex CLI Developer, I want DKMV to infer `agent=codex` when I pass `--model gpt-5.3-codex` so I don't have to specify both `--agent` and `--model`.
 
 **Acceptance Criteria:**
-- [ ] `infer_agent_from_model("claude-sonnet-4-6")` returns `"claude"`
-- [ ] `infer_agent_from_model("claude-opus-4-6")` returns `"claude"`
-- [ ] `infer_agent_from_model("gpt-5.3-codex")` returns `"codex"`
-- [ ] `infer_agent_from_model("gpt-5.3-codex-spark")` returns `"codex"`
-- [ ] `infer_agent_from_model("o3")` returns `"codex"` (o-series models)
-- [ ] `infer_agent_from_model("o4-mini")` returns `"codex"`
+- [ ] `infer_agent_from_model()` returns `"claude"` for `claude-*` models (e.g., `claude-sonnet-4-6`, `claude-opus-4-6`)
+- [ ] `infer_agent_from_model()` returns `"codex"` for `gpt-*` models (e.g., `gpt-5.3-codex`, `gpt-5.3-codex-spark`)
+- [ ] `infer_agent_from_model()` returns `"codex"` for o-series models (e.g., `o3`, `o4-mini`)
 - [ ] `infer_agent_from_model("unknown-model")` returns `None`
 - [ ] Inference only runs when `agent` is not explicitly set
 

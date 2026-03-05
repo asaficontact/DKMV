@@ -10,11 +10,11 @@
 
 ## Progress Summary
 
-- **Total tasks:** 59
+- **Total tasks:** 58
 - **Completed:** 0
 - **In progress:** 0
 - **Blocked:** 0
-- **Remaining:** 59
+- **Remaining:** 58
 
 ---
 
@@ -96,8 +96,7 @@ Codex CLI adapter fully implemented, agent selection works at all 7 cascade leve
 - [ ] T046 [P] Write Codex adapter unit tests (depends: T033)
 - [ ] T047 [P] Write agent resolution cascade tests (depends: T039, T040)
 - [ ] T048 [P] Write model validation and inference tests (depends: T041, T042)
-- [ ] T049 [P] Write CLI --agent flag tests (depends: T043)
-- [ ] T050 Full test suite verification (depends: T046, T047, T048, T049)
+- [ ] T049 [P] Write CLI --agent flag tests and full test suite verification (depends: T043, T046, T047, T048)
 
 ---
 

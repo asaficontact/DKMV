@@ -13,7 +13,7 @@ Add Codex CLI as a second agent backend to DKMV via an adapter pattern: `AgentAd
 - `features.md` — Feature registry (F1-F10) with dependencies.
 - `user_stories.md` — User stories (US-01 through US-21) with acceptance criteria.
 - `phase1_adapter_foundation.md` — Phase 1: Protocol + ClaudeCodeAdapter extraction (T010-T022).
-- `phase2_codex_agent_selection.md` — Phase 2: CodexCLIAdapter + agent resolution (T030-T050).
+- `phase2_codex_agent_selection.md` — Phase 2: CodexCLIAdapter + agent resolution (T030-T049).
 - `phase3_docker_init_integration.md` — Phase 3: Docker + init + mixed-agent (T060-T075).
 - `phase4_polish_verification.md` — Phase 4: Polish + verification (T090-T098).
 - `progress.md` — Session log. Update after every session.
