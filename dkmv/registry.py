@@ -24,6 +24,23 @@ class ComponentInfo:
     task_count: int
     description: str
     valid: bool = True
+    agent: str | None = None
+
+
+def _read_manifest_agent(component_path: Path) -> str | None:
+    """Read the agent field from a component's manifest, if present."""
+    import yaml  # noqa: PLC0415
+
+    manifest_file = component_path / "component.yaml"
+    if not manifest_file.is_file():
+        manifest_file = component_path / "component.yml"
+    if not manifest_file.is_file():
+        return None
+    try:
+        data = yaml.safe_load(manifest_file.read_text()) or {}
+        return data.get("agent") or None
+    except Exception:
+        return None
 
 
 class ComponentRegistry:
@@ -114,6 +131,7 @@ class ComponentRegistry:
             except Exception:
                 path = None
                 task_count = 0
+            agent = _read_manifest_agent(path) if path else None
             components.append(
                 ComponentInfo(
                     name=name,
@@ -121,6 +139,7 @@ class ComponentRegistry:
                     path=path,
                     task_count=task_count,
                     description=_BUILTIN_DESCRIPTIONS.get(name, ""),
+                    agent=agent,
                 )
             )
 
@@ -144,6 +163,7 @@ class ComponentRegistry:
                 else:
                     valid = False
 
+                agent = _read_manifest_agent(path) if valid else None
                 components.append(
                     ComponentInfo(
                         name=name,
@@ -152,6 +172,7 @@ class ComponentRegistry:
                         task_count=task_count,
                         description=stored_path,
                         valid=valid,
+                        agent=agent,
                     )
                 )
 

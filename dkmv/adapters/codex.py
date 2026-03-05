@@ -25,6 +25,10 @@ class CodexCLIAdapter:
     def name(self) -> str:
         return "codex"
 
+    @property
+    def display_name(self) -> str:
+        return "Codex"
+
     def build_command(
         self,
         prompt_file: str,

@@ -159,3 +159,41 @@ tests/
     test_init.py     # NEW — ~35 tests
     test_registry.py # NEW — ~20 tests
 ```
+
+## Adapter Architecture (Multi-Agent, Phase 2 of codex-adapter feature)
+
+- Scopes: `adapter`, `config`, `cli`, `sandbox`, `init`, `project`, `registry`, `rename`
+
+### AgentAdapter Protocol (`dkmv/adapters/base.py`)
+
+All agent backends implement the `AgentAdapter` Protocol. Key methods: `build_command()`, `parse_event()`, `is_result_event()`, `extract_result()`, `get_auth_env_vars()`, `get_docker_args()`, `supports_budget()`, `supports_max_turns()`, `supports_resume()`.
+
+### Adapter Registry (`dkmv/adapters/__init__.py`)
+
+- `get_adapter(name)` — returns adapter by name (`"claude"`, `"codex"`)
+- `infer_agent_from_model(model)` — returns agent name from model prefix, or `None`
+- `validate_agent_model(agent_name, model, ...)` — validates/auto-substitutes model for agent
+
+### New Files Created by Adapter Work
+
+```
+dkmv/
+  adapters/
+    __init__.py    # Adapter registry, get_adapter(), infer_agent_from_model(), validate_agent_model()
+    base.py        # AgentAdapter Protocol, StreamResult dataclass
+    claude.py      # ClaudeCodeAdapter — extracted from sandbox.py
+    codex.py       # CodexCLIAdapter — Codex CLI support
+tests/
+  unit/
+    test_adapters/
+      __init__.py
+      test_base.py         # Registry + inference + validation tests
+      test_claude.py       # Claude adapter tests
+      test_codex.py        # Codex adapter tests
+      test_resolution.py   # 7-level agent resolution cascade tests
+      test_edge_cases.py   # Edge case tests
+    test_dockerfile.py         # Dockerfile content verification
+    test_cli_build.py          # Build command --codex-version tests
+    test_cli_agent.py          # CLI --agent flag tests
+    test_component_multiagent.py  # Mixed-agent component tests
+```

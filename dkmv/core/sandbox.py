@@ -205,12 +205,13 @@ class SandboxManager:
 
         result = await self.execute(session, cmd)
         lines = result.output.strip().splitlines()
+        _display = getattr(adapter, "display_name", adapter.name)
         if not lines:
-            msg = "Failed to launch Claude Code: no PID returned"
+            msg = f"Failed to launch {_display}: no PID returned"
             raise RuntimeError(msg)
         pid = lines[-1].strip()
         if not pid.isdigit():
-            msg = f"Failed to launch Claude Code: invalid PID {pid!r}"
+            msg = f"Failed to launch {_display}: invalid PID {pid!r}"
             raise RuntimeError(msg)
 
         await self._create_session(session, "tail")

@@ -83,18 +83,21 @@ def components() -> None:
     table.add_column("Name", style="cyan")
     table.add_column("Type")
     table.add_column("Tasks", justify="right")
+    table.add_column("Agent")
     table.add_column("Description")
 
     builtin_count = 0
     custom_count = 0
 
     for info in infos:
+        agent_display = info.agent or ""
         if info.component_type == "built-in":
             builtin_count += 1
             table.add_row(
                 info.name,
                 "built-in",
                 str(info.task_count),
+                agent_display,
                 info.description,
             )
         else:
@@ -104,6 +107,7 @@ def components() -> None:
                     info.name,
                     "custom",
                     str(info.task_count),
+                    agent_display,
                     info.description,
                 )
             else:
@@ -111,6 +115,7 @@ def components() -> None:
                     info.name,
                     "custom",
                     "[yellow]?[/yellow]",
+                    agent_display,
                     f"[yellow]path not found: {info.description}[/yellow]",
                 )
 

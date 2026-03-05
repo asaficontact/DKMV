@@ -359,10 +359,43 @@ class TaskRunner:
         adapter: AgentAdapter | None = None,
     ) -> TaskResult:
         if adapter is None:
-            from dkmv.adapters import get_adapter
+            from dkmv.adapters import get_adapter, validate_agent_model
 
             agent_name = task.agent or cli_overrides.agent or config.default_agent or "claude"
             adapter = get_adapter(agent_name)
+
+            # T091: validate model-agent compatibility
+            resolved_model = task.model or cli_overrides.model or config.default_model
+            agent_explicit = task.agent is not None or cli_overrides.agent is not None
+            model_explicit = task.model is not None or cli_overrides.model is not None
+            try:
+                validate_agent_model(
+                    agent_name,
+                    resolved_model,
+                    agent_explicit=agent_explicit,
+                    model_explicit=model_explicit,
+                )
+            except ValueError as e:
+                return TaskResult(
+                    task_name=task.name,
+                    description=task.description,
+                    status="failed",
+                    error_message=str(e),
+                )
+
+        # T092: log capability gaps
+        max_turns_val = task.max_turns or cli_overrides.max_turns
+        if max_turns_val and not adapter.supports_max_turns():
+            logger.info(
+                "Agent '%s' does not support --max-turns; using timeout as safety limit",
+                adapter.name,
+            )
+        budget_val = task.max_budget_usd or cli_overrides.max_budget_usd
+        if budget_val and not adapter.supports_budget():
+            logger.info(
+                "Agent '%s' does not support --max-budget-usd; cost will show as $0.00",
+                adapter.name,
+            )
 
         start_time = time.monotonic()
         result = TaskResult(task_name=task.name, description=task.description, status="failed")

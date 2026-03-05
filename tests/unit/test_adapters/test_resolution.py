@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from dkmv.tasks.models import TaskDefinition, CLIOverrides
 from dkmv.tasks.manifest import ManifestTaskRef, ComponentManifest

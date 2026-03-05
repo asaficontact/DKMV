@@ -18,6 +18,10 @@ class ClaudeCodeAdapter:
     def name(self) -> str:
         return "claude"
 
+    @property
+    def display_name(self) -> str:
+        return "Claude Code"
+
     def build_command(
         self,
         prompt_file: str,
