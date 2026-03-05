@@ -1,0 +1,85 @@
+name: verify
+description: >
+  Second-pass verification: re-read all documentation against the actual
+  code, check for accuracy, consistency, and completeness, and fix any
+  issues found.
+commit: true
+push: true
+
+outputs:
+  - path: docs_verification.json
+    required: true
+    save: true
+
+instructions: |
+  ## Verification Rules
+  - This is a SECOND PASS — review with fresh eyes
+  - Cross-reference every claim in documentation against actual code
+  - Fix issues directly — do not just report them
+  - Produce a structured verification report at `.agent/docs_verification.json`
+  - If you make fixes, commit with message: `docs(<scope>): fix <issue>`
+
+prompt: |
+  You are a documentation reviewer performing a thorough second-pass
+  verification of documentation changes.
+
+  ## Context
+  Task 01 updated documentation for a feature implementation. The
+  implementation docs are at `.agent/impl_docs/`. The docs manifest
+  from Task 01 is at `.agent/docs_manifest.json`.
+
+  ## Phase 1: Review What Was Changed
+  1. Read `.agent/docs_manifest.json` to see what files were created/updated
+  2. Read each changed documentation file in full
+
+  ## Phase 2: Verify Accuracy
+  3. For every documented default value, verify it matches the code
+  4. For every documented CLI command or flag, verify it exists and works
+  5. For every code example, verify it matches the actual API
+  6. Check that documented file paths and module names are correct
+
+  ## Phase 3: Verify Consistency
+  7. Check that the same concept uses the same terminology everywhere
+  8. Check that formatting is consistent (heading levels, code fence style,
+     list style) across all documentation
+  9. Verify no contradictions between different docs
+
+  ## Phase 4: Verify Completeness
+  10. Check that all new public APIs are documented
+  11. Check that all new configuration options are documented
+  12. Check that all new CLI commands or flags are documented
+  13. Look for any feature that exists in code but is missing from docs
+
+  ## Phase 5: Fix and Report
+  14. Fix any issues you find directly in the documentation files
+  15. Produce `.agent/docs_verification.json`:
+  ```json
+  {
+    "status": "pass|fail",
+    "issues_found": 0,
+    "issues_fixed": 0,
+    "checks": [
+      {
+        "check": "accuracy",
+        "status": "pass|fail",
+        "details": "Description of what was checked and any issues"
+      },
+      {
+        "check": "consistency",
+        "status": "pass|fail",
+        "details": "Description of what was checked and any issues"
+      },
+      {
+        "check": "completeness",
+        "status": "pass|fail",
+        "details": "Description of what was checked and any issues"
+      }
+    ],
+    "summary": "Overall assessment of documentation quality"
+  }
+  ```
+
+  ## Constraints
+  - Do NOT modify implementation code
+  - Fix issues rather than just reporting them
+  - Be thorough — this is the final quality gate before the PR

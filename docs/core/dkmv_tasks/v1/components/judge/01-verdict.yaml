@@ -1,0 +1,174 @@
+# =============================================================================
+# Judge Component — Task 1: Independent Verdict
+# =============================================================================
+#
+# The Judge component performs an independent evaluation of a feature branch
+# against its PRD. Unlike QA, the Judge:
+#
+# - Must NOT be influenced by any QA reports or developer reasoning on the
+#   branch. It forms its own independent assessment.
+# - Produces a binary pass/fail verdict with confidence score.
+# - Assigns a 0–100 quality score.
+# - Lists specific issues with severity levels.
+# - Its verdict.json output is used by the orchestrator to decide whether
+#   to accept the implementation or trigger a feedback loop back to dev.
+#
+# The Judge is a single-task component. Its entire purpose is one coherent
+# independent evaluation session.
+#
+# Usage:
+#   dkmv run ./components/judge \
+#     --repo https://github.com/org/repo \
+#     --branch feature/auth-dev \
+#     --var prd_path=./prds/auth.md
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+name: verdict
+description: >
+  Independently evaluate the implementation against the PRD. Produce a
+  pass/fail verdict with confidence, severity-rated issues, and a 0-100 score.
+commit: true
+push: true
+commit_message: "feat(judge): {{ feature_name }} [dkmv-judge]"
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+# The Judge benefits from a capable model that can form nuanced assessments.
+# It doesn't need as many turns as implementation — mostly reading and reasoning.
+model: claude-sonnet-4-6
+max_turns: 60
+timeout_minutes: 20
+max_budget_usd: 1.50
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  # The FULL PRD — same as QA, the Judge needs the Evaluation Criteria
+  # section to assess against the acceptance criteria.
+  - name: prd
+    type: file
+    src: "{{ prd_path }}"
+    dest: /home/dkmv/workspace/.agent/prd.md
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  # The structured verdict. This is the Judge's primary output and drives
+  # orchestration decisions (accept vs feedback loop).
+  #
+  # Schema:
+  # {
+  #   "verdict": "pass" | "fail",
+  #   "confidence": float (0.0–1.0),
+  #   "reasoning": str,
+  #   "prd_requirements": [
+  #     {
+  #       "requirement": str,
+  #       "status": "implemented" | "missing" | "partial",
+  #       "notes": str
+  #     }
+  #   ],
+  #   "issues": [
+  #     {
+  #       "severity": "critical" | "high" | "medium" | "low",
+  #       "description": str,
+  #       "file": str,
+  #       "line": int | null,
+  #       "suggestion": str
+  #     }
+  #   ],
+  #   "suggestions": [str],
+  #   "score": int (0–100)
+  # }
+  - path: /home/dkmv/workspace/.agent/verdict.json
+    required: true
+    save: true
+
+# ---------------------------------------------------------------------------
+# Instructions
+# ---------------------------------------------------------------------------
+instructions: |
+  ## Judge Agent Rules
+  - You MUST form your own INDEPENDENT assessment
+  - Do NOT rely on or be influenced by any QA reports, developer comments,
+    or reasoning found on the branch
+  - Be strict but fair
+  - The verdict must be valid JSON at `.agent/verdict.json`
+  - Do NOT modify any source code
+  - Your verdict drives whether the implementation is accepted or sent back
+    for revision, so accuracy is critical
+
+# ---------------------------------------------------------------------------
+# Prompt
+# ---------------------------------------------------------------------------
+prompt: |
+  You are an independent judge evaluating a software implementation against its PRD.
+
+  ## Your Task
+  Read the PRD at `.agent/prd.md` and independently evaluate whether the
+  implementation meets all requirements and evaluation criteria.
+
+  ## Important
+  - You MUST form your own independent assessment — do NOT rely on or be
+    influenced by any QA reports or developer reasoning found on the branch
+  - Be strict but fair
+
+  ## Phase 1: Understand Requirements
+  1. Read the PRD at `.agent/prd.md` carefully — especially the
+     `## Evaluation Criteria` section
+  2. Review the implementation code thoroughly
+  3. Run the test suite to verify correctness
+
+  ## Phase 2: Evaluate
+  4. For each PRD requirement: determine if it is fully, partially, or
+     not implemented
+  5. For each evaluation criterion: assess pass or fail
+  6. Check for issues: bugs, missing edge cases, security concerns, poor
+     error handling
+  7. Note any suggestions for improvement
+
+  ## Phase 3: Verdict
+  8. Produce a structured verdict at `.agent/verdict.json` with the
+     following schema:
+  ```json
+  {
+    "verdict": "pass|fail",
+    "confidence": 0.85,
+    "reasoning": "Clear explanation of the overall assessment",
+    "prd_requirements": [
+      {
+        "requirement": "description",
+        "status": "implemented|missing|partial",
+        "notes": "details"
+      }
+    ],
+    "issues": [
+      {
+        "severity": "critical|high|medium|low",
+        "description": "what is wrong",
+        "file": "path",
+        "line": 42,
+        "suggestion": "how to fix"
+      }
+    ],
+    "suggestions": ["improvement suggestions"],
+    "score": 0
+  }
+  ```
+
+  ## Verdict Guidelines
+  - **PASS**: All critical requirements met, no critical/high issues, tests pass
+  - **FAIL**: Any critical requirement missing, critical issues found, or tests failing
+  - Confidence from 0.0–1.0 reflecting certainty in your verdict
+  - Score from 0–100 reflecting overall quality
+
+  ## Constraints
+  - Be independent — your evaluation must be your own
+  - Provide specific evidence for every issue
+  - Do not modify the implementation code

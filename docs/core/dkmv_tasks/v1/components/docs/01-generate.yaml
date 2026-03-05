@@ -1,0 +1,191 @@
+# =============================================================================
+# Docs Component — Task 1: Generate Documentation
+# =============================================================================
+#
+# The Docs component generates or updates documentation for a feature branch.
+# It explores the codebase, identifies public APIs and configuration options,
+# and produces comprehensive documentation.
+#
+# Key differences from other components:
+# - No PRD input — it reads the codebase directly to understand what to document
+# - No structured artifact output — its output IS the documentation files
+#   committed to the repository
+# - Optional PR creation — can create a GitHub PR with the docs changes
+# - Read-only with respect to implementation code — only creates/modifies
+#   documentation files
+#
+# The Docs component is a single-task component. Documentation generation
+# is one coherent exploration-and-writing session where context from
+# exploring the codebase directly informs the writing.
+#
+# Usage:
+#   dkmv run ./components/docs \
+#     --repo https://github.com/org/repo \
+#     --branch feature/auth-dev \
+#     --var create_pr=true \
+#     --var pr_base=main
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+name: generate
+description: >
+  Explore the codebase and generate or update documentation including README,
+  API docs, configuration guides, and code comments.
+commit: true
+push: true
+# Matches the Python base.py pattern: "feat({component}): {feature_tag} [dkmv-{component}]"
+commit_message: "feat(docs): {{ feature_name | default('update documentation') }} [dkmv-docs]"
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+# Documentation generation requires reading a lot of code and writing detailed
+# explanations. Moderate turns and budget.
+model: claude-sonnet-4-6
+max_turns: 80
+timeout_minutes: 25
+max_budget_usd: 2.00
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+# The Docs component has no file inputs in the current Python implementation.
+# It works entirely from the cloned repository on the branch. The DocsConfig
+# model only has create_pr (bool) and pr_base (str) fields beyond the base.
+#
+# The style_guide input below is a task-based ENHANCEMENT not present in v1
+# Python code — it demonstrates how the task format enables new capabilities
+# without modifying Python classes.
+inputs:
+  # ENHANCEMENT (not in v1 Python): Optional documentation style guide.
+  # In v1, the Docs component has no file inputs. This shows how the task
+  # format can add new inputs without touching Python code.
+  - name: style_guide
+    type: file
+    src: "{{ style_guide_path }}"
+    dest: /home/dkmv/workspace/.agent/style_guide.md
+    optional: true
+
+  # These mirror DocsConfig.create_pr and DocsConfig.pr_base from the
+  # Python implementation. Passed as env vars so the prompt can reference
+  # them for conditional PR creation.
+  - name: create_pr
+    type: env
+    key: DKMV_CREATE_PR
+    value: "{{ create_pr | default('false') }}"
+
+  - name: pr_base
+    type: env
+    key: DKMV_PR_BASE
+    value: "{{ pr_base | default('main') }}"
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+# The Docs component in v1 Python has no collect_artifacts() override and
+# doesn't read any structured file from the container. Its output is the
+# documentation files themselves, committed to the branch. The DocsResult
+# model has docs_generated (list[str]) and pr_url (str | None), but these
+# are populated at the orchestration level, not from container files.
+#
+# The docs_manifest below is a task-based ENHANCEMENT: it gives the agent
+# a structured way to report what it generated, which the runtime can use
+# to populate DocsResult.docs_generated.
+outputs:
+  # ENHANCEMENT (not in v1 Python): Manifest of generated/updated docs
+  - path: /home/dkmv/workspace/.agent/docs_manifest.json
+    required: false
+    save: true
+
+  # In v1 Python, pr_url is captured from the `gh pr create` command output
+  # in DocsComponent.post_teardown(). In the task-based system, this would
+  # be captured from the agent's command output if PR creation is delegated
+  # to the agent, or from a post-run action if PR creation is server-side.
+
+# ---------------------------------------------------------------------------
+# Instructions
+# ---------------------------------------------------------------------------
+instructions: |
+  ## Documentation Agent Rules
+  - Do NOT modify implementation code — only documentation files
+  - Follow existing documentation style if present in the repo
+  - Use clear, concise language with practical examples
+  - Ensure all examples are correct and runnable
+  - Write meaningful commit messages for documentation changes
+  - If a style guide is available at `.agent/style_guide.md`, follow it
+
+# ---------------------------------------------------------------------------
+# Post-run
+# ---------------------------------------------------------------------------
+# The Docs component can optionally create a GitHub PR after pushing.
+# In the current Python implementation, this is handled by post_teardown()
+# in DocsComponent. In the task-based system, this would be a built-in
+# post-run action or a second task.
+#
+# This is represented here as a comment since PR creation is an imperative
+# action (run a shell command), not a declarative YAML field. The task-based
+# runtime would need a `post_run` section or a dedicated `actions` field
+# to support this. For now, the prompt instructs Claude to create the PR
+# if the environment variable is set.
+
+# ---------------------------------------------------------------------------
+# Prompt
+# ---------------------------------------------------------------------------
+prompt: |
+  You are a technical writer generating documentation for a software project.
+
+  ## Your Task
+  Read the codebase on this branch and generate or update documentation.
+
+  ## Phase 1: Explore
+  1. Explore the codebase structure to understand the project
+  2. Identify public APIs, configuration options, and key concepts
+  3. Look for existing documentation that needs updating
+
+  ## Phase 2: Generate Documentation
+  4. Create or update README.md with project overview, setup, and usage
+  5. Document public APIs with clear descriptions and examples
+  6. Document configuration options and environment variables
+  7. Add inline code documentation where missing
+  8. Create any additional documentation files as needed
+     (e.g., CONTRIBUTING.md, API.md)
+
+  ## Phase 3: Review
+  9. Verify all documentation is accurate against the actual code
+  10. Ensure examples are correct and runnable
+  11. Check for consistency in formatting and style
+
+  {% if style_guide_path %}
+  ## Style Guide
+  Follow the documentation style guide at `.agent/style_guide.md`.
+  {% endif %}
+
+  ## Phase 4: Manifest
+  12. Create a manifest at `.agent/docs_manifest.json` listing what was
+      generated or updated:
+  ```json
+  {
+    "docs_generated": ["README.md", "API.md", "CONTRIBUTING.md"],
+    "docs_updated": ["docs/configuration.md"]
+  }
+  ```
+
+  ## PR Creation
+  If the environment variable `DKMV_CREATE_PR` is set to `true`, create a
+  GitHub pull request after committing:
+  ```bash
+  gh pr create \
+    --base "$DKMV_PR_BASE" \
+    --head "$(git branch --show-current)" \
+    --title "docs: update documentation" \
+    --body "Auto-generated documentation update by DKMV docs agent."
+  ```
+
+  ## Constraints
+  - Follow existing documentation style if present
+  - Use clear, concise language
+  - Include practical examples
+  - Do not modify implementation code
+  - Write meaningful commit messages for documentation changes
