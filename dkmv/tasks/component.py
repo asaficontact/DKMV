@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import shlex
-import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -11,7 +10,8 @@ from typing import Any
 
 from rich.console import Console
 
-from dkmv.config import DKMVConfig, _fetch_oauth_credentials
+from dkmv.adapters.base import AgentAdapter
+from dkmv.config import DKMVConfig, _fetch_oauth_credentials  # noqa: F401  (tests patch this)
 from dkmv.core.models import BaseComponentConfig, BaseResult, SandboxConfig
 from dkmv.core.runner import RunManager
 from dkmv.core.sandbox import SandboxManager, SandboxSession
@@ -58,47 +58,28 @@ class ComponentRunner:
         )
 
     def _build_sandbox_config(
-        self, config: DKMVConfig, timeout_minutes: int
+        self,
+        config: DKMVConfig,
+        timeout_minutes: int,
+        adapter: AgentAdapter | None = None,
     ) -> tuple[SandboxConfig, Path | None]:
         """Build sandbox config and return (config, temp_credentials_file).
 
         The caller must delete the temp file (if not None) after the
         container stops.
         """
+        if adapter is None:
+            from dkmv.adapters.claude import ClaudeCodeAdapter
+
+            adapter = ClaudeCodeAdapter()
+
         env_vars: dict[str, str] = {}
         docker_args: list[str] = []
-        temp_creds_file: Path | None = None
 
-        if config.auth_method == "oauth":
-            creds_json = _fetch_oauth_credentials()
-            host_creds_path = Path.home() / ".claude" / ".credentials.json"
-
-            if creds_json:
-                # macOS: write Keychain credentials to a temp file and bind-mount it
-                tf = tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".json", prefix="dkmv-creds-", delete=False
-                )
-                tf.write(creds_json)
-                tf.close()
-                temp_creds_file = Path(tf.name)
-                docker_args.extend(
-                    [
-                        "-v",
-                        f"{temp_creds_file}:/home/dkmv/.claude/.credentials.json:ro",
-                    ]
-                )
-            elif host_creds_path.exists():
-                # Linux: bind-mount the credentials file directly
-                docker_args.extend(
-                    [
-                        "-v",
-                        f"{host_creds_path}:/home/dkmv/.claude/.credentials.json:ro",
-                    ]
-                )
-            else:
-                env_vars["CLAUDE_CODE_OAUTH_TOKEN"] = config.claude_oauth_token
-        else:
-            env_vars["ANTHROPIC_API_KEY"] = config.anthropic_api_key
+        # Auth from adapter
+        env_vars.update(adapter.get_auth_env_vars(config))
+        extra_args, temp_creds_file = adapter.get_docker_args(config)
+        docker_args.extend(extra_args)
 
         if config.github_token:
             env_vars["GITHUB_TOKEN"] = config.github_token
@@ -120,6 +101,7 @@ class ComponentRunner:
         component_name: str,
         *,
         has_github_token: bool = True,
+        adapter: AgentAdapter | None = None,
     ) -> None:
         if has_github_token:
             auth_result = await self._sandbox.setup_git_auth(session)
@@ -149,13 +131,15 @@ class ComponentRunner:
             f" && git config user.email {shlex.quote(AGENT_EMAIL)}",
         )
 
-        await self._sandbox.execute(
-            session,
-            f"cd {WORKSPACE_DIR} && mkdir -p .agent"
-            " && (grep -qxF '.claude/' .gitignore 2>/dev/null"
-            ' || { [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]'
-            " && echo >> .gitignore; echo '.claude/' >> .gitignore; })",
-        )
+        gitignore_entries = adapter.gitignore_entries if adapter is not None else [".claude/"]
+        gitignore_cmds = [f"cd {WORKSPACE_DIR} && mkdir -p .agent"]
+        for entry in gitignore_entries:
+            gitignore_cmds.append(
+                f"(grep -qxF {shlex.quote(entry)} .gitignore 2>/dev/null"
+                f' || {{ [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]'
+                f" && echo >> .gitignore; echo {shlex.quote(entry)} >> .gitignore; }})"
+            )
+        await self._sandbox.execute(session, " && ".join(gitignore_cmds))
 
     def _build_variables(
         self,
@@ -437,7 +421,10 @@ class ComponentRunner:
                 if cli_overrides.timeout_minutes is not None
                 else config.timeout_minutes
             )
-            sandbox_config, temp_creds_file = self._build_sandbox_config(config, timeout)
+            from dkmv.adapters.claude import ClaudeCodeAdapter
+
+            adapter: AgentAdapter = ClaudeCodeAdapter()
+            sandbox_config, temp_creds_file = self._build_sandbox_config(config, timeout, adapter)
             session = await self._sandbox.start(sandbox_config, component_dir.name)
 
             container_name = self._sandbox.get_container_name(session)
@@ -450,6 +437,7 @@ class ComponentRunner:
                 branch,
                 component_dir.name,
                 has_github_token=bool(config.github_token),
+                adapter=adapter,
             )
 
             # Inject ad-hoc context files
@@ -567,6 +555,7 @@ class ComponentRunner:
                     component_agent_md=component_agent_md,
                     shared_env_vars=shared_env_vars,
                     context_files=context_files,
+                    adapter=adapter,
                 )
                 task_results.append(result)
 

@@ -4,12 +4,12 @@ import json
 import logging
 import shlex
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
 from rich.console import Console
 
+from dkmv.adapters.base import AgentAdapter, StreamResult
 from dkmv.config import DKMVConfig
 from dkmv.core.runner import RunManager
 from dkmv.core.sandbox import SandboxManager, SandboxSession
@@ -22,13 +22,6 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 WORKSPACE_DIR = "/home/dkmv/workspace"
-
-
-@dataclass
-class StreamResult:
-    cost: float = 0.0
-    turns: int = 0
-    session_id: str = ""
 
 
 class TaskRunner:
@@ -84,6 +77,7 @@ class TaskRunner:
         session: SandboxSession,
         component_agent_md: str | None = None,
         context_files: list[str] | None = None,
+        adapter: AgentAdapter | None = None,
     ) -> str:
         layers: list[str] = [DKMV_SYSTEM_CONTEXT]
         if component_agent_md:
@@ -106,11 +100,18 @@ class TaskRunner:
                 "- Do NOT leave uncommitted changes"
             )
         content = "\n\n---\n\n".join(layers) + "\n"
-        await self._sandbox.execute(session, f"mkdir -p {WORKSPACE_DIR}/.claude")
-        await self._sandbox.write_file(session, f"{WORKSPACE_DIR}/.claude/CLAUDE.md", content)
+
+        if adapter is not None:
+            instructions_rel_path = adapter.instructions_path
+        else:
+            instructions_rel_path = ".claude/CLAUDE.md"
+        instructions_full_path = f"{WORKSPACE_DIR}/{instructions_rel_path}"
+        parent_dir = str(Path(instructions_full_path).parent)
+        await self._sandbox.execute(session, f"mkdir -p {parent_dir}")
+        await self._sandbox.write_file(session, instructions_full_path, content)
         return content
 
-    async def _stream_claude(
+    async def _stream_agent(
         self,
         task: TaskDefinition,
         session: SandboxSession,
@@ -118,6 +119,7 @@ class TaskRunner:
         config: DKMVConfig,
         cli_overrides: CLIOverrides,
         env_vars: dict[str, str],
+        adapter: AgentAdapter,
     ) -> StreamResult:
         model = self._resolve_param(task.model, cli_overrides.model, config.default_model)
         max_turns = self._resolve_param(
@@ -132,7 +134,8 @@ class TaskRunner:
 
         stream_result = StreamResult()
 
-        async for event in self._sandbox.stream_claude(
+        async for event in self._sandbox.stream_agent(
+            adapter=adapter,
             session=session,
             prompt=task.prompt or "",
             model=model,
@@ -145,12 +148,27 @@ class TaskRunner:
             parsed = self._stream_parser.parse_line(json.dumps(event))
             if parsed:
                 self._stream_parser.render_event(parsed)
-            if event.get("type") == "result":
+            if adapter.is_result_event(event):
                 stream_result.cost = event.get("total_cost_usd", 0.0)
                 stream_result.turns = event.get("num_turns", 0)
                 stream_result.session_id = event.get("session_id", "")
 
         return stream_result
+
+    async def _stream_claude(
+        self,
+        task: TaskDefinition,
+        session: SandboxSession,
+        run_id: str,
+        config: DKMVConfig,
+        cli_overrides: CLIOverrides,
+        env_vars: dict[str, str],
+    ) -> StreamResult:
+        from dkmv.adapters.claude import ClaudeCodeAdapter
+
+        return await self._stream_agent(
+            task, session, run_id, config, cli_overrides, env_vars, ClaudeCodeAdapter()
+        )
 
     @staticmethod
     def _validate_required_fields(output: TaskOutput, content: str) -> str | None:
@@ -190,7 +208,7 @@ class TaskRunner:
                 self._run_manager.save_artifact(run_id, filename, content)
         return outputs, None
 
-    async def _retry_claude(
+    async def _retry_agent(
         self,
         task: TaskDefinition,
         session: SandboxSession,
@@ -200,8 +218,9 @@ class TaskRunner:
         env_vars: dict[str, str],
         session_id: str,
         error_message: str,
+        adapter: AgentAdapter,
     ) -> StreamResult:
-        """Resume Claude Code session with a corrective prompt."""
+        """Resume agent session with a corrective prompt."""
         corrective_prompt = (
             f"Your previous run did not produce the expected output.\n\n"
             f"Error: {error_message}\n\n"
@@ -221,7 +240,8 @@ class TaskRunner:
         )
 
         stream_result = StreamResult()
-        async for event in self._sandbox.stream_claude(
+        async for event in self._sandbox.stream_agent(
+            adapter=adapter,
             session=session,
             prompt=corrective_prompt,
             model=model,
@@ -235,11 +255,37 @@ class TaskRunner:
             parsed = self._stream_parser.parse_line(json.dumps(event))
             if parsed:
                 self._stream_parser.render_event(parsed)
-            if event.get("type") == "result":
+            if adapter.is_result_event(event):
                 stream_result.cost = event.get("total_cost_usd", 0.0)
                 stream_result.turns = event.get("num_turns", 0)
                 stream_result.session_id = event.get("session_id", "")
         return stream_result
+
+    async def _retry_claude(
+        self,
+        task: TaskDefinition,
+        session: SandboxSession,
+        run_id: str,
+        config: DKMVConfig,
+        cli_overrides: CLIOverrides,
+        env_vars: dict[str, str],
+        session_id: str,
+        error_message: str,
+    ) -> StreamResult:
+        """Resume Claude Code session with a corrective prompt (backwards-compat alias)."""
+        from dkmv.adapters.claude import ClaudeCodeAdapter
+
+        return await self._retry_agent(
+            task,
+            session,
+            run_id,
+            config,
+            cli_overrides,
+            env_vars,
+            session_id,
+            error_message,
+            ClaudeCodeAdapter(),
+        )
 
     async def _git_teardown(self, task: TaskDefinition, session: SandboxSession) -> None:
         if not task.commit and not task.push:
@@ -287,7 +333,13 @@ class TaskRunner:
         component_agent_md: str | None = None,
         shared_env_vars: dict[str, str] | None = None,
         context_files: list[str] | None = None,
+        adapter: AgentAdapter | None = None,
     ) -> TaskResult:
+        if adapter is None:
+            from dkmv.adapters.claude import ClaudeCodeAdapter
+
+            adapter = ClaudeCodeAdapter()
+
         start_time = time.monotonic()
         result = TaskResult(task_name=task.name, description=task.description, status="failed")
 
@@ -296,13 +348,13 @@ class TaskRunner:
             task_env_vars = await self._inject_inputs(task, session)
             env_vars.update(task_env_vars)
             claude_md = await self._write_instructions(
-                task, session, component_agent_md, context_files=context_files
+                task, session, component_agent_md, context_files=context_files, adapter=adapter
             )
             self._run_manager.save_artifact(run_id, f"claude_md_{task.name}.md", claude_md)
             self._run_manager.save_task_prompt(run_id, task.name, task.prompt or "")
 
-            stream_result = await self._stream_claude(
-                task, session, run_id, config, cli_overrides, env_vars
+            stream_result = await self._stream_agent(
+                task, session, run_id, config, cli_overrides, env_vars, adapter
             )
             result.total_cost_usd = stream_result.cost
             result.num_turns = stream_result.turns
@@ -315,7 +367,7 @@ class TaskRunner:
             outputs, error = await self._collect_outputs(task, session, run_id)
             if error and stream_result.session_id:
                 logger.info("Output collection failed (%s), retrying with --resume", error)
-                retry_result = await self._retry_claude(
+                retry_result = await self._retry_agent(
                     task,
                     session,
                     run_id,
@@ -324,6 +376,7 @@ class TaskRunner:
                     env_vars,
                     stream_result.session_id,
                     error,
+                    adapter,
                 )
                 result.total_cost_usd += retry_result.cost
                 result.num_turns += retry_result.turns

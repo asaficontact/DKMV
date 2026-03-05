@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 from rich.text import Text
+
+if TYPE_CHECKING:
+    from dkmv.adapters.base import AgentAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +30,15 @@ class StreamEvent:
 
 
 class StreamParser:
-    def __init__(self, console: Console | None = None, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        console: Console | None = None,
+        verbose: bool = False,
+        adapter: AgentAdapter | None = None,
+    ) -> None:
         self.console = console or Console()
         self.verbose = verbose
+        self._adapter = adapter
 
     def parse_line(self, line: str) -> StreamEvent | None:
         line = line.strip()
@@ -42,6 +51,12 @@ class StreamParser:
             logger.warning("Failed to parse stream line: %s", line[:200])
             return None
 
+        if self._adapter is not None:
+            return self._adapter.parse_event(data)
+
+        return self._parse_claude_event(data)
+
+    def _parse_claude_event(self, data: dict[str, Any]) -> StreamEvent | None:
         event_type = data.get("type", "")
 
         if event_type == "system":
