@@ -234,6 +234,44 @@ class ComponentRunner:
                     env_vars[inp.key] = inp.value
         return env_vars
 
+    async def _inject_context_files(
+        self, session: SandboxSession, context_paths: list[Path]
+    ) -> list[str]:
+        """Copy ad-hoc context files into .agent/context/ in the container.
+
+        Returns list of container-relative paths for agent instructions.
+        """
+        if not context_paths:
+            return []
+        await self._sandbox.execute(session, f"mkdir -p {WORKSPACE_DIR}/.agent/context")
+        injected: list[str] = []
+        for path in context_paths:
+            if path.is_dir():
+                for file_path in path.rglob("*"):
+                    if not file_path.is_file():
+                        continue
+                    try:
+                        content = file_path.read_text()
+                    except (UnicodeDecodeError, ValueError):
+                        logger.warning("Skipping non-text file: %s", file_path)
+                        continue
+                    rel = file_path.relative_to(path)
+                    dest = f"{WORKSPACE_DIR}/.agent/context/{path.name}/{rel}"
+                    await self._sandbox.write_file(session, dest, content)
+                    injected.append(f".agent/context/{path.name}/{rel}")
+            elif path.is_file():
+                try:
+                    content = path.read_text()
+                except (UnicodeDecodeError, ValueError):
+                    logger.warning("Skipping non-text file: %s", path)
+                    continue
+                dest = f"{WORKSPACE_DIR}/.agent/context/{path.name}"
+                await self._sandbox.write_file(session, dest, content)
+                injected.append(f".agent/context/{path.name}")
+            else:
+                logger.warning("Context path not found: %s", path)
+        return injected
+
     async def _create_workspace_dirs(
         self, manifest: ComponentManifest, session: SandboxSession
     ) -> None:
@@ -353,6 +391,7 @@ class ComponentRunner:
         keep_alive: bool = False,
         verbose: bool = False,
         on_pause: Callable[[PauseRequest], Awaitable[PauseResponse]] | None = None,
+        context_paths: list[Path] | None = None,
     ) -> ComponentResult:
         start_time = time.monotonic()
         session: SandboxSession | None = None
@@ -412,6 +451,9 @@ class ComponentRunner:
                 component_dir.name,
                 has_github_token=bool(config.github_token),
             )
+
+            # Inject ad-hoc context files
+            context_files = await self._inject_context_files(session, context_paths or [])
 
             # Load manifest if present
             manifest_path = component_dir / "component.yaml"
@@ -524,6 +566,7 @@ class ComponentRunner:
                     cli_overrides,
                     component_agent_md=component_agent_md,
                     shared_env_vars=shared_env_vars,
+                    context_files=context_files,
                 )
                 task_results.append(result)
 

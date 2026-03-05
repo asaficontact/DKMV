@@ -266,6 +266,10 @@ async def dev(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Dev agent to implement phases from implementation docs.
@@ -323,6 +327,7 @@ async def dev(
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
+        context_paths=context,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:
@@ -399,6 +404,10 @@ async def plan(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
@@ -455,6 +464,7 @@ async def plan(
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
         on_pause=None if auto else _rich_pause_callback,
+        context_paths=context,
     )
 
     # Plan report display from saved artifact
@@ -563,6 +573,10 @@ async def qa(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
@@ -618,6 +632,7 @@ async def qa(
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
         on_pause=None if auto else _qa_pause_callback,
+        context_paths=context,
     )
 
     # QA report display from saved artifact
@@ -671,6 +686,10 @@ async def docs(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Docs agent to update documentation and create a PR.
@@ -728,6 +747,7 @@ async def docs(
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
+        context_paths=context,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
 
@@ -795,6 +815,10 @@ async def run_component(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run a component (directory of task YAML files)."""
@@ -836,6 +860,7 @@ async def run_component(
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
+        context_paths=context,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:

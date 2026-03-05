@@ -19,4 +19,10 @@
 # We need to do something with Claude Agent Team?
 
 
+# Things to fix
+- When the user responds to questions, we need to add a richer answer to the agent center in the sandbox 
+- in the plan component, we add the .claude after the processing and commit iwth it, we should add it before! or is it added before but claude code removes it? 
+- Double check the cost & step computation system to ensure it is working properly. 
+- 
+
 

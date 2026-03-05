@@ -120,6 +120,21 @@ dkmv docs --branch feature/auth
 
 You can run any component individually — `plan` without `dev`, or `qa` on code you wrote yourself. The pipeline is a sequence, not a requirement.
 
+**Include extra context files:**
+
+Pass local files or directories that aren't in the repo but the agent should see. These are copied into `.agent/context/` inside the container and referenced in the agent's instructions.
+
+```bash
+dkmv plan --branch feature/auth --prd requirements.md \
+  --context ./client-api-spec.yaml \
+  --context ./architecture-notes/
+
+dkmv dev --branch feature/auth --impl-docs docs/implementation/auth/ \
+  --context ./legacy-migration-guide.md
+```
+
+`--context` is available on all commands (`plan`, `dev`, `qa`, `docs`, `run`). You can pass it multiple times. Directories are copied recursively. Binary files are skipped automatically.
+
 **Run a custom component:**
 
 ```bash
@@ -435,27 +450,30 @@ dkmv unregister security-audit               # unregister
 
 ```bash
 dkmv plan   --branch <name> --prd <path> [--repo <url>] [--design-docs <dir>]
-            [--feature-name <name>] [--auto] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--feature-name <name>] [--context <path> ...] [--auto]
+            [--model <m>] [--max-turns <n>] [--timeout <min>]
+            [--max-budget-usd <n>] [--keep-alive] [--verbose]
 
 dkmv dev    --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
-            [--model <m>] [--max-turns <n>] [--timeout <min>]
-            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
 
 dkmv qa     --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
-            [--auto] [--model <m>] [--max-turns <n>] [--timeout <min>]
-            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--auto] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
 
 dkmv docs   --branch <name> [--repo <url>] [--impl-docs <dir>] [--create-pr] [--pr-base <branch>]
-            [--model <m>] [--max-turns <n>] [--timeout <min>]
-            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
 
 dkmv run    <component> --branch <name> [--repo <url>] [--feature-name <name>]
-            [--var KEY=VALUE ...] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--var KEY=VALUE ...] [--context <path> ...] [--model <m>]
+            [--max-turns <n>] [--timeout <min>] [--max-budget-usd <n>]
+            [--keep-alive] [--verbose]
 ```
 
 > `--repo` is optional when the project is initialized with `dkmv init`.
+> `--context` accepts files or directories. Pass multiple times for multiple paths.
 
 ### Project Commands
 

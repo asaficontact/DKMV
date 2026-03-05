@@ -83,10 +83,18 @@ class TaskRunner:
         task: TaskDefinition,
         session: SandboxSession,
         component_agent_md: str | None = None,
+        context_files: list[str] | None = None,
     ) -> str:
         layers: list[str] = [DKMV_SYSTEM_CONTEXT]
         if component_agent_md:
             layers.append(component_agent_md)
+        if context_files:
+            listing = "\n".join(f"  - `{f}`" for f in context_files)
+            layers.append(
+                "## Additional Context\n\n"
+                "The following reference files have been provided. "
+                "Refer to these as needed:\n" + listing
+            )
         if task.instructions:
             layers.append(f"## Task-Specific Instructions\n\n{task.instructions}")
         if task.commit:
@@ -278,6 +286,7 @@ class TaskRunner:
         cli_overrides: CLIOverrides,
         component_agent_md: str | None = None,
         shared_env_vars: dict[str, str] | None = None,
+        context_files: list[str] | None = None,
     ) -> TaskResult:
         start_time = time.monotonic()
         result = TaskResult(task_name=task.name, description=task.description, status="failed")
@@ -286,7 +295,9 @@ class TaskRunner:
             env_vars = {**(shared_env_vars or {})}
             task_env_vars = await self._inject_inputs(task, session)
             env_vars.update(task_env_vars)
-            claude_md = await self._write_instructions(task, session, component_agent_md)
+            claude_md = await self._write_instructions(
+                task, session, component_agent_md, context_files=context_files
+            )
             self._run_manager.save_artifact(run_id, f"claude_md_{task.name}.md", claude_md)
             self._run_manager.save_task_prompt(run_id, task.name, task.prompt or "")
 
