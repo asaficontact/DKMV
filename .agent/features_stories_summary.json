@@ -1,0 +1,15 @@
+{
+  "feature_count": 10,
+  "story_count": 21,
+  "feature_ids": ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10"],
+  "categories": [
+    "Adapter Foundation",
+    "Codex Adapter",
+    "Agent Selection",
+    "Docker & Infrastructure",
+    "Credential Discovery",
+    "Mixed-Agent Components",
+    "Stream Normalization",
+    "CLI Integration"
+  ]
+}

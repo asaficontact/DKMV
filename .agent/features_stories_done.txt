@@ -1,0 +1,4 @@
+Output directory: docs/implementation/codex-adapter
+Features: 10 features written to docs/implementation/codex-adapter/features.md
+Stories: 21 stories written to docs/implementation/codex-adapter/user_stories.md
+Categories: Adapter Foundation, Codex Adapter, Agent Selection, Docker & Infrastructure, Credential Discovery, Mixed-Agent Components, Stream Normalization, CLI Integration
