@@ -250,6 +250,14 @@ class ComponentRunner:
         if not context_paths:
             return []
         await self._sandbox.execute(session, f"mkdir -p {WORKSPACE_DIR}/.agent/context")
+        # Prevent the agent from committing potentially huge context files
+        await self._sandbox.execute(
+            session,
+            f"cd {WORKSPACE_DIR}"
+            " && (grep -qxF '.agent/context/' .gitignore 2>/dev/null"
+            ' || { [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]'
+            " && echo >> .gitignore; echo '.agent/context/' >> .gitignore; })",
+        )
         injected: list[str] = []
         for path in context_paths:
             if path.is_dir():
@@ -361,6 +369,48 @@ class ComponentRunner:
 
         return PauseRequest(task_name=task_name, questions=questions, context=context)
 
+    @staticmethod
+    def _resolve_start_task(
+        start_task: str,
+        expanded_refs: list[tuple[Path, ManifestTaskRef | None, dict[str, Any] | None, int | None]],
+    ) -> int:
+        """Resolve --start-task value to a 0-based index into expanded_refs."""
+        if start_task.isdigit():
+            idx = int(start_task)
+            if idx < 1 or idx > len(expanded_refs):
+                available = ", ".join(str(i + 1) for i in range(len(expanded_refs)))
+                raise ValueError(
+                    f"Task index {idx} out of range (1-{len(expanded_refs)}). "
+                    f"Available: {available}"
+                )
+            return idx - 1
+
+        for i, (yaml_file, *_) in enumerate(expanded_refs):
+            stem = yaml_file.stem
+            # Match exact stem ("04-assembly") or suffix after dash ("assembly")
+            if stem == start_task or stem.split("-", 1)[-1] == start_task:
+                return i
+
+        names = [ref[0].stem for ref in expanded_refs]
+        raise ValueError(f"Task '{start_task}' not found. Available: {', '.join(names)}")
+
+    async def _reconstruct_task_from_repo(
+        self, task: TaskDefinition, session: SandboxSession
+    ) -> TaskResult:
+        """Read a skipped task's output files from the cloned repo."""
+        outputs: dict[str, str] = {}
+        for output in task.outputs:
+            if await self._sandbox.file_exists(session, output.path):
+                content = await self._sandbox.read_file(session, output.path)
+                outputs[output.path] = content
+            elif output.required:
+                raise FileNotFoundError(
+                    f"Cannot skip task '{task.name}': required output "
+                    f"'{Path(output.path).name}' not found in repo. "
+                    f"Was this task completed and pushed?"
+                )
+        return TaskResult(task_name=task.name, status="pre-existing", outputs=outputs)
+
     def _save_prompts_log(
         self,
         run_id: str,
@@ -403,6 +453,7 @@ class ComponentRunner:
         verbose: bool = False,
         on_pause: Callable[[PauseRequest], Awaitable[PauseResponse]] | None = None,
         context_paths: list[Path] | None = None,
+        start_task: str | None = None,
     ) -> ComponentResult:
         start_time = time.monotonic()
         session: SandboxSession | None = None
@@ -547,6 +598,11 @@ class ComponentRunner:
                 # No manifest: wrap plain yaml_files into expanded_refs format
                 expanded_refs = [(yf, None, None, None) for yf in yaml_files]
 
+            # Resolve --start-task to a 0-based index
+            start_index = 0
+            if start_task is not None:
+                start_index = self._resolve_start_task(start_task, expanded_refs)
+
             # Inject deterministic git identity env vars (highest git precedence)
             git_name = _agent_git_name(component_dir.name)
             git_identity_vars: dict[str, str] = {
@@ -583,6 +639,18 @@ class ComponentRunner:
                 # Apply manifest defaults if present
                 if manifest is not None:
                     self._apply_manifest_defaults(task, manifest, task_ref)
+
+                # Reconstruct skipped tasks from repo instead of running them
+                if i < start_index:
+                    result = await self._reconstruct_task_from_repo(task, session)
+                    task_results.append(result)
+                    logger.info(
+                        "Skipped task '%s' (%d/%d) — outputs recovered from repo",
+                        task.name,
+                        i + 1,
+                        len(expanded_refs),
+                    )
+                    continue
 
                 self._run_manager.append_stream(
                     run_id,

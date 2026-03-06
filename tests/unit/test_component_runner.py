@@ -117,6 +117,7 @@ def _mock_config() -> MagicMock:
     cfg.output_dir = Path("./outputs")
     cfg.image_name = "dkmv-sandbox:latest"
     cfg.memory_limit = "8g"
+    cfg.default_agent = "claude"
     return cfg
 
 
@@ -2341,7 +2342,7 @@ class TestBuildSandboxConfigGithubToken:
         assert "GITHUB_TOKEN" not in result.env_vars
 
     def test_build_sandbox_config_oauth_keychain(self, tmp_path: Path) -> None:
-        """auth_method=oauth + Keychain credentials → temp file bind-mount."""
+        """auth_method=oauth + Keychain credentials → temp file bind-mount + env var."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2350,10 +2351,11 @@ class TestBuildSandboxConfigGithubToken:
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
         creds_json = '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}'
-        with patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=creds_json):
+        with patch("dkmv.config._fetch_oauth_credentials", return_value=creds_json):
             result, temp_file = runner._build_sandbox_config(config, 30)
         try:
-            assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
+            # Adapter puts OAuth token in env_vars AND creates bind-mount
+            assert result.env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-test"
             assert "ANTHROPIC_API_KEY" not in result.env_vars
             assert "-v" in result.docker_args
             assert temp_file is not None
@@ -2366,7 +2368,7 @@ class TestBuildSandboxConfigGithubToken:
                 temp_file.unlink(missing_ok=True)
 
     def test_build_sandbox_config_oauth_linux_creds_file(self, tmp_path: Path) -> None:
-        """auth_method=oauth + no Keychain + Linux creds file → bind-mount file."""
+        """auth_method=oauth + no Keychain + Linux creds file → bind-mount file + env var."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2379,19 +2381,20 @@ class TestBuildSandboxConfigGithubToken:
         creds_file = fake_claude / ".credentials.json"
         creds_file.write_text("{}")
         with (
-            patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=""),
-            patch("dkmv.tasks.component.Path.home", return_value=tmp_path),
+            patch("dkmv.config._fetch_oauth_credentials", return_value=""),
+            patch("dkmv.adapters.claude.Path.home", return_value=tmp_path),
         ):
             result, temp_file = runner._build_sandbox_config(config, 30)
         assert temp_file is None
-        assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
+        # Adapter puts OAuth token in env_vars AND creates bind-mount
+        assert result.env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-test"
         assert "-v" in result.docker_args
         mount_arg = result.docker_args[result.docker_args.index("-v") + 1]
         assert str(creds_file) in mount_arg
         assert mount_arg.endswith(":ro")
 
     def test_build_sandbox_config_oauth_env_var_fallback(self) -> None:
-        """auth_method=oauth + no Keychain + no creds file → env var fallback."""
+        """auth_method=oauth + no Keychain + no creds file → env var only."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2400,8 +2403,8 @@ class TestBuildSandboxConfigGithubToken:
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
         with (
-            patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=""),
-            patch("dkmv.tasks.component.Path.home", return_value=Path("/nonexistent")),
+            patch("dkmv.config._fetch_oauth_credentials", return_value=""),
+            patch("dkmv.adapters.claude.Path.home", return_value=Path("/nonexistent")),
         ):
             result, temp_file = runner._build_sandbox_config(config, 30)
         assert temp_file is None

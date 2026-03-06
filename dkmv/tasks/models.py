@@ -101,7 +101,7 @@ class TaskDefinition(BaseModel):
 class TaskResult(BaseModel):
     task_name: str
     description: str = ""
-    status: Literal["completed", "failed", "timed_out", "skipped"]
+    status: Literal["completed", "failed", "timed_out", "skipped", "pre-existing"]
     total_cost_usd: float = 0.0
     duration_seconds: float = 0.0
     num_turns: int = 0

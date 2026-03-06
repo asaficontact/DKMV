@@ -7,7 +7,7 @@ push: true
 
 outputs:
   - path: plan_report.json
-    required: false
+    required: true
     save: true
     required_fields:
       - status

@@ -26,6 +26,7 @@ build on yours.
 
 - **Workspace:** `/home/dkmv/workspace/`
 - **Agent directory:** `/home/dkmv/workspace/.agent/` (shared between tasks, committed to git)
+- **Context files:** `.agent/context/` is gitignored — do NOT commit it (files may be very large)
 - **Git:** Pre-configured with auth. You can commit and push.
 - **Tools:** Standard Linux tools, Python, Node.js are available.
 - **Constraints:** You have limited turns and budget. Be efficient.

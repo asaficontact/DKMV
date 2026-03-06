@@ -47,7 +47,7 @@ def _make_sandbox(**overrides: Any) -> AsyncMock:
             "session_id": "sess-test",
         }
 
-    sandbox.stream_claude = mock_stream
+    sandbox.stream_agent = mock_stream
     return sandbox
 
 
@@ -247,7 +247,7 @@ class TestParameterCascade:
                 "session_id": "s",
             }
 
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task(model="claude-opus-4-6")
@@ -278,7 +278,7 @@ class TestParameterCascade:
                 "session_id": "s",
             }
 
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task()  # model=None
@@ -309,7 +309,7 @@ class TestParameterCascade:
                 "session_id": "s",
             }
 
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task()  # model=None
@@ -340,7 +340,7 @@ class TestParameterCascade:
                 "session_id": "s",
             }
 
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task(max_budget_usd=0.0)
@@ -379,6 +379,7 @@ class TestOutputCollection:
                 default_max_turns=10,
                 timeout_minutes=5,
                 max_budget_usd=None,
+                default_agent="claude",
             ),
             CLIOverrides(),
         )
@@ -408,6 +409,7 @@ class TestOutputCollection:
                 default_max_turns=10,
                 timeout_minutes=5,
                 max_budget_usd=None,
+                default_agent="claude",
             ),
             CLIOverrides(),
         )
@@ -444,6 +446,7 @@ class TestOutputCollection:
                 default_max_turns=10,
                 timeout_minutes=5,
                 max_budget_usd=None,
+                default_agent="claude",
             ),
             CLIOverrides(),
         )
@@ -474,6 +477,7 @@ class TestOutputCollection:
                 default_max_turns=10,
                 timeout_minutes=5,
                 max_budget_usd=None,
+                default_agent="claude",
             ),
             CLIOverrides(),
             component_agent_md="## Component Context",
@@ -694,7 +698,7 @@ class TestGitPushFailurePropagation:
                 "session_id": "sess-test",
             }
 
-        sandbox.stream_claude = success_stream
+        sandbox.stream_agent = success_stream
 
         # All commands succeed except git push
         async def selective_execute(session: Any, command: str, **kw: Any) -> MagicMock:
@@ -764,7 +768,7 @@ class TestGitTeardownBeforeOutputValidation:
             return MagicMock(output="", exit_code=0)
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = success_stream
+        sandbox.stream_agent = success_stream
         sandbox.execute = AsyncMock(side_effect=tracking_execute)
         sandbox.file_exists = AsyncMock(return_value=False)
 
@@ -811,7 +815,7 @@ class TestGitTeardownBeforeOutputValidation:
             return MagicMock(output="", exit_code=0)
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = success_stream
+        sandbox.stream_agent = success_stream
         sandbox.execute = AsyncMock(side_effect=tracking_execute)
         sandbox.file_exists = AsyncMock(return_value=False)
 
@@ -853,7 +857,7 @@ class TestGitTeardownBeforeOutputValidation:
             return MagicMock(output="", exit_code=0)
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = success_stream
+        sandbox.stream_agent = success_stream
         sandbox.execute = AsyncMock(side_effect=failing_push)
         # Output WOULD be present, but push fails first
         sandbox.file_exists = AsyncMock(return_value=True)
@@ -888,7 +892,7 @@ class TestErrorHandling:
             raise TimeoutError("timed out")
             yield  # noqa: RET503 — make this an async generator
 
-        sandbox.stream_claude = timeout_stream
+        sandbox.stream_agent = timeout_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task()
@@ -962,7 +966,7 @@ class TestRetryWithResume:
         session: MagicMock,
         config: DKMVConfig,
     ) -> None:
-        """When output collection fails, stream_claude is called again with resume_session_id."""
+        """When output collection fails, stream_agent is called again with resume_session_id."""
         call_count = 0
 
         async def counting_stream(**kwargs: Any) -> Any:
@@ -976,7 +980,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = counting_stream
+        sandbox.stream_agent = counting_stream
         # Always fail to find the file
         sandbox.file_exists = AsyncMock(return_value=False)
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
@@ -1013,7 +1017,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = counting_stream
+        sandbox.stream_agent = counting_stream
         # First call: missing, second call (after retry): found
         sandbox.file_exists = AsyncMock(side_effect=[False, True])
         sandbox.read_file = AsyncMock(return_value="report content")
@@ -1072,7 +1076,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = no_session_stream
+        sandbox.stream_agent = no_session_stream
         sandbox.file_exists = AsyncMock(return_value=False)
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
@@ -1106,7 +1110,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = varying_cost_stream
+        sandbox.stream_agent = varying_cost_stream
         # First: missing, second (after retry): found
         sandbox.file_exists = AsyncMock(side_effect=[False, True])
         sandbox.read_file = AsyncMock(return_value="content")
@@ -1143,7 +1147,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         # First: missing, retry also missing
         sandbox.file_exists = AsyncMock(return_value=False)
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))

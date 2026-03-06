@@ -11,7 +11,7 @@ outputs:
     required: false
     save: true
   - path: phases_summary.json
-    required: false
+    required: true
     save: true
     required_fields:
       - phase_count

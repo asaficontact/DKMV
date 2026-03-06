@@ -71,6 +71,7 @@ def _mock_config() -> MagicMock:
     cfg.output_dir = Path("./outputs")
     cfg.image_name = "dkmv-sandbox:latest"
     cfg.memory_limit = "8g"
+    cfg.default_agent = "claude"
     return cfg
 
 
@@ -105,7 +106,7 @@ class TestInjectContextFiles:
         result = await component_runner._inject_context_files(session, [ctx_file])
 
         assert result == [".agent/context/notes.md"]
-        sandbox.execute.assert_called_once()
+        assert sandbox.execute.call_count == 2  # mkdir + gitignore
         sandbox.write_file.assert_called_once_with(
             session, f"{WORKSPACE_DIR}/.agent/context/notes.md", "some notes"
         )

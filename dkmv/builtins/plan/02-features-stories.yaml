@@ -10,7 +10,7 @@ outputs:
     required: false
     save: true
   - path: features_stories_summary.json
-    required: false
+    required: true
     save: true
     required_fields:
       - feature_count

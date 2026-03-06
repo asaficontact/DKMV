@@ -280,6 +280,12 @@ async def dev(
         int | None,
         typer.Option("--start-phase", help="Phase number to start from (skip earlier phases)."),
     ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     context: Annotated[
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
@@ -292,7 +298,7 @@ async def dev(
     """Run the Dev agent to implement phases from implementation docs.
 
     Takes the output of 'dkmv plan' and implements each phase sequentially.
-    Use --start-phase to resume from a specific phase after a failure.
+    Use --start-phase or --start-task to resume after a failure.
     """
     from dkmv.project import find_project_root, get_repo
     from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
@@ -304,6 +310,13 @@ async def dev(
     config_obj = load_config()
     project_root = find_project_root()
     resolved_repo = get_repo(repo)
+
+    if start_phase is not None and start_task is not None:
+        console.print(
+            "Error: --start-phase and --start-task are mutually exclusive.",
+            style="bold red",
+        )
+        raise typer.Exit(code=1)
 
     impl_docs_dir = Path(impl_docs).resolve()
     if not impl_docs_dir.is_dir():
@@ -364,6 +377,7 @@ async def dev(
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
         context_paths=context,
+        start_task=start_task,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:
@@ -444,6 +458,12 @@ async def plan(
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
     agent: Annotated[
         str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
@@ -505,6 +525,7 @@ async def plan(
         verbose=verbose or _verbose,
         on_pause=None if auto else _rich_pause_callback,
         context_paths=context,
+        start_task=start_task,
     )
 
     # Plan report display from saved artifact
@@ -617,6 +638,12 @@ async def qa(
         list[Path] | None,
         typer.Option("--context", help="Local file or directory to include as extra context."),
     ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
     agent: Annotated[
         str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
@@ -677,6 +704,7 @@ async def qa(
         verbose=verbose or _verbose,
         on_pause=None if auto else _qa_pause_callback,
         context_paths=context,
+        start_task=start_task,
     )
 
     # QA report display from saved artifact
@@ -737,6 +765,12 @@ async def docs(
     agent: Annotated[
         str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
     ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Docs agent to update documentation and create a PR.
@@ -796,6 +830,7 @@ async def docs(
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
         context_paths=context,
+        start_task=start_task,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
 
@@ -870,6 +905,12 @@ async def run_component(
     agent: Annotated[
         str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
     ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run a component (directory of task YAML files)."""
@@ -913,6 +954,7 @@ async def run_component(
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
         context_paths=context,
+        start_task=start_task,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:
