@@ -225,7 +225,54 @@ The task system handles component loading, task execution, and orchestration.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Layer 3: Core Infrastructure (`dkmv/core/`)
+### Layer 3: Agent Adapter System (`dkmv/adapters/`)
+
+The adapter layer abstracts agent-specific behavior behind a common `AgentAdapter` Protocol. This enables DKMV to run tasks with either Claude Code or the Codex CLI without changing the task system.
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                     AgentAdapter Protocol                       │
+│                                                                │
+│  name / display_name / instructions_path / gitignore_entries   │
+│  default_model / prepend_instructions / supports_*()           │
+│                                                                │
+│  build_command(prompt_file, model, max_turns, timeout, ...)    │
+│  parse_event(data) → StreamEvent | None                        │
+│  is_result_event(event) → bool                                 │
+│  extract_result(event) → StreamResult                          │
+│  get_auth_config(config) → (env_dict, extra_args, creds_file)  │
+│  get_env_overrides(config) → dict[str, str]                    │
+└────────────────────────────────────────────────────────────────┘
+          ▲                              ▲
+          │                              │
+┌─────────────────┐            ┌─────────────────┐
+│ ClaudeCodeAdapter│            │ CodexCLIAdapter  │
+│  (claude.py)    │            │  (codex.py)     │
+│                 │            │                 │
+│ Runs claude     │            │ Runs codex exec │
+│ --output-format │            │ --json          │
+│ stream-json     │            │ --full-auto     │
+│                 │            │ Accumulates     │
+│ Supports:       │            │ turn state for  │
+│  max_turns ✓    │            │ cost tracking   │
+│  max_budget ✓   │            │                 │
+│  resume ✓       │            │ Supports:       │
+└─────────────────┘            │  resume ✓       │
+                               └─────────────────┘
+```
+
+**Agent selection cascade (7 levels, highest wins):**
+1. Task YAML `agent:` field
+2. `ManifestTaskRef.agent` in `component.yaml`
+3. `ComponentManifest.agent` in `component.yaml`
+4. CLI `--agent` flag
+5. `.dkmv/config.json` project defaults
+6. `DKMV_AGENT` environment variable / `DKMVConfig.default_agent`
+7. Built-in default (`claude`)
+
+**Model-agent inference:** if `--model` is set without `--agent`, the model prefix determines the agent (`claude-*` → claude, `gpt-*` / `o<digit>*` → codex).
+
+### Layer 4: Core Infrastructure (`dkmv/core/`)
 
 Three managers provide the foundation:
 

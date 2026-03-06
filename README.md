@@ -348,10 +348,13 @@ DKMV supports two authentication methods:
 
 | Method | Best For | Setup |
 |--------|----------|-------|
-| **API Key** | Pay-per-token usage | Set `ANTHROPIC_API_KEY` |
+| **API Key** | Pay-per-token usage (Claude) | Set `ANTHROPIC_API_KEY` |
 | **OAuth** | Claude Code subscription (flat rate) | Log in with `claude` (credentials auto-detected from Keychain / `~/.claude/.credentials.json`) |
+| **Codex** | OpenAI Codex CLI | Set `CODEX_API_KEY` or `OPENAI_API_KEY` |
 
 `dkmv init` walks you through choosing and configuring your auth method. You can also set `CLAUDE_CODE_OAUTH_TOKEN` explicitly. GitHub tokens are auto-discovered from `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`.
+
+When running with Codex, set `DKMV_AGENT=codex` or pass `--agent codex` on any run command. `OPENAI_API_KEY` is automatically used as a fallback for `CODEX_API_KEY`.
 
 </details>
 
@@ -371,6 +374,8 @@ CLI flags  ->  Environment variables  ->  .env file  ->  .dkmv/config.json  ->  
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | OAuth token (alternative to API key) |
 | `GITHUB_TOKEN` | — | GitHub token for private repos and PRs |
+| `CODEX_API_KEY` | — | OpenAI API key for Codex agent (`OPENAI_API_KEY` also accepted) |
+| `DKMV_AGENT` | `claude` | Default agent (`claude` or `codex`) |
 | `DKMV_MODEL` | `claude-sonnet-4-6` | Default model |
 | `DKMV_MAX_TURNS` | `100` | Max turns per task |
 | `DKMV_IMAGE` | `dkmv-sandbox:latest` | Docker sandbox image |
@@ -451,29 +456,36 @@ dkmv unregister security-audit               # unregister
 ```bash
 dkmv plan   --branch <name> --prd <path> [--repo <url>] [--design-docs <dir>]
             [--feature-name <name>] [--context <path> ...] [--auto]
-            [--model <m>] [--max-turns <n>] [--timeout <min>]
-            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--agent <name>] [--model <m>] [--max-turns <n>] [--timeout <min>]
+            [--max-budget-usd <n>] [--start-task <name-or-index>]
+            [--keep-alive] [--verbose]
 
 dkmv dev    --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
-            [--context <path> ...] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--agent <name>] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>]
+            [--start-phase <n>] [--start-task <name-or-index>]
+            [--keep-alive] [--verbose]
 
 dkmv qa     --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
-            [--context <path> ...] [--auto] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--auto] [--agent <name>] [--model <m>]
+            [--max-turns <n>] [--timeout <min>] [--max-budget-usd <n>]
+            [--start-task <name-or-index>] [--keep-alive] [--verbose]
 
 dkmv docs   --branch <name> [--repo <url>] [--impl-docs <dir>] [--create-pr] [--pr-base <branch>]
-            [--context <path> ...] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--agent <name>] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>]
+            [--start-task <name-or-index>] [--keep-alive] [--verbose]
 
 dkmv run    <component> --branch <name> [--repo <url>] [--feature-name <name>]
-            [--var KEY=VALUE ...] [--context <path> ...] [--model <m>]
-            [--max-turns <n>] [--timeout <min>] [--max-budget-usd <n>]
-            [--keep-alive] [--verbose]
+            [--var KEY=VALUE ...] [--context <path> ...] [--agent <name>]
+            [--model <m>] [--max-turns <n>] [--timeout <min>] [--max-budget-usd <n>]
+            [--start-task <name-or-index>] [--keep-alive] [--verbose]
 ```
 
 > `--repo` is optional when the project is initialized with `dkmv init`.
 > `--context` accepts files or directories. Pass multiple times for multiple paths.
+> `--agent` selects the AI agent backend (`claude` or `codex`). Overrides `DKMV_AGENT`.
+> `--start-task` skips to a specific task by name or 1-based index. `--start-phase` (dev only) skips to a phase number.
 
 ### Project Commands
 
@@ -497,7 +509,7 @@ dkmv clean
 ### Build
 
 ```bash
-dkmv build         [--no-cache] [--claude-version <version>]
+dkmv build         [--no-cache] [--claude-version <version>] [--codex-version <version>]
 ```
 
 </details>
@@ -545,6 +557,11 @@ dkmv/
 ├── project.py           # Project config, find_project_root(), get_repo()
 ├── init.py              # dkmv init (credential discovery, Rich UX)
 ├── registry.py          # Component registry (.dkmv/components.json)
+├── adapters/
+│   ├── __init__.py      # get_adapter(), infer_agent_from_model(), validate_agent_model()
+│   ├── base.py          # AgentAdapter Protocol, StreamResult dataclass
+│   ├── claude.py        # ClaudeCodeAdapter
+│   └── codex.py         # CodexCLIAdapter
 ├── core/
 │   ├── models.py        # Shared types (BaseResult, SandboxConfig)
 │   ├── sandbox.py       # SandboxManager (Docker via SWE-ReX)
@@ -564,7 +581,7 @@ dkmv/
 │   ├── qa/              # 01-evaluate, 02-fix, 03-re-evaluate
 │   └── docs/            # 01-generate.yaml + component.yaml
 └── images/
-    └── Dockerfile       # dkmv-sandbox image
+    └── Dockerfile       # dkmv-sandbox image (includes Claude Code + Codex CLI)
 ```
 
 ---
