@@ -292,7 +292,7 @@ dkmv plan --branch feature/auth --prd requirements.md --design-docs ./docs/  # i
 dkmv plan --branch feature/auth --prd requirements.md --auto                  # skip pause points
 ```
 
-**Produces:** `docs/implementation/{feature}/` with `features.md`, `user_stories.md`, phased task files, `tasks.md`, and a `CLAUDE.md` that guides the Dev agent.
+**Produces:** `docs/implementation/{feature}/` with `features.md`, `user_stories.md`, phased task files, `tasks.md`, `README.md`, and a `GUIDE.md` that guides the Dev agent.
 
 ### Dev
 

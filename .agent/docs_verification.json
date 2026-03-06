@@ -1,0 +1,23 @@
+{
+  "status": "pass",
+  "issues_found": 8,
+  "issues_fixed": 8,
+  "checks": [
+    {
+      "check": "accuracy",
+      "status": "fail_fixed",
+      "details": "Found and fixed 6 accuracy issues:\n1. docs/architecture_overview.md: AgentAdapter Protocol diagram showed `get_env_overrides(config)` but actual signature (base.py) is `get_env_overrides()` with no config param. Fixed.\n2. docs/architecture_overview.md: Codex adapter diagram showed `--full-auto` flag which does not exist in CodexCLIAdapter.build_command(). Actual flags are `--json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`. Fixed to `--dangerously-bypass-approvals-and-sandbox`.\n3. docs/architecture_overview.md: TaskDefinition code block was missing `agent: str | None = None` field (present in tasks/models.py). Fixed.\n4. docs/architecture_overview.md: ComponentManifest code block was missing `agent: str | None = None` field (present in tasks/manifest.py). Fixed.\n5. docs/architecture_overview.md: ManifestTaskRef code block was missing `agent: str | None = None` field (present in tasks/manifest.py). Fixed.\n6. docs/architecture_overview.md: Plan component table showed task 4 assembles 'CLAUDE.md' but actual 04-assembly.yaml produces 'GUIDE.md'. Fixed."
+    },
+    {
+      "check": "consistency",
+      "status": "fail_fixed",
+      "details": "Found and fixed 1 consistency issue:\nREADME.md Plan section said 'a CLAUDE.md that guides the Dev agent' but architecture_overview.md (now corrected) and the actual plan component produce 'GUIDE.md'. README.md also lacked 'README.md' from the listed outputs. Fixed both."
+    },
+    {
+      "check": "completeness",
+      "status": "fail_fixed",
+      "details": "Found and fixed 1 completeness issue:\ndocs/architecture_overview.md Environment Variables table was missing CODEX_API_KEY, DKMV_AGENT, and CLAUDE_CODE_OAUTH_TOKEN — all added by the multi-agent adapter implementation. These were already present in README.md's config table but absent from the architecture overview. Fixed by adding all three rows."
+    }
+  ],
+  "summary": "8 issues found and fixed across README.md and docs/architecture_overview.md. The most significant issues were: (1) a wrong method signature in the AgentAdapter Protocol diagram (get_env_overrides had a spurious config parameter), (2) an incorrect CLI flag in the Codex adapter diagram (--full-auto does not exist; the adapter uses --dangerously-bypass-approvals-and-sandbox), (3) three model code blocks missing the newly-added agent field, (4) the plan assembly task referencing CLAUDE.md instead of the correct GUIDE.md, and (5) the architecture overview env vars table missing three new variables. All issues are now fixed. CHANGELOG.md was accurate and required no changes."
+}
