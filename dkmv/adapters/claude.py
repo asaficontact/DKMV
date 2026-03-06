@@ -169,16 +169,9 @@ class ClaudeCodeAdapter:
     def gitignore_entries(self) -> list[str]:
         return [".claude/"]
 
-    def get_auth_env_vars(self, config: DKMVConfig) -> dict[str, str]:
-        if config.auth_method == "oauth":
-            if config.claude_oauth_token:
-                return {"CLAUDE_CODE_OAUTH_TOKEN": config.claude_oauth_token}
-            return {}
-        return {"ANTHROPIC_API_KEY": config.anthropic_api_key}
-
-    def get_docker_args(self, config: DKMVConfig) -> tuple[list[str], Path | None]:
+    def get_auth_config(self, config: DKMVConfig) -> tuple[dict[str, str], list[str], Path | None]:
         if config.auth_method != "oauth":
-            return ([], None)
+            return ({"ANTHROPIC_API_KEY": config.anthropic_api_key}, [], None)
 
         from dkmv.config import _fetch_oauth_credentials
 
@@ -186,7 +179,7 @@ class ClaudeCodeAdapter:
         host_creds_path = Path.home() / ".claude" / ".credentials.json"
 
         if creds_json:
-            # macOS: write Keychain credentials to a temp file and bind-mount it
+            # macOS: Keychain credentials → bind-mount, NO env var
             tf = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".json", prefix="dkmv-creds-", delete=False
             )
@@ -197,16 +190,20 @@ class ClaudeCodeAdapter:
                 "-v",
                 f"{temp_creds_file}:/home/dkmv/.claude/.credentials.json:ro",
             ]
-            return (docker_args, temp_creds_file)
+            return ({}, docker_args, temp_creds_file)
         elif host_creds_path.exists():
-            # Linux: bind-mount the credentials file directly
+            # Linux: creds file on disk → bind-mount, NO env var
             docker_args = [
                 "-v",
                 f"{host_creds_path}:/home/dkmv/.claude/.credentials.json:ro",
             ]
-            return (docker_args, None)
+            return ({}, docker_args, None)
         else:
-            return ([], None)
+            # Last resort: pass token as env var
+            env_vars: dict[str, str] = {}
+            if config.claude_oauth_token:
+                env_vars["CLAUDE_CODE_OAUTH_TOKEN"] = config.claude_oauth_token
+            return (env_vars, [], None)
 
     def get_env_overrides(self) -> dict[str, str]:
         return {}

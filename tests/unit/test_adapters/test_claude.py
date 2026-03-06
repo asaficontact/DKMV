@@ -1,5 +1,7 @@
 """Tests for ClaudeCodeAdapter — unit tests and regression tests."""
 
+from pathlib import Path
+
 import pytest
 
 from dkmv.adapters.base import StreamResult
@@ -371,50 +373,69 @@ def test_validate_model_non_claude(adapter):
 
 
 # ---------------------------------------------------------------------------
-# get_auth_env_vars tests
+# get_auth_config tests
 # ---------------------------------------------------------------------------
 
 
-def test_get_auth_env_vars_api_key(adapter):
+def test_get_auth_config_api_key(adapter):
     from unittest.mock import MagicMock
 
     config = MagicMock()
     config.auth_method = "api_key"
     config.anthropic_api_key = "sk-test-key"
-    result = adapter.get_auth_env_vars(config)
-    assert result == {"ANTHROPIC_API_KEY": "sk-test-key"}
+    env_vars, docker_args, temp_file = adapter.get_auth_config(config)
+    assert env_vars == {"ANTHROPIC_API_KEY": "sk-test-key"}
+    assert docker_args == []
+    assert temp_file is None
 
 
-def test_get_auth_env_vars_oauth_with_token(adapter):
-    from unittest.mock import MagicMock
+def test_get_auth_config_oauth_no_creds_file_with_token(adapter):
+    from unittest.mock import MagicMock, patch
 
     config = MagicMock()
     config.auth_method = "oauth"
     config.claude_oauth_token = "oauth-token-xyz"
-    result = adapter.get_auth_env_vars(config)
-    assert result == {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-token-xyz"}
+    with (
+        patch("dkmv.config._fetch_oauth_credentials", return_value=""),
+        patch("dkmv.adapters.claude.Path.home", return_value=Path("/nonexistent")),
+    ):
+        env_vars, docker_args, temp_file = adapter.get_auth_config(config)
+    assert env_vars == {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-token-xyz"}
+    assert docker_args == []
+    assert temp_file is None
 
 
-def test_get_auth_env_vars_oauth_no_token(adapter):
-    from unittest.mock import MagicMock
+def test_get_auth_config_oauth_no_creds_file_no_token(adapter):
+    from unittest.mock import MagicMock, patch
 
     config = MagicMock()
     config.auth_method = "oauth"
     config.claude_oauth_token = ""
-    result = adapter.get_auth_env_vars(config)
-    assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# get_docker_args tests
-# ---------------------------------------------------------------------------
-
-
-def test_get_docker_args_api_key_no_args(adapter):
-    from unittest.mock import MagicMock
-
-    config = MagicMock()
-    config.auth_method = "api_key"
-    docker_args, temp_file = adapter.get_docker_args(config)
+    with (
+        patch("dkmv.config._fetch_oauth_credentials", return_value=""),
+        patch("dkmv.adapters.claude.Path.home", return_value=Path("/nonexistent")),
+    ):
+        env_vars, docker_args, temp_file = adapter.get_auth_config(config)
+    assert env_vars == {}
     assert docker_args == []
     assert temp_file is None
+
+
+def test_get_auth_config_oauth_keychain_skips_env_var(adapter):
+    """When Keychain creds are available, env var is NOT set (avoids stale token)."""
+    from unittest.mock import MagicMock, patch
+
+    config = MagicMock()
+    config.auth_method = "oauth"
+    config.claude_oauth_token = "oauth-token-xyz"
+    creds_json = '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}'
+    with patch("dkmv.config._fetch_oauth_credentials", return_value=creds_json):
+        env_vars, docker_args, temp_file = adapter.get_auth_config(config)
+    try:
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in env_vars
+        assert "ANTHROPIC_API_KEY" not in env_vars
+        assert "-v" in docker_args
+        assert temp_file is not None
+    finally:
+        if temp_file:
+            temp_file.unlink(missing_ok=True)

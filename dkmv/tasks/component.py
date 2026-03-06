@@ -80,8 +80,8 @@ class ComponentRunner:
         # Collect credentials for all needed agents
         for agent_name in agents_needed:
             agent_adapter = get_adapter(agent_name)
-            env_vars.update(agent_adapter.get_auth_env_vars(config))
-            extra_args, creds_file = agent_adapter.get_docker_args(config)
+            auth_env, extra_args, creds_file = agent_adapter.get_auth_config(config)
+            env_vars.update(auth_env)
             docker_args.extend(extra_args)
             if creds_file is not None:
                 temp_creds_file = creds_file

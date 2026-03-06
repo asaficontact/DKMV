@@ -319,28 +319,23 @@ def test_get_env_overrides_empty():
     assert CodexCLIAdapter().get_env_overrides() == {}
 
 
-def test_get_docker_args_empty():
-    from unittest.mock import MagicMock
-
-    config = MagicMock()
-    args, creds = CodexCLIAdapter().get_docker_args(config)
-    assert args == []
-    assert creds is None
-
-
-def test_get_auth_env_vars_with_key():
+def test_get_auth_config_with_key():
     from unittest.mock import MagicMock
 
     config = MagicMock()
     config.codex_api_key = "sk-mykey"
-    result = CodexCLIAdapter().get_auth_env_vars(config)
-    assert result == {"CODEX_API_KEY": "sk-mykey"}
+    env_vars, docker_args, temp_file = CodexCLIAdapter().get_auth_config(config)
+    assert env_vars == {"CODEX_API_KEY": "sk-mykey"}
+    assert docker_args == []
+    assert temp_file is None
 
 
-def test_get_auth_env_vars_empty_key():
+def test_get_auth_config_empty_key():
     from unittest.mock import MagicMock
 
     config = MagicMock()
     config.codex_api_key = ""
-    result = CodexCLIAdapter().get_auth_env_vars(config)
-    assert result == {}
+    env_vars, docker_args, temp_file = CodexCLIAdapter().get_auth_config(config)
+    assert env_vars == {}
+    assert docker_args == []
+    assert temp_file is None

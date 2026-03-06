@@ -41,16 +41,20 @@ def test_codex_empty_api_key_returns_empty_auth():
     adapter = get_adapter("codex")
     config = MagicMock()
     config.codex_api_key = ""
-    result = adapter.get_auth_env_vars(config)
-    assert result == {}
+    env_vars, docker_args, temp_file = adapter.get_auth_config(config)
+    assert env_vars == {}
+    assert docker_args == []
+    assert temp_file is None
 
 
 def test_codex_with_api_key_returns_env_var():
     adapter = get_adapter("codex")
     config = MagicMock()
     config.codex_api_key = "sk-test-key"
-    result = adapter.get_auth_env_vars(config)
-    assert result.get("CODEX_API_KEY") == "sk-test-key"
+    env_vars, docker_args, temp_file = adapter.get_auth_config(config)
+    assert env_vars.get("CODEX_API_KEY") == "sk-test-key"
+    assert docker_args == []
+    assert temp_file is None
 
 
 # ---------------------------------------------------------------------------

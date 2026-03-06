@@ -113,12 +113,6 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 # Install Codex CLI globally. Version is pinned via --build-arg CODEX_VERSION.
 RUN npm install -g @openai/codex@${CODEX_VERSION}
 
-# Pre-configure Codex for headless Docker usage
-RUN mkdir -p /home/dkmv/.codex \
-    && printf '[sandbox_workspace_write]\nnetwork_access = true\n' \
-       > /home/dkmv/.codex/config.toml \
-    && chown -R dkmv:dkmv /home/dkmv/.codex
-
 # ---------------------------------------------------------------------------
 # Non-root user: dkmv
 # ---------------------------------------------------------------------------
@@ -143,7 +137,9 @@ RUN userdel --remove node \
 # ---------------------------------------------------------------------------
 # /home/dkmv/workspace - cloned repo (created at runtime by BaseComponent)
 # /home/dkmv/.claude   - Claude Code config/state directory
-RUN mkdir -p /home/dkmv/workspace /home/dkmv/.claude \
+RUN mkdir -p /home/dkmv/workspace /home/dkmv/.claude /home/dkmv/.codex \
+    && printf '[sandbox_workspace_write]\nnetwork_access = true\n' \
+       > /home/dkmv/.codex/config.toml \
     && chown -R dkmv:dkmv /home/dkmv
 
 # ---------------------------------------------------------------------------

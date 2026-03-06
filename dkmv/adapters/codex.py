@@ -186,14 +186,12 @@ class CodexCLIAdapter:
     def gitignore_entries(self) -> list[str]:
         return [".codex/"]
 
-    def get_auth_env_vars(self, config: DKMVConfig) -> dict[str, str]:
+    def get_auth_config(self, config: DKMVConfig) -> tuple[dict[str, str], list[str], Path | None]:
+        env_vars: dict[str, str] = {}
         key = config.codex_api_key
         if key:
-            return {"CODEX_API_KEY": key}
-        return {}
-
-    def get_docker_args(self, config: DKMVConfig) -> tuple[list[str], Path | None]:
-        return ([], None)
+            env_vars["CODEX_API_KEY"] = key
+        return (env_vars, [], None)
 
     def get_env_overrides(self) -> dict[str, str]:
         return {}

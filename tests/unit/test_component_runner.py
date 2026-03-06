@@ -2342,7 +2342,7 @@ class TestBuildSandboxConfigGithubToken:
         assert "GITHUB_TOKEN" not in result.env_vars
 
     def test_build_sandbox_config_oauth_keychain(self, tmp_path: Path) -> None:
-        """auth_method=oauth + Keychain credentials → temp file bind-mount + env var."""
+        """auth_method=oauth + Keychain credentials → bind-mount only, NO env var."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2354,8 +2354,7 @@ class TestBuildSandboxConfigGithubToken:
         with patch("dkmv.config._fetch_oauth_credentials", return_value=creds_json):
             result, temp_file = runner._build_sandbox_config(config, 30)
         try:
-            # Adapter puts OAuth token in env_vars AND creates bind-mount
-            assert result.env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-test"
+            assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
             assert "ANTHROPIC_API_KEY" not in result.env_vars
             assert "-v" in result.docker_args
             assert temp_file is not None
@@ -2368,7 +2367,7 @@ class TestBuildSandboxConfigGithubToken:
                 temp_file.unlink(missing_ok=True)
 
     def test_build_sandbox_config_oauth_linux_creds_file(self, tmp_path: Path) -> None:
-        """auth_method=oauth + no Keychain + Linux creds file → bind-mount file + env var."""
+        """auth_method=oauth + no Keychain + Linux creds file → bind-mount only, NO env var."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2386,8 +2385,7 @@ class TestBuildSandboxConfigGithubToken:
         ):
             result, temp_file = runner._build_sandbox_config(config, 30)
         assert temp_file is None
-        # Adapter puts OAuth token in env_vars AND creates bind-mount
-        assert result.env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-test"
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
         assert "-v" in result.docker_args
         mount_arg = result.docker_args[result.docker_args.index("-v") + 1]
         assert str(creds_file) in mount_arg
