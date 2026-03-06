@@ -1,7 +1,0 @@
-Output directory: docs/implementation/codex-adapter
-Documents created:
-- docs/implementation/codex-adapter/tasks.md (59 tasks)
-- docs/implementation/codex-adapter/progress.md
-- docs/implementation/codex-adapter/README.md
-- docs/implementation/codex-adapter/CLAUDE.md
-- docs/implementation/codex-adapter/prd.md (copy)
