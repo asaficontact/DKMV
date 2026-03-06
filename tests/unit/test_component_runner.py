@@ -117,6 +117,7 @@ def _mock_config() -> MagicMock:
     cfg.output_dir = Path("./outputs")
     cfg.image_name = "dkmv-sandbox:latest"
     cfg.memory_limit = "8g"
+    cfg.default_agent = "claude"
     return cfg
 
 
@@ -1378,7 +1379,7 @@ class TestPromptsLog:
         component_runner._save_prompts_log(result.run_id, comp_dir.name, result.task_results)
 
         content = (run_dir / "prompts_log.md").read_text()
-        assert "### CLAUDE.md" in content
+        assert "### Instructions" in content
         assert "DKMV Agent" in content
 
     async def test_prompts_log_includes_prompt_content(
@@ -1798,7 +1799,7 @@ class TestAgentMdFile:
     ) -> None:
         comp_dir = _create_manifest_component_dir(tmp_path, num_tasks=1)
         task_loader.load_manifest.return_value = _mock_manifest(
-            agent_md_file="/nonexistent/CLAUDE.md",
+            agent_md_file="/nonexistent/GUIDE.md",
             tasks=[_mock_task_ref("01-task1.yaml")],
         )
         task_loader.load.return_value = _make_task("task1")
@@ -2341,7 +2342,7 @@ class TestBuildSandboxConfigGithubToken:
         assert "GITHUB_TOKEN" not in result.env_vars
 
     def test_build_sandbox_config_oauth_keychain(self, tmp_path: Path) -> None:
-        """auth_method=oauth + Keychain credentials → temp file bind-mount."""
+        """auth_method=oauth + Keychain credentials → bind-mount only, NO env var."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2350,7 +2351,7 @@ class TestBuildSandboxConfigGithubToken:
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
         creds_json = '{"claudeAiOauth":{"accessToken":"at","refreshToken":"rt"}}'
-        with patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=creds_json):
+        with patch("dkmv.config._fetch_oauth_credentials", return_value=creds_json):
             result, temp_file = runner._build_sandbox_config(config, 30)
         try:
             assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
@@ -2366,7 +2367,7 @@ class TestBuildSandboxConfigGithubToken:
                 temp_file.unlink(missing_ok=True)
 
     def test_build_sandbox_config_oauth_linux_creds_file(self, tmp_path: Path) -> None:
-        """auth_method=oauth + no Keychain + Linux creds file → bind-mount file."""
+        """auth_method=oauth + no Keychain + Linux creds file → bind-mount only, NO env var."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2379,8 +2380,8 @@ class TestBuildSandboxConfigGithubToken:
         creds_file = fake_claude / ".credentials.json"
         creds_file.write_text("{}")
         with (
-            patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=""),
-            patch("dkmv.tasks.component.Path.home", return_value=tmp_path),
+            patch("dkmv.config._fetch_oauth_credentials", return_value=""),
+            patch("dkmv.adapters.claude.Path.home", return_value=tmp_path),
         ):
             result, temp_file = runner._build_sandbox_config(config, 30)
         assert temp_file is None
@@ -2391,7 +2392,7 @@ class TestBuildSandboxConfigGithubToken:
         assert mount_arg.endswith(":ro")
 
     def test_build_sandbox_config_oauth_env_var_fallback(self) -> None:
-        """auth_method=oauth + no Keychain + no creds file → env var fallback."""
+        """auth_method=oauth + no Keychain + no creds file → env var only."""
         config = _mock_config()
         config.auth_method = "oauth"
         config.claude_oauth_token = "sk-ant-oat01-test"
@@ -2400,8 +2401,8 @@ class TestBuildSandboxConfigGithubToken:
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
         with (
-            patch("dkmv.tasks.component._fetch_oauth_credentials", return_value=""),
-            patch("dkmv.tasks.component.Path.home", return_value=Path("/nonexistent")),
+            patch("dkmv.config._fetch_oauth_credentials", return_value=""),
+            patch("dkmv.adapters.claude.Path.home", return_value=Path("/nonexistent")),
         ):
             result, temp_file = runner._build_sandbox_config(config, 30)
         assert temp_file is None
@@ -2482,8 +2483,8 @@ class TestPromptsLogEdgeCases:
         assert log_file.exists()
         content = log_file.read_text()
         assert "## Task 1: task1" in content
-        # No CLAUDE.md or Prompt sections since files don't exist
-        assert "### CLAUDE.md" not in content
+        # No Instructions or Prompt sections since files don't exist
+        assert "### Instructions" not in content
         assert "### Prompt" not in content
 
     async def test_prompts_log_skips_empty_prompt_file(

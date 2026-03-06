@@ -193,7 +193,10 @@ class TestRunInvocation:
         call_kwargs = mock_runner.run.call_args[1]
         assert call_kwargs["feature_name"] == "my-comp"
 
-    def test_missing_repo_shows_error(self, tmp_path: Path) -> None:
+    def test_missing_repo_shows_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
         comp_dir = tmp_path / "my-comp"
         comp_dir.mkdir()
         (comp_dir / "01-task.yaml").write_text("name: t\ninstructions: x\nprompt: y\n")

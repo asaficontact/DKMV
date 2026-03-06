@@ -1,0 +1,123 @@
+# =============================================================================
+# Dev Component — Task 2: Implement
+# =============================================================================
+#
+# This task receives the plan from task 01 and implements the feature.
+# It writes code, writes tests, runs the test suite, and fixes any failures.
+# This is the most expensive task — it's where Claude does the heavy lifting.
+#
+# After implementation, changes are committed and pushed to the feature branch.
+#
+# Note on result fields: The Python DevResult model includes files_changed,
+# tests_passed, and tests_failed fields that are populated from the Claude Code
+# result event, not from container files. These are runtime-level fields that
+# the task executor extracts automatically — they don't need to be declared
+# as YAML outputs (which are for files read from the container).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+name: implement
+description: >
+  Execute the implementation plan — write code, write tests, run the test
+  suite, and fix any failures. Commit and push the result.
+commit: true
+push: true
+commit_message: "feat(dev): {{ feature_name }} [dkmv-dev]"
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+model: claude-sonnet-4-6
+max_turns: 100
+timeout_minutes: 30
+max_budget_usd: 5.00
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  # The PRD — needed so Claude can reference requirements while coding.
+  # Same stripped version as the planning task.
+  - name: prd
+    type: file
+    src: "{{ prd_path }}"
+    dest: /home/dkmv/workspace/.agent/prd.md
+
+  # Note: The plan from task 01 (.agent/plan.md) is already on disk
+  # because both tasks share the same container. No need to re-inject it.
+  # The prompt references it by path.
+
+  # Optional design documents (same as planning task)
+  - name: design_docs
+    type: file
+    src: "{{ design_docs_path }}"
+    dest: /home/dkmv/workspace/.agent/design_docs/
+    optional: true
+
+  # Optional feedback from a previous Judge/QA cycle
+  - name: feedback
+    type: file
+    src: "{{ feedback_path }}"
+    dest: /home/dkmv/workspace/.agent/feedback.json
+    optional: true
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  # The plan may be updated during implementation (e.g., if Claude discovers
+  # the plan needs adjustments). Save the final version.
+  - path: /home/dkmv/workspace/.agent/plan.md
+    required: false
+    save: true
+
+# ---------------------------------------------------------------------------
+# Instructions
+# ---------------------------------------------------------------------------
+instructions: |
+  ## Implementation Rules
+  - Follow the plan at `.agent/plan.md` precisely
+  - Write tests for all new public interfaces
+  - Run the full test suite before finishing — all tests must pass
+  - Follow existing code style and patterns in the codebase
+  - Commit with meaningful conventional commit messages using `[dkmv-dev]` suffix
+  - Do not push to main/master directly
+  - Do not modify unrelated files
+
+# ---------------------------------------------------------------------------
+# Prompt
+# ---------------------------------------------------------------------------
+prompt: |
+  You are a senior software engineer implementing a feature based on a PRD.
+
+  ## Your Task
+  Read the PRD at `.agent/prd.md` and implement ALL requirements in the codebase,
+  following the plan at `.agent/plan.md`.
+
+  {% if design_docs_path %}
+  ## Design Documents
+  Review the design documents in `.agent/design_docs/` for architectural context.
+  {% endif %}
+
+  ## Implementation Steps
+  1. Read the PRD at `.agent/prd.md` carefully
+  2. Read the implementation plan at `.agent/plan.md`
+  3. Execute the plan — write code following existing patterns and conventions
+  4. Write tests for your implementation
+  5. Run the test suite to verify nothing is broken
+  6. Fix any test failures
+  7. Ensure your code is clean and well-documented
+
+  {% if feedback_path %}
+  ## Previous Feedback
+  Review the feedback from a previous review cycle at `.agent/feedback.json`
+  and address all issues raised.
+  {% endif %}
+
+  ## Constraints
+  - Follow existing code style and patterns
+  - Do not modify unrelated files
+  - Write meaningful commit messages
+  - All tests must pass before you finish

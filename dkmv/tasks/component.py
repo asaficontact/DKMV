@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import shlex
-import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -11,7 +10,8 @@ from typing import Any
 
 from rich.console import Console
 
-from dkmv.config import DKMVConfig, _fetch_oauth_credentials
+from dkmv.adapters.base import AgentAdapter
+from dkmv.config import DKMVConfig, _fetch_oauth_credentials  # noqa: F401  (tests patch this)
 from dkmv.core.models import BaseComponentConfig, BaseResult, SandboxConfig
 from dkmv.core.runner import RunManager
 from dkmv.core.sandbox import SandboxManager, SandboxSession
@@ -58,48 +58,35 @@ class ComponentRunner:
         )
 
     def _build_sandbox_config(
-        self, config: DKMVConfig, timeout_minutes: int
+        self,
+        config: DKMVConfig,
+        timeout_minutes: int,
+        agents_needed: set[str] | None = None,
     ) -> tuple[SandboxConfig, Path | None]:
         """Build sandbox config and return (config, temp_credentials_file).
 
         The caller must delete the temp file (if not None) after the
         container stops.
         """
+        from dkmv.adapters import get_adapter
+
+        if agents_needed is None:
+            agents_needed = {"claude"}
+
         env_vars: dict[str, str] = {}
         docker_args: list[str] = []
         temp_creds_file: Path | None = None
 
-        if config.auth_method == "oauth":
-            creds_json = _fetch_oauth_credentials()
-            host_creds_path = Path.home() / ".claude" / ".credentials.json"
+        # Collect credentials for all needed agents
+        for agent_name in agents_needed:
+            agent_adapter = get_adapter(agent_name)
+            auth_env, extra_args, creds_file = agent_adapter.get_auth_config(config)
+            env_vars.update(auth_env)
+            docker_args.extend(extra_args)
+            if creds_file is not None:
+                temp_creds_file = creds_file
 
-            if creds_json:
-                # macOS: write Keychain credentials to a temp file and bind-mount it
-                tf = tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".json", prefix="dkmv-creds-", delete=False
-                )
-                tf.write(creds_json)
-                tf.close()
-                temp_creds_file = Path(tf.name)
-                docker_args.extend(
-                    [
-                        "-v",
-                        f"{temp_creds_file}:/home/dkmv/.claude/.credentials.json:ro",
-                    ]
-                )
-            elif host_creds_path.exists():
-                # Linux: bind-mount the credentials file directly
-                docker_args.extend(
-                    [
-                        "-v",
-                        f"{host_creds_path}:/home/dkmv/.claude/.credentials.json:ro",
-                    ]
-                )
-            else:
-                env_vars["CLAUDE_CODE_OAUTH_TOKEN"] = config.claude_oauth_token
-        else:
-            env_vars["ANTHROPIC_API_KEY"] = config.anthropic_api_key
-
+        # GitHub token always included (agent-agnostic)
         if config.github_token:
             env_vars["GITHUB_TOKEN"] = config.github_token
 
@@ -120,6 +107,8 @@ class ComponentRunner:
         component_name: str,
         *,
         has_github_token: bool = True,
+        adapter: AgentAdapter | None = None,
+        agents_needed: set[str] | None = None,
     ) -> None:
         if has_github_token:
             auth_result = await self._sandbox.setup_git_auth(session)
@@ -149,13 +138,30 @@ class ComponentRunner:
             f" && git config user.email {shlex.quote(AGENT_EMAIL)}",
         )
 
-        await self._sandbox.execute(
-            session,
-            f"cd {WORKSPACE_DIR} && mkdir -p .agent"
-            " && (grep -qxF '.claude/' .gitignore 2>/dev/null"
-            ' || { [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]'
-            " && echo >> .gitignore; echo '.claude/' >> .gitignore; })",
-        )
+        # Collect gitignore entries from all needed agents
+        if agents_needed:
+            from dkmv.adapters import get_adapter as _get_adapter
+
+            seen: set[str] = set()
+            gitignore_entries: list[str] = []
+            for agent_name in agents_needed:
+                for entry in _get_adapter(agent_name).gitignore_entries:
+                    if entry not in seen:
+                        seen.add(entry)
+                        gitignore_entries.append(entry)
+        elif adapter is not None:
+            gitignore_entries = adapter.gitignore_entries
+        else:
+            gitignore_entries = [".claude/"]
+
+        gitignore_cmds = [f"cd {WORKSPACE_DIR} && mkdir -p .agent"]
+        for entry in gitignore_entries:
+            gitignore_cmds.append(
+                f"(grep -qxF {shlex.quote(entry)} .gitignore 2>/dev/null"
+                f' || {{ [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]'
+                f" && echo >> .gitignore; echo {shlex.quote(entry)} >> .gitignore; }})"
+            )
+        await self._sandbox.execute(session, " && ".join(gitignore_cmds))
 
     def _build_variables(
         self,
@@ -234,6 +240,52 @@ class ComponentRunner:
                     env_vars[inp.key] = inp.value
         return env_vars
 
+    async def _inject_context_files(
+        self, session: SandboxSession, context_paths: list[Path]
+    ) -> list[str]:
+        """Copy ad-hoc context files into .agent/context/ in the container.
+
+        Returns list of container-relative paths for agent instructions.
+        """
+        if not context_paths:
+            return []
+        await self._sandbox.execute(session, f"mkdir -p {WORKSPACE_DIR}/.agent/context")
+        # Prevent the agent from committing potentially huge context files
+        await self._sandbox.execute(
+            session,
+            f"cd {WORKSPACE_DIR}"
+            " && (grep -qxF '.agent/context/' .gitignore 2>/dev/null"
+            ' || { [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]'
+            " && echo >> .gitignore; echo '.agent/context/' >> .gitignore; })",
+        )
+        injected: list[str] = []
+        for path in context_paths:
+            if path.is_dir():
+                for file_path in path.rglob("*"):
+                    if not file_path.is_file():
+                        continue
+                    try:
+                        content = file_path.read_text()
+                    except (UnicodeDecodeError, ValueError):
+                        logger.warning("Skipping non-text file: %s", file_path)
+                        continue
+                    rel = file_path.relative_to(path)
+                    dest = f"{WORKSPACE_DIR}/.agent/context/{path.name}/{rel}"
+                    await self._sandbox.write_file(session, dest, content)
+                    injected.append(f".agent/context/{path.name}/{rel}")
+            elif path.is_file():
+                try:
+                    content = path.read_text()
+                except (UnicodeDecodeError, ValueError):
+                    logger.warning("Skipping non-text file: %s", path)
+                    continue
+                dest = f"{WORKSPACE_DIR}/.agent/context/{path.name}"
+                await self._sandbox.write_file(session, dest, content)
+                injected.append(f".agent/context/{path.name}")
+            else:
+                logger.warning("Context path not found: %s", path)
+        return injected
+
     async def _create_workspace_dirs(
         self, manifest: ComponentManifest, session: SandboxSession
     ) -> None:
@@ -252,6 +304,11 @@ class ComponentRunner:
         manifest: ComponentManifest,
         task_ref: ManifestTaskRef | None,
     ) -> None:
+        if task.agent is None:
+            if task_ref and task_ref.agent is not None:
+                task.agent = task_ref.agent
+            elif manifest.agent is not None:
+                task.agent = manifest.agent
         if task.model is None:
             if task_ref and task_ref.model is not None:
                 task.model = task_ref.model
@@ -312,13 +369,55 @@ class ComponentRunner:
 
         return PauseRequest(task_name=task_name, questions=questions, context=context)
 
+    @staticmethod
+    def _resolve_start_task(
+        start_task: str,
+        expanded_refs: list[tuple[Path, ManifestTaskRef | None, dict[str, Any] | None, int | None]],
+    ) -> int:
+        """Resolve --start-task value to a 0-based index into expanded_refs."""
+        if start_task.isdigit():
+            idx = int(start_task)
+            if idx < 1 or idx > len(expanded_refs):
+                available = ", ".join(str(i + 1) for i in range(len(expanded_refs)))
+                raise ValueError(
+                    f"Task index {idx} out of range (1-{len(expanded_refs)}). "
+                    f"Available: {available}"
+                )
+            return idx - 1
+
+        for i, (yaml_file, *_) in enumerate(expanded_refs):
+            stem = yaml_file.stem
+            # Match exact stem ("04-assembly") or suffix after dash ("assembly")
+            if stem == start_task or stem.split("-", 1)[-1] == start_task:
+                return i
+
+        names = [ref[0].stem for ref in expanded_refs]
+        raise ValueError(f"Task '{start_task}' not found. Available: {', '.join(names)}")
+
+    async def _reconstruct_task_from_repo(
+        self, task: TaskDefinition, session: SandboxSession
+    ) -> TaskResult:
+        """Read a skipped task's output files from the cloned repo."""
+        outputs: dict[str, str] = {}
+        for output in task.outputs:
+            if await self._sandbox.file_exists(session, output.path):
+                content = await self._sandbox.read_file(session, output.path)
+                outputs[output.path] = content
+            elif output.required:
+                raise FileNotFoundError(
+                    f"Cannot skip task '{task.name}': required output "
+                    f"'{Path(output.path).name}' not found in repo. "
+                    f"Was this task completed and pushed?"
+                )
+        return TaskResult(task_name=task.name, status="pre-existing", outputs=outputs)
+
     def _save_prompts_log(
         self,
         run_id: str,
         component_name: str,
         task_results: list[TaskResult],
     ) -> None:
-        """Assemble a unified prompts log from per-task CLAUDE.md and prompt files."""
+        """Assemble a unified prompts log from per-task instructions and prompt files."""
         run_dir = self._run_manager._run_dir(run_id)
         sections: list[str] = [f"# Component: {component_name} — Prompts & Instructions Log\n"]
 
@@ -327,7 +426,7 @@ class ComponentRunner:
 
             claude_md_file = run_dir / f"claude_md_{result.task_name}.md"
             if claude_md_file.exists():
-                sections.append("### CLAUDE.md\n")
+                sections.append("### Instructions\n")
                 sections.append(f"```markdown\n{claude_md_file.read_text()}```\n")
 
             prompt_file = run_dir / f"prompt_{result.task_name}.md"
@@ -353,6 +452,8 @@ class ComponentRunner:
         keep_alive: bool = False,
         verbose: bool = False,
         on_pause: Callable[[PauseRequest], Awaitable[PauseResponse]] | None = None,
+        context_paths: list[Path] | None = None,
+        start_task: str | None = None,
     ) -> ComponentResult:
         start_time = time.monotonic()
         session: SandboxSession | None = None
@@ -398,7 +499,31 @@ class ComponentRunner:
                 if cli_overrides.timeout_minutes is not None
                 else config.timeout_minutes
             )
-            sandbox_config, temp_creds_file = self._build_sandbox_config(config, timeout)
+            from dkmv.adapters import get_adapter
+
+            _agent_name = cli_overrides.agent or config.default_agent
+            adapter: AgentAdapter = get_adapter(_agent_name)
+
+            # Pre-scan manifest to determine agents_needed before sandbox start
+            agents_needed: set[str] = {_agent_name}
+            _manifest_path_prescan = component_dir / "component.yaml"
+            if _manifest_path_prescan.exists():
+                try:
+                    import yaml as _yaml
+
+                    _raw = _yaml.safe_load(_manifest_path_prescan.read_text())
+                    if isinstance(_raw, dict):
+                        if _raw.get("agent"):
+                            agents_needed.add(str(_raw["agent"]))
+                        for _ref in _raw.get("tasks", []):
+                            if isinstance(_ref, dict) and _ref.get("agent"):
+                                agents_needed.add(str(_ref["agent"]))
+                except Exception:
+                    pass  # Pre-scan failures are non-fatal
+
+            sandbox_config, temp_creds_file = self._build_sandbox_config(
+                config, timeout, agents_needed
+            )
             session = await self._sandbox.start(sandbox_config, component_dir.name)
 
             container_name = self._sandbox.get_container_name(session)
@@ -411,7 +536,12 @@ class ComponentRunner:
                 branch,
                 component_dir.name,
                 has_github_token=bool(config.github_token),
+                adapter=adapter,
+                agents_needed=agents_needed,
             )
+
+            # Inject ad-hoc context files
+            context_files = await self._inject_context_files(session, context_paths or [])
 
             # Load manifest if present
             manifest_path = component_dir / "component.yaml"
@@ -468,6 +598,11 @@ class ComponentRunner:
                 # No manifest: wrap plain yaml_files into expanded_refs format
                 expanded_refs = [(yf, None, None, None) for yf in yaml_files]
 
+            # Resolve --start-task to a 0-based index
+            start_index = 0
+            if start_task is not None:
+                start_index = self._resolve_start_task(start_task, expanded_refs)
+
             # Inject deterministic git identity env vars (highest git precedence)
             git_name = _agent_git_name(component_dir.name)
             git_identity_vars: dict[str, str] = {
@@ -505,6 +640,18 @@ class ComponentRunner:
                 if manifest is not None:
                     self._apply_manifest_defaults(task, manifest, task_ref)
 
+                # Reconstruct skipped tasks from repo instead of running them
+                if i < start_index:
+                    result = await self._reconstruct_task_from_repo(task, session)
+                    task_results.append(result)
+                    logger.info(
+                        "Skipped task '%s' (%d/%d) — outputs recovered from repo",
+                        task.name,
+                        i + 1,
+                        len(expanded_refs),
+                    )
+                    continue
+
                 self._run_manager.append_stream(
                     run_id,
                     {
@@ -524,6 +671,7 @@ class ComponentRunner:
                     cli_overrides,
                     component_agent_md=component_agent_md,
                     shared_env_vars=shared_env_vars,
+                    context_files=context_files,
                 )
                 task_results.append(result)
 

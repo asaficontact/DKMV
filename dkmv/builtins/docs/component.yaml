@@ -1,0 +1,24 @@
+name: docs
+description: >
+  Documentation and PR component: reviews implementation against plan docs,
+  updates all relevant documentation, verifies accuracy, and creates a
+  comprehensive pull request covering all branch changes.
+model: claude-sonnet-4-6
+max_turns: 80
+timeout_minutes: 25
+max_budget_usd: 3.00
+agent_md_file: "{{ impl_docs_path }}/GUIDE.md"
+
+inputs:
+  - name: impl_docs
+    type: file
+    src: "{{ impl_docs_path }}"
+    dest: impl_docs/
+
+tasks:
+  - file: 01-update-docs.yaml
+  - file: 02-verify.yaml
+  - file: 03-create-pr.yaml
+    max_turns: 60
+    timeout_minutes: 15
+    max_budget_usd: 1.50

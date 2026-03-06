@@ -1,0 +1,114 @@
+name: create-pr
+description: >
+  Clean up the agent workspace, review ALL changes on the branch
+  (implementation + documentation), compose a comprehensive pull request
+  description, and create the PR.
+commit: true
+push: true
+
+outputs:
+  - path: pr_result.json
+    required: true
+    save: true
+
+instructions: |
+  ## PR Creation Rules
+  - ALWAYS clean up the `.agent/` directory before creating the PR
+  - Review ALL changes on the branch — not just documentation
+  - The PR description must cover the entire implementation, not just docs
+  - Use `gh pr create` to create the pull request
+  - Do NOT modify implementation code or documentation — only clean up `.agent/` and create a PR
+  - If the PR already exists, update its description instead
+
+prompt: |
+  You are creating a comprehensive pull request for a feature implementation.
+
+  ## Context
+  This branch contains a complete feature implementation plus documentation
+  updates. The implementation docs at `.agent/impl_docs/` describe what was
+  planned. The docs manifest at `.agent/docs_manifest.json` and verification
+  report at `.agent/docs_verification.json` describe the documentation work.
+
+  ## Phase 1: Analyze All Branch Changes
+  1. Determine the base branch:
+  {% if pr_base is defined and pr_base %}
+     Use `{{ pr_base }}` as the base branch.
+  {% else %}
+     Run: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`
+     to determine the repository's default branch.
+  {% endif %}
+  2. Run `git log --oneline <base>..HEAD` to see all commits
+  3. Run `git diff <base>...HEAD --stat` to see all changed files
+  4. Read the implementation docs at `.agent/impl_docs/` for the feature overview
+  5. Read `.agent/docs_manifest.json` for documentation changes
+  6. Read `.agent/docs_verification.json` for the verification status
+
+  ## Phase 2: Compose PR Description
+  7. Write a PR title: short (under 70 chars), describes the feature outcome.
+     Use conventional format: `feat(<scope>): <description>`
+  8. Write the PR body with these sections:
+
+  ```
+  ## Summary
+  [1-3 sentences: what this PR does and why]
+
+  ## Changes
+  ### Implementation
+  - [Bullet points of key implementation changes, grouped by area]
+
+  ### Documentation
+  - [Bullet points of documentation changes]
+
+  ### Tests
+  - [Test results summary: total, passed, failed, coverage if available]
+
+  ## Breaking Changes
+  [List any breaking changes, or "None" if none]
+
+  ## Verification
+  - Documentation verification: [pass/fail from docs_verification.json]
+  - [Any other quality gates that were run]
+  ```
+
+  ## Phase 3: Clean Up Agent Workspace
+  This is MANDATORY. The `.agent/` directory contains pipeline scaffolding
+  (implementation docs, manifests, verification reports) that should not
+  appear in the final PR. You MUST remove it before creating the PR.
+
+  9. First, save the `pr_result.json` output (you will write it in Phase 4)
+     to a temporary location outside `.agent/`:
+     `cp .agent/pr_result.json /tmp/pr_result.json 2>/dev/null || true`
+  10. Commit any remaining `.agent/` files so they are preserved in git history:
+      `git add .agent/ && git commit -m "chore: save agent artifacts before cleanup" || true`
+  11. Remove the `.agent/` directory from the repository:
+      `git rm -r .agent/ && git commit -m "chore: remove agent workspace"`
+  12. Push both commits:
+      `git push origin HEAD`
+
+  ## Phase 4: Create the PR
+  13. Create the PR using:
+      `gh pr create --base <base_branch> --title "<title>" --body "<body>"`
+  14. If a PR already exists for this branch, run:
+      `gh pr edit --title "<title>" --body "<body>"`
+  15. Save the result to `.agent/pr_result.json`:
+      First recreate the directory: `mkdir -p .agent`
+      Then write the file:
+  ```json
+  {
+    "pr_url": "https://github.com/owner/repo/pull/42",
+    "pr_number": 42,
+    "pr_title": "feat(scope): description",
+    "base_branch": "main",
+    "status": "created|updated"
+  }
+  ```
+  NOTE: This `.agent/pr_result.json` is only for the framework to read back
+  the PR URL. It will NOT be committed (the cleanup already happened).
+
+  ## Constraints
+  - Do NOT modify implementation code or documentation files
+  - Do NOT skip the `.agent/` cleanup — it is mandatory
+  - The PR must cover ALL branch changes, not just documentation
+  - Be accurate — do not fabricate test results or changes
+  - If `gh pr create` fails, capture the error in pr_result.json with
+    status "failed" and include the error message

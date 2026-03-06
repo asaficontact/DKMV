@@ -28,4 +28,5 @@ htmlcov/
 
 
 # Docs
-docs/
+.dkmv/
+.claude/

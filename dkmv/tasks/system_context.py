@@ -12,7 +12,7 @@ build on yours.
 2. **Check `.agent/` for context.** This directory contains inputs (PRDs, design
    docs) and outputs from prior tasks. Review it to understand what came before you.
 3. **Follow your task instructions.** Your specific task is defined in the prompt.
-   The CLAUDE.md layers below provide component-wide and task-specific rules.
+   The instruction layers below provide component-wide and task-specific rules.
 4. **Follow existing conventions.** Read the codebase before writing. Match patterns
    and style.
 5. **Make reasonable decisions.** When facing ambiguity, choose the pragmatic path
@@ -26,6 +26,7 @@ build on yours.
 
 - **Workspace:** `/home/dkmv/workspace/`
 - **Agent directory:** `/home/dkmv/workspace/.agent/` (shared between tasks, committed to git)
+- **Context files:** `.agent/context/` is gitignored — do NOT commit it (files may be very large)
 - **Git:** Pre-configured with auth. You can commit and push.
 - **Tools:** Standard Linux tools, Python, Node.js are available.
 - **Constraints:** You have limited turns and budget. Be efficient.

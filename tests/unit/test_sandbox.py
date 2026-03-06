@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
+from dkmv.adapters.claude import ClaudeCodeAdapter
 from dkmv.core.models import SandboxConfig
 from dkmv.core.sandbox import CommandResult, SandboxManager, SandboxSession
 
@@ -239,10 +240,10 @@ class TestSandboxManagerHelpers:
 
 
 class TestStreamClaude:
-    async def test_stream_claude_basic_flow(
+    async def test_stream_agent_basic_flow(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
-        """Test stream_claude yields parsed events from JSONL output."""
+        """Test stream_agentyields parsed events from JSONL output."""
         import json
 
         result_event = json.dumps(
@@ -304,7 +305,8 @@ class TestStreamClaude:
         session.deployment.runtime.close_session = AsyncMock()
 
         events = []
-        async for event in sandbox_manager.stream_claude(
+        async for event in sandbox_manager.stream_agent(
+            ClaudeCodeAdapter(),
             session=session,
             prompt="test prompt",
             model="claude-sonnet-4-6",
@@ -317,7 +319,7 @@ class TestStreamClaude:
         assert events[0]["type"] == "assistant"
         assert events[1]["type"] == "result"
 
-    async def test_stream_claude_handles_non_json_lines(
+    async def test_stream_agent_handles_non_json_lines(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
         """Non-JSON lines should be skipped without error."""
@@ -357,7 +359,8 @@ class TestStreamClaude:
         session.deployment.runtime.close_session = AsyncMock()
 
         events = []
-        async for event in sandbox_manager.stream_claude(
+        async for event in sandbox_manager.stream_agent(
+            ClaudeCodeAdapter(),
             session=session,
             prompt="test",
             model="m",
@@ -369,10 +372,10 @@ class TestStreamClaude:
         assert len(events) == 1
         assert events[0]["type"] == "result"
 
-    async def test_stream_claude_timeout(
+    async def test_stream_agent_timeout(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
-        """stream_claude should raise TimeoutError when timeout expires."""
+        """stream_agentshould raise TimeoutError when timeout expires."""
         alive_obs = MagicMock()
         alive_obs.output = "0"
         alive_obs.exit_code = 0
@@ -395,7 +398,8 @@ class TestStreamClaude:
         session.deployment.runtime.close_session = AsyncMock()
 
         with pytest.raises(TimeoutError):
-            async for _ in sandbox_manager.stream_claude(
+            async for _ in sandbox_manager.stream_agent(
+                ClaudeCodeAdapter(),
                 session=session,
                 prompt="test",
                 model="m",
@@ -413,7 +417,7 @@ class TestStreamClaude:
         assert session._extra_sessions == []
         assert session.deployment.runtime.close_session.await_count == 2
 
-    async def test_stream_claude_empty_pid_raises(
+    async def test_stream_agent_empty_pid_raises(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
         """S-3: Empty PID output should raise RuntimeError, not IndexError."""
@@ -427,7 +431,8 @@ class TestStreamClaude:
         session.deployment.runtime.close_session = AsyncMock()
 
         with pytest.raises(RuntimeError, match="Failed to launch Claude Code"):
-            async for _ in sandbox_manager.stream_claude(
+            async for _ in sandbox_manager.stream_agent(
+                ClaudeCodeAdapter(),
                 session=session,
                 prompt="test",
                 model="m",
@@ -478,7 +483,8 @@ class TestStreamClaudePidKill:
         session.deployment.runtime.close_session = AsyncMock()
 
         with pytest.raises(TimeoutError):
-            async for _ in sandbox_manager.stream_claude(
+            async for _ in sandbox_manager.stream_agent(
+                ClaudeCodeAdapter(),
                 session=session,
                 prompt="test",
                 model="m",
@@ -551,7 +557,8 @@ class TestStreamClaudeStderrLogging:
 
         with caplog.at_level(logging.WARNING, logger="dkmv.core.sandbox"):
             events = []
-            async for event in sandbox_manager.stream_claude(
+            async for event in sandbox_manager.stream_agent(
+                ClaudeCodeAdapter(),
                 session=session,
                 prompt="test",
                 model="m",
@@ -580,7 +587,8 @@ class TestStreamClaudePidValidation:
         session.deployment.runtime.close_session = AsyncMock()
 
         with pytest.raises(RuntimeError, match="invalid PID"):
-            async for _ in sandbox_manager.stream_claude(
+            async for _ in sandbox_manager.stream_agent(
+                ClaudeCodeAdapter(),
                 session=session,
                 prompt="test",
                 model="m",
@@ -649,7 +657,8 @@ class TestStreamClaudeBudgetFlag:
         session.deployment.runtime.write_file = AsyncMock()
 
         events = []
-        async for event in sandbox_manager.stream_claude(
+        async for event in sandbox_manager.stream_agent(
+            ClaudeCodeAdapter(),
             session=session,
             prompt="test",
             model="m",
@@ -665,7 +674,7 @@ class TestStreamClaudeBudgetFlag:
 
 
 class TestStreamClaudeEnvVars:
-    async def test_stream_claude_with_env_vars(
+    async def test_stream_agent_with_env_vars(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
         """IU-1: env_vars should produce 'env KEY=VALUE ...' prefix in command."""
@@ -722,7 +731,8 @@ class TestStreamClaudeEnvVars:
         session.deployment.runtime.close_session = AsyncMock()
         session.deployment.runtime.write_file = AsyncMock()
 
-        async for _ in sandbox_manager.stream_claude(
+        async for _ in sandbox_manager.stream_agent(
+            ClaudeCodeAdapter(),
             session=session,
             prompt="test",
             model="m",
@@ -737,7 +747,7 @@ class TestStreamClaudeEnvVars:
         assert "BAZ=" in launch_cmd
         assert launch_cmd.index("env ") < launch_cmd.index("claude -p")
 
-    async def test_stream_claude_without_env_vars_unchanged(
+    async def test_stream_agent_without_env_vars_unchanged(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
         """IU-1: No env_vars should produce no 'env ' prefix."""
@@ -794,7 +804,8 @@ class TestStreamClaudeEnvVars:
         session.deployment.runtime.close_session = AsyncMock()
         session.deployment.runtime.write_file = AsyncMock()
 
-        async for _ in sandbox_manager.stream_claude(
+        async for _ in sandbox_manager.stream_agent(
+            ClaudeCodeAdapter(),
             session=session,
             prompt="test",
             model="m",
@@ -808,7 +819,7 @@ class TestStreamClaudeEnvVars:
 
 
 class TestStreamClaudeResume:
-    async def test_stream_claude_resume_uses_resume_flag(
+    async def test_stream_agent_resume_uses_resume_flag(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
         """When resume_session_id is set, command includes --resume."""
@@ -865,7 +876,8 @@ class TestStreamClaudeResume:
         session.deployment.runtime.close_session = AsyncMock()
         session.deployment.runtime.write_file = AsyncMock()
 
-        async for _ in sandbox_manager.stream_claude(
+        async for _ in sandbox_manager.stream_agent(
+            ClaudeCodeAdapter(),
             session=session,
             prompt="Fix the output",
             model="m",
@@ -879,7 +891,7 @@ class TestStreamClaudeResume:
         assert "--resume" in launch_cmd
         assert "sess-abc-123" in launch_cmd
 
-    async def test_stream_claude_without_resume_uses_p_flag(
+    async def test_stream_agent_without_resume_uses_p_flag(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
         """Default behavior without resume_session_id uses -p flag."""
@@ -936,7 +948,8 @@ class TestStreamClaudeResume:
         session.deployment.runtime.close_session = AsyncMock()
         session.deployment.runtime.write_file = AsyncMock()
 
-        async for _ in sandbox_manager.stream_claude(
+        async for _ in sandbox_manager.stream_agent(
+            ClaudeCodeAdapter(),
             session=session,
             prompt="test",
             model="m",

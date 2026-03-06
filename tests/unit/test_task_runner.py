@@ -47,7 +47,7 @@ def _make_sandbox(**overrides: Any) -> AsyncMock:
             "session_id": "sess-test",
         }
 
-    sandbox.stream_claude = mock_stream
+    sandbox.stream_agent = mock_stream
     return sandbox
 
 
@@ -228,7 +228,7 @@ class TestInstructionsWriting:
 
 
 class TestParameterCascade:
-    async def test_task_model_wins(
+    async def test_cli_model_wins_over_task(
         self,
         sandbox: AsyncMock,
         run_manager: RunManager,
@@ -247,7 +247,7 @@ class TestParameterCascade:
                 "session_id": "s",
             }
 
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task(model="claude-opus-4-6")
@@ -257,7 +257,7 @@ class TestParameterCascade:
 
         await runner.run(task, session, run_id, config, CLIOverrides(model="claude-haiku-4-5"))
 
-        assert captured["model"] == "claude-opus-4-6"
+        assert captured["model"] == "claude-haiku-4-5"
 
     async def test_cli_model_used_when_task_none(
         self,
@@ -278,7 +278,7 @@ class TestParameterCascade:
                 "session_id": "s",
             }
 
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task()  # model=None
@@ -309,7 +309,7 @@ class TestParameterCascade:
                 "session_id": "s",
             }
 
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task()  # model=None
@@ -340,7 +340,7 @@ class TestParameterCascade:
                 "session_id": "s",
             }
 
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task(max_budget_usd=0.0)
@@ -379,6 +379,7 @@ class TestOutputCollection:
                 default_max_turns=10,
                 timeout_minutes=5,
                 max_budget_usd=None,
+                default_agent="claude",
             ),
             CLIOverrides(),
         )
@@ -408,6 +409,7 @@ class TestOutputCollection:
                 default_max_turns=10,
                 timeout_minutes=5,
                 max_budget_usd=None,
+                default_agent="claude",
             ),
             CLIOverrides(),
         )
@@ -444,6 +446,7 @@ class TestOutputCollection:
                 default_max_turns=10,
                 timeout_minutes=5,
                 max_budget_usd=None,
+                default_agent="claude",
             ),
             CLIOverrides(),
         )
@@ -474,6 +477,7 @@ class TestOutputCollection:
                 default_max_turns=10,
                 timeout_minutes=5,
                 max_budget_usd=None,
+                default_agent="claude",
             ),
             CLIOverrides(),
             component_agent_md="## Component Context",
@@ -694,7 +698,7 @@ class TestGitPushFailurePropagation:
                 "session_id": "sess-test",
             }
 
-        sandbox.stream_claude = success_stream
+        sandbox.stream_agent = success_stream
 
         # All commands succeed except git push
         async def selective_execute(session: Any, command: str, **kw: Any) -> MagicMock:
@@ -736,6 +740,145 @@ class TestGitPushFailurePropagation:
         await runner._git_teardown(task, session)
 
 
+class TestGitTeardownBeforeOutputValidation:
+    """Git teardown must run before output validation so work is never lost."""
+
+    async def test_git_push_happens_when_output_missing(
+        self,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+        session: MagicMock,
+        config: DKMVConfig,
+    ) -> None:
+        """Even when required output is missing, git push should still happen."""
+        push_called = False
+
+        async def success_stream(**kwargs: Any) -> Any:
+            yield {
+                "type": "result",
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "session_id": "",
+            }
+
+        async def tracking_execute(sess: Any, command: str, **kw: Any) -> MagicMock:
+            nonlocal push_called
+            if "git push" in command:
+                push_called = True
+            return MagicMock(output="", exit_code=0)
+
+        sandbox = _make_sandbox()
+        sandbox.stream_agent = success_stream
+        sandbox.execute = AsyncMock(side_effect=tracking_execute)
+        sandbox.file_exists = AsyncMock(return_value=False)
+
+        runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
+        task = _make_task(
+            commit=True,
+            push=True,
+            outputs=[TaskOutput(path="/workspace/missing.json", required=True)],
+        )
+        run_id = run_manager.start_run(
+            "dev", MagicMock(feature_name="test", model_dump=MagicMock(return_value={}))
+        )
+
+        result = await runner.run(task, session, run_id, config, CLIOverrides())
+
+        assert result.status == "failed"
+        assert "Required output missing" in result.error_message
+        assert push_called, "git push should have been called before output validation"
+
+    async def test_git_commit_happens_when_output_missing(
+        self,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+        session: MagicMock,
+        config: DKMVConfig,
+    ) -> None:
+        """Git commit should happen even when required output is missing."""
+        committed = False
+
+        async def success_stream(**kwargs: Any) -> Any:
+            yield {
+                "type": "result",
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "session_id": "",
+            }
+
+        async def tracking_execute(sess: Any, command: str, **kw: Any) -> MagicMock:
+            nonlocal committed
+            if "git commit" in command:
+                committed = True
+            if "git status --porcelain" in command:
+                return MagicMock(output="M file.py", exit_code=0)
+            return MagicMock(output="", exit_code=0)
+
+        sandbox = _make_sandbox()
+        sandbox.stream_agent = success_stream
+        sandbox.execute = AsyncMock(side_effect=tracking_execute)
+        sandbox.file_exists = AsyncMock(return_value=False)
+
+        runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
+        task = _make_task(
+            commit=True,
+            push=False,
+            outputs=[TaskOutput(path="/workspace/missing.json", required=True)],
+        )
+        run_id = run_manager.start_run(
+            "dev", MagicMock(feature_name="test", model_dump=MagicMock(return_value={}))
+        )
+
+        result = await runner.run(task, session, run_id, config, CLIOverrides())
+
+        assert result.status == "failed"
+        assert committed, "git commit should have been called before output validation"
+
+    async def test_push_failure_still_reports_error_not_output_error(
+        self,
+        run_manager: RunManager,
+        stream_parser: StreamParser,
+        session: MagicMock,
+        config: DKMVConfig,
+    ) -> None:
+        """If push fails, the error should be about push, not about missing outputs."""
+
+        async def success_stream(**kwargs: Any) -> Any:
+            yield {
+                "type": "result",
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "session_id": "",
+            }
+
+        async def failing_push(sess: Any, command: str, **kw: Any) -> MagicMock:
+            if "git push" in command:
+                return MagicMock(output="remote: Permission denied", exit_code=1)
+            return MagicMock(output="", exit_code=0)
+
+        sandbox = _make_sandbox()
+        sandbox.stream_agent = success_stream
+        sandbox.execute = AsyncMock(side_effect=failing_push)
+        # Output WOULD be present, but push fails first
+        sandbox.file_exists = AsyncMock(return_value=True)
+        sandbox.read_file = AsyncMock(return_value='{"status": "ok"}')
+
+        runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
+        task = _make_task(
+            commit=True,
+            push=True,
+            outputs=[TaskOutput(path="/workspace/result.json", required=True)],
+        )
+        run_id = run_manager.start_run(
+            "dev", MagicMock(feature_name="test", model_dump=MagicMock(return_value={}))
+        )
+
+        result = await runner.run(task, session, run_id, config, CLIOverrides())
+
+        assert result.status == "failed"
+        assert "git push failed" in result.error_message
+
+
 class TestErrorHandling:
     async def test_timeout_returns_timed_out(
         self,
@@ -749,7 +892,7 @@ class TestErrorHandling:
             raise TimeoutError("timed out")
             yield  # noqa: RET503 — make this an async generator
 
-        sandbox.stream_claude = timeout_stream
+        sandbox.stream_agent = timeout_stream
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
         task = _make_task()
@@ -823,7 +966,7 @@ class TestRetryWithResume:
         session: MagicMock,
         config: DKMVConfig,
     ) -> None:
-        """When output collection fails, stream_claude is called again with resume_session_id."""
+        """When output collection fails, stream_agent is called again with resume_session_id."""
         call_count = 0
 
         async def counting_stream(**kwargs: Any) -> Any:
@@ -837,7 +980,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = counting_stream
+        sandbox.stream_agent = counting_stream
         # Always fail to find the file
         sandbox.file_exists = AsyncMock(return_value=False)
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
@@ -874,7 +1017,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = counting_stream
+        sandbox.stream_agent = counting_stream
         # First call: missing, second call (after retry): found
         sandbox.file_exists = AsyncMock(side_effect=[False, True])
         sandbox.read_file = AsyncMock(return_value="report content")
@@ -933,7 +1076,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = no_session_stream
+        sandbox.stream_agent = no_session_stream
         sandbox.file_exists = AsyncMock(return_value=False)
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))
 
@@ -967,7 +1110,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = varying_cost_stream
+        sandbox.stream_agent = varying_cost_stream
         # First: missing, second (after retry): found
         sandbox.file_exists = AsyncMock(side_effect=[False, True])
         sandbox.read_file = AsyncMock(return_value="content")
@@ -1004,7 +1147,7 @@ class TestRetryWithResume:
             }
 
         sandbox = _make_sandbox()
-        sandbox.stream_claude = capturing_stream
+        sandbox.stream_agent = capturing_stream
         # First: missing, retry also missing
         sandbox.file_exists = AsyncMock(return_value=False)
         runner = TaskRunner(sandbox, run_manager, stream_parser, Console(quiet=True))

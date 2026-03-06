@@ -225,7 +225,55 @@ The task system handles component loading, task execution, and orchestration.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Layer 3: Core Infrastructure (`dkmv/core/`)
+### Layer 3: Agent Adapter System (`dkmv/adapters/`)
+
+The adapter layer abstracts agent-specific behavior behind a common `AgentAdapter` Protocol. This enables DKMV to run tasks with either Claude Code or the Codex CLI without changing the task system.
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                     AgentAdapter Protocol                       │
+│                                                                │
+│  name / display_name / instructions_path / gitignore_entries   │
+│  default_model / prepend_instructions / supports_*()           │
+│                                                                │
+│  build_command(prompt_file, model, max_turns, timeout, ...)    │
+│  parse_event(data) → StreamEvent | None                        │
+│  is_result_event(event) → bool                                 │
+│  extract_result(event) → StreamResult                          │
+│  get_auth_config(config) → (env_dict, extra_args, creds_file)  │
+│  get_env_overrides() → dict[str, str]                          │
+└────────────────────────────────────────────────────────────────┘
+          ▲                              ▲
+          │                              │
+┌─────────────────┐            ┌─────────────────┐
+│ ClaudeCodeAdapter│            │ CodexCLIAdapter  │
+│  (claude.py)    │            │  (codex.py)     │
+│                 │            │                 │
+│ Runs claude     │            │ Runs codex exec │
+│ --output-format │            │ --json          │
+│ stream-json     │            │ --dangerously-  │
+│                 │            │ bypass-approvals│
+│                 │            │ Accumulates     │
+│ Supports:       │            │ turn state for  │
+│  max_turns ✓    │            │ cost tracking   │
+│  max_budget ✓   │            │                 │
+│  resume ✓       │            │ Supports:       │
+└─────────────────┘            │  resume ✓       │
+                               └─────────────────┘
+```
+
+**Agent selection cascade (7 levels, highest wins):**
+1. Task YAML `agent:` field
+2. `ManifestTaskRef.agent` in `component.yaml`
+3. `ComponentManifest.agent` in `component.yaml`
+4. CLI `--agent` flag
+5. `.dkmv/config.json` project defaults
+6. `DKMV_AGENT` environment variable / `DKMVConfig.default_agent`
+7. Built-in default (`claude`)
+
+**Model-agent inference:** if `--model` is set without `--agent`, the model prefix determines the agent (`claude-*` → claude, `gpt-*` / `o<digit>*` → codex).
+
+### Layer 4: Core Infrastructure (`dkmv/core/`)
 
 Three managers provide the foundation:
 
@@ -261,6 +309,7 @@ class TaskDefinition(BaseModel):
     push: bool = True             # Git push after commit
 
     # Parameters (cascade from manifest → config if None)
+    agent: str | None = None
     model: str | None = None
     max_turns: int | None = None
     timeout_minutes: int | None = None
@@ -290,6 +339,7 @@ class ComponentManifest(BaseModel):
     agent_md_file: str | None = None      # Path to CLAUDE.md file
 
     # Component-level defaults (task_ref overrides these, task YAML overrides both)
+    agent: str | None = None
     model: str | None = None
     max_turns: int | None = None
     timeout_minutes: int | None = None
@@ -304,6 +354,7 @@ class ComponentManifest(BaseModel):
 ```python
 class ManifestTaskRef(BaseModel):
     file: str                              # YAML filename
+    agent: str | None = None               # Override agent for this task
     model: str | None = None               # Override manifest default
     max_turns: int | None = None
     timeout_minutes: int | None = None
@@ -488,7 +539,10 @@ Precedence (highest to lowest):
 | Variable | Default | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | (required) | Claude API authentication |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `""` | OAuth token (alternative to API key) |
 | `GITHUB_TOKEN` | `""` | Git operations + PR creation |
+| `CODEX_API_KEY` | `""` | OpenAI API key for Codex agent (`OPENAI_API_KEY` also accepted) |
+| `DKMV_AGENT` | `claude` | Default agent backend (`claude` or `codex`) |
 | `DKMV_MODEL` | `claude-sonnet-4-6` | Default Claude model |
 | `DKMV_MAX_TURNS` | `100` | Max Claude Code turns |
 | `DKMV_IMAGE` | `dkmv-sandbox:latest` | Docker image name |
@@ -582,7 +636,7 @@ Registry entries are stored in `.dkmv/components.json`. Component resolution ord
 | 1 | analyze | Deep PRD analysis, research, constraints. Output: `analysis.json` | Yes | $2.00 |
 | 2 | features-stories | Extract feature registry + user stories | No | $2.00 |
 | 3 | phases | Decompose into phases with task-level detail | No | $5.00 |
-| 4 | assembly | Assemble README, CLAUDE.md, tasks.md, progress.md | No | $2.00 |
+| 4 | assembly | Assemble README, GUIDE.md, tasks.md, progress.md | No | $2.00 |
 | 5 | evaluate-fix | 3-pass verification loop. Output: `plan_report.json` | No | $3.00 |
 
 **Key pattern:** Task 1 sets `output_dir` in `analysis.json`. All subsequent tasks reference it via `{{ tasks.analyze.outputs.analysis.output_dir }}`.

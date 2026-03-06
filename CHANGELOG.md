@@ -5,6 +5,37 @@ All notable changes to DKMV will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+#### Multi-Agent Adapter Architecture
+- `dkmv/adapters/` package — `AgentAdapter` Protocol with `ClaudeCodeAdapter` and `CodexCLIAdapter` implementations
+- `--agent` flag on all run commands (`plan`, `dev`, `qa`, `docs`, `run`) to select the AI backend (`claude` or `codex`)
+- `DKMV_AGENT` environment variable for setting the default agent globally
+- `CODEX_API_KEY` config field and `OPENAI_API_KEY` accepted as fallback for Codex authentication
+- `infer_agent_from_model()` — automatically selects agent from model prefix (`claude-*` → claude, `gpt-*` / `o<digit>*` → codex)
+- `validate_agent_model()` — validates model-agent compatibility and substitutes safe defaults on mismatch
+- 7-level agent resolution cascade: task YAML → task ref → manifest → CLI flag → project config → `DKMVConfig` → default
+- Mixed-agent component support: components can run different tasks with different agents; credentials for all required agents are passed into the container
+- `AGENTS.md` prepend behavior for Codex: task instructions are prepended to the prompt file
+
+#### Dockerfile
+- Codex CLI installed in `dkmv-sandbox` image alongside Claude Code
+- `--codex-version` flag on `dkmv build` to pin the Codex CLI npm package version
+
+#### Init
+- `dkmv init` discovers Codex API keys from `CODEX_API_KEY`, `OPENAI_API_KEY`, and `.env`
+- `dkmv init` auto-selects `codex` as the default agent when a Codex key is found and no Claude auth is available
+- `codex` auth method added: stored as `auth_method: "codex"` in `.dkmv/config.json`
+
+#### CLI
+- `--start-task <name-or-index>` on all run commands to resume from a specific task after a failure
+- `--start-phase <n>` on `dkmv dev` to resume from a specific phase number
+
+#### Task YAML
+- `agent` field on task definitions and component manifests — override the agent at task or component level
+
 ## [0.1.0] — 2026-02-17
 
 Initial release of DKMV v1 — a CLI tool that orchestrates AI agents via Claude Code in Docker containers to implement software features end-to-end.

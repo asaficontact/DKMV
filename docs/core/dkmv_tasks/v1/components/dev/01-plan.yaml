@@ -1,0 +1,142 @@
+# =============================================================================
+# Dev Component — Task 1: Explore & Plan
+# =============================================================================
+#
+# The dev component implements a feature from a PRD. In the current v1
+# architecture, planning and implementation happen in a single Claude Code
+# session. This task definition splits them into two discrete tasks for
+# better cost control, debuggability, and model flexibility.
+#
+# This first task reads the PRD, explores the codebase, and produces a plan.
+# It does NOT write any implementation code.
+#
+# Branch derivation: When no --branch is provided, the Python implementation
+# automatically derives the branch as `feature/{feature_name}-dev` in
+# pre_workspace_setup(). In the task-based system, this would be handled by
+# the runtime or a `branch_template` field (e.g., "feature/{{ feature_name }}-dev").
+#
+# Usage:
+#   dkmv run ./components/dev \
+#     --repo https://github.com/org/repo \
+#     --feature-name auth \
+#     --var prd_path=./prds/auth.md
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+name: plan
+description: >
+  Read the PRD and existing codebase to produce an implementation plan
+  covering architecture, file changes, dependencies, and test strategy.
+# Planning produces no code changes — nothing to commit.
+commit: false
+push: false
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+# Planning benefits from a more capable model with fewer turns — it's
+# mostly reading and reasoning, not writing large amounts of code.
+model: claude-sonnet-4-6
+max_turns: 50
+timeout_minutes: 15
+max_budget_usd: 0.75
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  # The PRD file from your machine. The dev component strips the
+  # "## Evaluation Criteria" section so the dev agent focuses on
+  # implementation, not self-evaluation. The QA and Judge components
+  # get the full PRD.
+  #
+  # In the current Python implementation, stripping happens in
+  # DevComponent._strip_eval_criteria(). In the task-based system,
+  # this would be handled by a pre-processing step or a built-in
+  # transform (e.g., `transform: strip-section("## Evaluation Criteria")`).
+  # For now, we assume the PRD is pre-processed or the prompt instructs
+  # Claude to ignore that section.
+  - name: prd
+    type: file
+    src: "{{ prd_path }}"
+    dest: /home/dkmv/workspace/.agent/prd.md
+
+  # Optional design documents directory. When provided, Claude gets
+  # architectural context that informs the plan.
+  - name: design_docs
+    type: file
+    src: "{{ design_docs_path }}"
+    dest: /home/dkmv/workspace/.agent/design_docs/
+    optional: true
+
+  # Optional feedback from a previous Judge/QA cycle. When provided,
+  # the planning task incorporates feedback from the last iteration.
+  - name: feedback
+    type: file
+    src: "{{ feedback_path }}"
+    dest: /home/dkmv/workspace/.agent/feedback.json
+    optional: true
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  # The implementation plan — passed to the next task (02-implement).
+  # In the Python implementation, plan extraction is best-effort (wrapped in
+  # try/except in post_teardown). We mark it required: false here to match
+  # that behavior — the task succeeds even if Claude doesn't produce a plan
+  # file, though the next task would fail without it.
+  - path: /home/dkmv/workspace/.agent/plan.md
+    required: false
+    save: true
+
+# ---------------------------------------------------------------------------
+# Instructions
+# ---------------------------------------------------------------------------
+instructions: |
+  ## Planning Rules
+  - Output the plan to `.agent/plan.md`
+  - Do NOT write any implementation code in this phase
+  - Do NOT modify any existing files
+  - Include sections for: architecture, file changes, dependencies, test strategy
+  - If design docs are available at `.agent/design_docs/`, incorporate them
+  - If feedback is available at `.agent/feedback.json`, address every issue raised
+
+# ---------------------------------------------------------------------------
+# Prompt
+# ---------------------------------------------------------------------------
+prompt: |
+  You are a senior software engineer planning a feature implementation based on a PRD.
+
+  ## Your Task
+  Read the PRD at `.agent/prd.md` and produce a comprehensive implementation plan.
+
+  {% if design_docs_path %}
+  ## Design Documents
+  Review the design documents in `.agent/design_docs/` for architectural context.
+  {% endif %}
+
+  ## Phase 1: Explore & Plan
+  1. Read the PRD at `.agent/prd.md` carefully
+  2. Explore the existing codebase structure to understand conventions
+  3. Produce a plan at `.agent/plan.md` with:
+     - Architecture overview — how the feature fits into the existing codebase
+     - Files to create/modify — every file, with a one-line summary of changes
+     - Dependencies — new packages or services needed
+     - Test strategy — what to test, how to test it, target coverage
+     - Implementation order — sequence of changes to minimize risk
+  4. Do NOT write implementation code until the plan is complete
+
+  {% if feedback_path %}
+  ## Previous Feedback
+  Review the feedback from a previous review cycle at `.agent/feedback.json`
+  and ensure your plan addresses all issues raised.
+  {% endif %}
+
+  ## Constraints
+  - Follow existing code style and patterns
+  - Do not modify any existing files
+  - Output only the plan to `.agent/plan.md`
+  - Ignore any "## Evaluation Criteria" section in the PRD — that is for reviewers

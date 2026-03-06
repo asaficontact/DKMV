@@ -1,0 +1,154 @@
+# =============================================================================
+# QA Component — Task 1: Evaluate Implementation
+# =============================================================================
+#
+# The QA component reviews a feature branch against its PRD. It runs the test
+# suite, evaluates each requirement, checks code quality, and produces a
+# structured JSON report.
+#
+# Key differences from the Dev component:
+# - Receives the FULL PRD (including Evaluation Criteria section)
+# - Does NOT modify implementation code
+# - Produces a structured qa_report.json as its primary output
+# - Force-commits the report to the branch so it's visible in the repo
+#
+# The QA component is a single-task component because its work is inherently
+# one coherent evaluation session. Splitting "run tests" from "evaluate
+# requirements" would lose context and produce a worse assessment.
+#
+# Usage:
+#   dkmv run ./components/qa \
+#     --repo https://github.com/org/repo \
+#     --branch feature/auth-dev \
+#     --var prd_path=./prds/auth.md
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+name: evaluate
+description: >
+  Review the implementation on a feature branch against the PRD. Run tests,
+  evaluate requirements and code quality, and produce a structured QA report.
+commit: true
+push: true
+commit_message: "feat(qa): {{ feature_name }} [dkmv-qa]"
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+# QA needs enough turns to: explore the codebase, run tests, evaluate every
+# requirement, and write the report. 80 turns is generous but not wasteful.
+model: claude-sonnet-4-6
+max_turns: 80
+timeout_minutes: 25
+max_budget_usd: 2.00
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  # The FULL PRD — including the "## Evaluation Criteria" section that the
+  # dev component strips out. QA needs this section to evaluate against
+  # the acceptance criteria the PRD author defined.
+  - name: prd
+    type: file
+    src: "{{ prd_path }}"
+    dest: /home/dkmv/workspace/.agent/prd.md
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  # The structured QA report. This is the primary deliverable of the QA
+  # component. It contains test results, per-requirement evaluation,
+  # code quality issues, and warnings.
+  #
+  # Schema:
+  # {
+  #   "tests_total": int,
+  #   "tests_passed": int,
+  #   "tests_failed": int,
+  #   "requirements": [
+  #     {"requirement": str, "status": "pass|fail|partial", "notes": str}
+  #   ],
+  #   "eval_criteria": [
+  #     {"criterion": str, "status": "pass|fail|partial", "notes": str}
+  #   ],
+  #   "code_quality": {
+  #     "issues": [str],
+  #     "suggestions": [str]
+  #   },
+  #   "warnings": [str],
+  #   "summary": str
+  # }
+  - path: /home/dkmv/workspace/.agent/qa_report.json
+    required: true
+    save: true
+
+# ---------------------------------------------------------------------------
+# Instructions
+# ---------------------------------------------------------------------------
+instructions: |
+  ## QA Agent Rules
+  - You are evaluating an implementation — do NOT modify any source code
+  - Be thorough but fair in your evaluation
+  - Provide specific file and line references for any issues found
+  - The QA report must be valid JSON at `.agent/qa_report.json`
+  - Pay special attention to the "## Evaluation Criteria" section in the PRD
+  - Run the FULL test suite, not just individual files
+
+# ---------------------------------------------------------------------------
+# Prompt
+# ---------------------------------------------------------------------------
+prompt: |
+  You are a senior QA engineer reviewing a feature implementation against its PRD.
+
+  ## Your Task
+  Read the PRD at `.agent/prd.md` (including the Evaluation Criteria section)
+  and thoroughly evaluate the implementation on this branch.
+
+  ## Phase 1: Understand Requirements
+  1. Read the PRD at `.agent/prd.md` carefully — pay special attention to the
+     `## Evaluation Criteria` section
+  2. Explore the codebase to understand what was implemented
+
+  ## Phase 2: Run Tests
+  3. Run the full test suite and record results
+  4. Check for regressions against the main branch
+  5. Note any tests that are missing or insufficient
+
+  ## Phase 3: Evaluate
+  6. Evaluate each PRD requirement — is it fully implemented?
+  7. Evaluate each item in `## Evaluation Criteria`
+  8. Review code quality: error handling, edge cases, security, performance
+  9. Check for code style consistency with the rest of the codebase
+
+  ## Phase 4: Report
+  10. Produce a structured JSON report at `.agent/qa_report.json` with the
+      following schema:
+  ```json
+  {
+    "tests_total": 0,
+    "tests_passed": 0,
+    "tests_failed": 0,
+    "requirements": [
+      {"requirement": "description", "status": "pass|fail|partial", "notes": "details"}
+    ],
+    "eval_criteria": [
+      {"criterion": "description", "status": "pass|fail|partial", "notes": "details"}
+    ],
+    "code_quality": {
+      "issues": ["description of issue"],
+      "suggestions": ["suggestion for improvement"]
+    },
+    "warnings": ["any warnings or concerns"],
+    "summary": "overall assessment"
+  }
+  ```
+
+  ## Constraints
+  - Be thorough but fair in your evaluation
+  - Provide specific file and line references for any issues
+  - Do not modify the implementation code
+  - Focus on correctness, completeness, and quality

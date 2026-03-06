@@ -120,6 +120,21 @@ dkmv docs --branch feature/auth
 
 You can run any component individually — `plan` without `dev`, or `qa` on code you wrote yourself. The pipeline is a sequence, not a requirement.
 
+**Include extra context files:**
+
+Pass local files or directories that aren't in the repo but the agent should see. These are copied into `.agent/context/` inside the container and referenced in the agent's instructions.
+
+```bash
+dkmv plan --branch feature/auth --prd requirements.md \
+  --context ./client-api-spec.yaml \
+  --context ./architecture-notes/
+
+dkmv dev --branch feature/auth --impl-docs docs/implementation/auth/ \
+  --context ./legacy-migration-guide.md
+```
+
+`--context` is available on all commands (`plan`, `dev`, `qa`, `docs`, `run`). You can pass it multiple times. Directories are copied recursively. Binary files are skipped automatically.
+
 **Run a custom component:**
 
 ```bash
@@ -277,7 +292,7 @@ dkmv plan --branch feature/auth --prd requirements.md --design-docs ./docs/  # i
 dkmv plan --branch feature/auth --prd requirements.md --auto                  # skip pause points
 ```
 
-**Produces:** `docs/implementation/{feature}/` with `features.md`, `user_stories.md`, phased task files, `tasks.md`, and a `CLAUDE.md` that guides the Dev agent.
+**Produces:** `docs/implementation/{feature}/` with `features.md`, `user_stories.md`, phased task files, `tasks.md`, `README.md`, and a `GUIDE.md` that guides the Dev agent.
 
 ### Dev
 
@@ -333,10 +348,13 @@ DKMV supports two authentication methods:
 
 | Method | Best For | Setup |
 |--------|----------|-------|
-| **API Key** | Pay-per-token usage | Set `ANTHROPIC_API_KEY` |
+| **API Key** | Pay-per-token usage (Claude) | Set `ANTHROPIC_API_KEY` |
 | **OAuth** | Claude Code subscription (flat rate) | Log in with `claude` (credentials auto-detected from Keychain / `~/.claude/.credentials.json`) |
+| **Codex** | OpenAI Codex CLI | Set `CODEX_API_KEY` or `OPENAI_API_KEY` |
 
 `dkmv init` walks you through choosing and configuring your auth method. You can also set `CLAUDE_CODE_OAUTH_TOKEN` explicitly. GitHub tokens are auto-discovered from `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`.
+
+When running with Codex, set `DKMV_AGENT=codex` or pass `--agent codex` on any run command. `OPENAI_API_KEY` is automatically used as a fallback for `CODEX_API_KEY`.
 
 </details>
 
@@ -356,6 +374,8 @@ CLI flags  ->  Environment variables  ->  .env file  ->  .dkmv/config.json  ->  
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | OAuth token (alternative to API key) |
 | `GITHUB_TOKEN` | — | GitHub token for private repos and PRs |
+| `CODEX_API_KEY` | — | OpenAI API key for Codex agent (`OPENAI_API_KEY` also accepted) |
+| `DKMV_AGENT` | `claude` | Default agent (`claude` or `codex`) |
 | `DKMV_MODEL` | `claude-sonnet-4-6` | Default model |
 | `DKMV_MAX_TURNS` | `100` | Max turns per task |
 | `DKMV_IMAGE` | `dkmv-sandbox:latest` | Docker sandbox image |
@@ -435,27 +455,37 @@ dkmv unregister security-audit               # unregister
 
 ```bash
 dkmv plan   --branch <name> --prd <path> [--repo <url>] [--design-docs <dir>]
-            [--feature-name <name>] [--auto] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--feature-name <name>] [--context <path> ...] [--auto]
+            [--agent <name>] [--model <m>] [--max-turns <n>] [--timeout <min>]
+            [--max-budget-usd <n>] [--start-task <name-or-index>]
+            [--keep-alive] [--verbose]
 
 dkmv dev    --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
-            [--model <m>] [--max-turns <n>] [--timeout <min>]
-            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--agent <name>] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>]
+            [--start-phase <n>] [--start-task <name-or-index>]
+            [--keep-alive] [--verbose]
 
 dkmv qa     --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
-            [--auto] [--model <m>] [--max-turns <n>] [--timeout <min>]
-            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--auto] [--agent <name>] [--model <m>]
+            [--max-turns <n>] [--timeout <min>] [--max-budget-usd <n>]
+            [--start-task <name-or-index>] [--keep-alive] [--verbose]
 
 dkmv docs   --branch <name> [--repo <url>] [--impl-docs <dir>] [--create-pr] [--pr-base <branch>]
-            [--model <m>] [--max-turns <n>] [--timeout <min>]
-            [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--context <path> ...] [--agent <name>] [--model <m>] [--max-turns <n>]
+            [--timeout <min>] [--max-budget-usd <n>]
+            [--start-task <name-or-index>] [--keep-alive] [--verbose]
 
 dkmv run    <component> --branch <name> [--repo <url>] [--feature-name <name>]
-            [--var KEY=VALUE ...] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>] [--keep-alive] [--verbose]
+            [--var KEY=VALUE ...] [--context <path> ...] [--agent <name>]
+            [--model <m>] [--max-turns <n>] [--timeout <min>] [--max-budget-usd <n>]
+            [--start-task <name-or-index>] [--keep-alive] [--verbose]
 ```
 
 > `--repo` is optional when the project is initialized with `dkmv init`.
+> `--context` accepts files or directories. Pass multiple times for multiple paths.
+> `--agent` selects the AI agent backend (`claude` or `codex`). Overrides `DKMV_AGENT`.
+> `--start-task` skips to a specific task by name or 1-based index. `--start-phase` (dev only) skips to a phase number.
 
 ### Project Commands
 
@@ -479,7 +509,7 @@ dkmv clean
 ### Build
 
 ```bash
-dkmv build         [--no-cache] [--claude-version <version>]
+dkmv build         [--no-cache] [--claude-version <version>] [--codex-version <version>]
 ```
 
 </details>
@@ -527,6 +557,11 @@ dkmv/
 ├── project.py           # Project config, find_project_root(), get_repo()
 ├── init.py              # dkmv init (credential discovery, Rich UX)
 ├── registry.py          # Component registry (.dkmv/components.json)
+├── adapters/
+│   ├── __init__.py      # get_adapter(), infer_agent_from_model(), validate_agent_model()
+│   ├── base.py          # AgentAdapter Protocol, StreamResult dataclass
+│   ├── claude.py        # ClaudeCodeAdapter
+│   └── codex.py         # CodexCLIAdapter
 ├── core/
 │   ├── models.py        # Shared types (BaseResult, SandboxConfig)
 │   ├── sandbox.py       # SandboxManager (Docker via SWE-ReX)
@@ -546,7 +581,7 @@ dkmv/
 │   ├── qa/              # 01-evaluate, 02-fix, 03-re-evaluate
 │   └── docs/            # 01-generate.yaml + component.yaml
 └── images/
-    └── Dockerfile       # dkmv-sandbox image
+    └── Dockerfile       # dkmv-sandbox image (includes Claude Code + Codex CLI)
 ```
 
 ---

@@ -6,7 +6,7 @@ from typing import Literal
 import typer
 from pydantic import BaseModel, field_validator
 
-AuthMethod = Literal["api_key", "oauth"]
+AuthMethod = Literal["api_key", "oauth", "codex"]
 
 
 class CredentialSources(BaseModel):
@@ -14,6 +14,7 @@ class CredentialSources(BaseModel):
     anthropic_api_key_source: str = "env"
     oauth_token_source: str = "none"
     github_token_source: str = "env"
+    codex_api_key_source: str = "none"
 
 
 class ProjectDefaults(BaseModel):
@@ -22,6 +23,7 @@ class ProjectDefaults(BaseModel):
     timeout_minutes: int | None = None
     max_budget_usd: float | None = None
     memory: str | None = None
+    agent: str | None = None
 
 
 class SandboxSettings(BaseModel):

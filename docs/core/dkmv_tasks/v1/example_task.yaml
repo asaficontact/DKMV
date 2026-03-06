@@ -1,0 +1,152 @@
+# =============================================================================
+# DKMV Task Definition — Complete Example
+# =============================================================================
+#
+# This file demonstrates every available option in the DKMV task definition
+# format. Most tasks will use a small subset of these fields.
+#
+# A task is a single Claude Code invocation inside a Docker container.
+# Tasks are grouped into components (ordered sequences of tasks).
+#
+# File: components/fullstack-feature/tasks/01-plan.yaml 
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+name: plan-architecture
+description: >
+  Analyze the PRD and existing codebase to produce an implementation plan
+  covering architecture, file changes, dependencies, and test strategy.
+commit: false                   # Don't commit after this task (planning only)
+push: false                     # Don't push (no commit = no push anyway)
+# commit_message is ignored when commit: false, shown here for reference:
+# commit_message: "feat({{ component }}): {{ feature_name }} — planning [dkmv]"
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+model: claude-sonnet-4-6      # Override global DKMV_MODEL for this task
+max_turns: 50                 # Max Claude Code conversation turns (default: 100)
+timeout_minutes: 15           # Task-level timeout (default: inherits from global)
+max_budget_usd: 0.50          # Cost cap for this single task (default: no cap)
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+# Inputs are files or values injected into the container before Claude runs.
+# They serve as context for the prompt.
+#
+# Types:
+#   file     — Copy a source file from your machine into the container
+#   text     — Write a literal string to a file in the container
+#   env      — Set an environment variable inside the container
+#
+# Note: Tasks in a component share the same container. Files written by a
+# previous task are already on disk — just reference them in the prompt.
+#
+inputs:
+  # Copy file from your machine into the container
+  - name: prd
+    type: file
+    src: "{{ prd_path }}"                    # Template variable from CLI args
+    dest: /home/dkmv/workspace/.agent/prd.md
+
+  # Copy entire directory of design docs
+  - name: design_docs
+    type: file
+    src: "{{ design_docs_path }}"
+    dest: /home/dkmv/workspace/.agent/design_docs/
+    optional: true                           # Skip silently if path not provided
+
+  # Literal text written to container file
+  - name: guidelines
+    type: text
+    content: |
+      Focus on:
+      - Minimal changes to existing code
+      - Test coverage for all new public interfaces
+      - No breaking changes to existing APIs
+    dest: /home/dkmv/workspace/.agent/guidelines.md
+
+  # Environment variable
+  - name: target_coverage
+    type: env
+    key: TARGET_COVERAGE
+    value: "80"
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+# Outputs are files read from the container after Claude finishes.
+# They can be saved to the run directory and/or passed to subsequent tasks.
+#
+outputs:
+  - path: /home/dkmv/workspace/.agent/plan.md
+    required: true                           # Fail the task if this file is missing
+    save: true                               # Copy to run output directory
+
+  - path: /home/dkmv/workspace/.agent/deps.json
+    required: false
+    save: true
+
+# ---------------------------------------------------------------------------
+# Instructions
+# ---------------------------------------------------------------------------
+# Persistent behavioral instructions for the agent. Appended to the
+# auto-generated agent instructions file in the container (e.g.,
+# .claude/CLAUDE.md for Claude Code, AGENTS.md for other agents).
+#
+# Provide exactly one of `instructions` (inline) or `instructions_file` (path).
+# Required for every task.
+#
+instructions: |
+  ## Planning Rules
+  - Output the plan to `.agent/plan.md`
+  - Do NOT write any implementation code in this phase
+  - Include a section for each: architecture, file changes, test strategy
+
+# ---------------------------------------------------------------------------
+# Prompt
+# ---------------------------------------------------------------------------
+# The prompt sent to Claude Code. Supports Jinja2-style template variables.
+# Variables come from: CLI arguments, inputs, previous task outputs, and
+# built-in context (component name, feature name, branch, repo, etc.).
+#
+# For simple prompts, use the inline `prompt` field.
+# For complex prompts, use `prompt_file` to reference a separate .md file.
+#
+prompt: |
+  You are a senior software architect planning a feature implementation.
+
+  ## Context
+  - Repository: {{ repo }}
+  - Branch: {{ branch }}
+  - Feature: {{ feature_name }}
+
+  ## Your Task
+  Read the PRD at `.agent/prd.md` and produce a comprehensive implementation plan.
+
+  {% if design_docs_path %}
+  ## Design Documents
+  Review the design documents in `.agent/design_docs/` for architectural context.
+  {% endif %}
+
+  ## Plan Requirements
+  Your plan at `.agent/plan.md` must include:
+
+  1. **Architecture Overview** — How the feature fits into the existing codebase
+  2. **File Changes** — List every file to create or modify, with a one-line summary
+  3. **Dependencies** — New packages or services needed
+  4. **Test Strategy** — What to test, how to test it, target coverage
+  5. **Risk Assessment** — What could go wrong, edge cases to handle
+  6. **Implementation Order** — Sequence of changes to minimize risk
+
+  ## Constraints
+  - Read `.agent/guidelines.md` for project-specific constraints
+  - Do NOT write implementation code — planning only
+  - Do NOT modify any existing files
+  - Output the plan to `.agent/plan.md`
+
+# Alternative: reference a separate prompt file (relative to task file)
+# prompt_file: prompts/plan.md

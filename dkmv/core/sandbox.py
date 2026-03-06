@@ -6,7 +6,7 @@ import logging
 import shlex
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from swerex.deployment.docker import DockerDeployment
 from swerex.runtime.abstract import (
@@ -19,6 +19,9 @@ from swerex.runtime.abstract import (
 )
 
 from dkmv.core.models import SandboxConfig
+
+if TYPE_CHECKING:
+    from dkmv.adapters.base import AgentAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -174,8 +177,9 @@ class SandboxManager:
         # already set, so we skip it entirely and just run setup-git.
         return await self.execute(session, "gh auth setup-git")
 
-    async def stream_claude(
+    async def stream_agent(
         self,
+        adapter: AgentAdapter,
         session: SandboxSession,
         prompt: str,
         model: str,
@@ -188,45 +192,26 @@ class SandboxManager:
     ) -> AsyncIterator[dict[str, Any]]:
         await self.write_file(session, "/tmp/dkmv_prompt.md", prompt)
 
-        budget_flag = (
-            f" --max-budget-usd {shlex.quote(str(max_budget_usd))}"
-            if max_budget_usd is not None
-            else ""
-        )
-        env_prefix = ""
-        if env_vars:
-            pairs = " ".join(f"{k}={shlex.quote(v)}" for k, v in env_vars.items())
-            env_prefix = f"env {pairs} "
-
-        if resume_session_id:
-            claude_cmd = (
-                f"{env_prefix}claude "
-                f"--resume {shlex.quote(resume_session_id)} "
-                f'-p "$(cat /tmp/dkmv_prompt.md)" '
-            )
-        else:
-            claude_cmd = f'{env_prefix}claude -p "$(cat /tmp/dkmv_prompt.md)" '
-
-        cmd = (
-            f"cd {shlex.quote(working_dir)} && "
-            f"{claude_cmd}"
-            "--dangerously-skip-permissions "
-            "--verbose "
-            "--output-format stream-json "
-            f"--model {shlex.quote(model)} "
-            f"--max-turns {shlex.quote(str(max_turns))}"
-            f"{budget_flag}"
-            " < /dev/null > /tmp/dkmv_stream.jsonl 2>/tmp/dkmv_stream.err & echo $!"
+        cmd = adapter.build_command(
+            prompt_file="/tmp/dkmv_prompt.md",
+            model=model,
+            max_turns=max_turns,
+            timeout_minutes=timeout_minutes,
+            max_budget_usd=max_budget_usd,
+            env_vars=env_vars,
+            resume_session_id=resume_session_id,
+            working_dir=working_dir,
         )
 
         result = await self.execute(session, cmd)
         lines = result.output.strip().splitlines()
+        _display = adapter.display_name
         if not lines:
-            msg = "Failed to launch Claude Code: no PID returned"
+            msg = f"Failed to launch {_display}: no PID returned"
             raise RuntimeError(msg)
         pid = lines[-1].strip()
         if not pid.isdigit():
-            msg = f"Failed to launch Claude Code: invalid PID {pid!r}"
+            msg = f"Failed to launch {_display}: invalid PID {pid!r}"
             raise RuntimeError(msg)
 
         await self._create_session(session, "tail")
@@ -258,7 +243,7 @@ class SandboxManager:
                             try:
                                 event = json.loads(line)
                                 yield event
-                                if event.get("type") == "result":
+                                if adapter.is_result_event(event):
                                     result_seen = True
                                     result_seen_at = asyncio.get_running_loop().time()
                             except json.JSONDecodeError:
@@ -290,7 +275,7 @@ class SandboxManager:
                                 try:
                                     event = json.loads(line)
                                     yield event
-                                    if event.get("type") == "result":
+                                    if adapter.is_result_event(event):
                                         result_seen = True
                                 except json.JSONDecodeError:
                                     logger.warning("Non-JSON line in stream: %s", line[:200])
@@ -305,7 +290,7 @@ class SandboxManager:
                             stderr = stderr_result.output.strip()
                             if stderr:
                                 logger.warning(
-                                    "Claude Code exited without result. stderr:\n%s",
+                                    "Agent exited without result. stderr:\n%s",
                                     stderr[:2000],
                                 )
                         break
@@ -315,7 +300,7 @@ class SandboxManager:
 
                     await asyncio.sleep(0.5)
         finally:
-            # Kill Claude Code process to stop API credit spend (runs even on TimeoutError)
+            # Kill agent process to stop API credit spend (runs even on TimeoutError)
             try:
                 await self._run_in_session(session, session.session_name, f"kill {pid} 2>/dev/null")
             except Exception:

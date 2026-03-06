@@ -83,18 +83,21 @@ def components() -> None:
     table.add_column("Name", style="cyan")
     table.add_column("Type")
     table.add_column("Tasks", justify="right")
+    table.add_column("Agent")
     table.add_column("Description")
 
     builtin_count = 0
     custom_count = 0
 
     for info in infos:
+        agent_display = info.agent or ""
         if info.component_type == "built-in":
             builtin_count += 1
             table.add_row(
                 info.name,
                 "built-in",
                 str(info.task_count),
+                agent_display,
                 info.description,
             )
         else:
@@ -104,6 +107,7 @@ def components() -> None:
                     info.name,
                     "custom",
                     str(info.task_count),
+                    agent_display,
                     info.description,
                 )
             else:
@@ -111,6 +115,7 @@ def components() -> None:
                     info.name,
                     "custom",
                     "[yellow]?[/yellow]",
+                    agent_display,
                     f"[yellow]path not found: {info.description}[/yellow]",
                 )
 
@@ -182,6 +187,9 @@ def build(
     claude_version: Annotated[
         str, typer.Option("--claude-version", help="Claude Code version to install.")
     ] = "latest",
+    codex_version: Annotated[
+        str, typer.Option("--codex-version", help="Codex CLI version to install.")
+    ] = "latest",
 ) -> None:
     """Build the DKMV sandbox Docker image."""
     if _dry_run:
@@ -207,6 +215,8 @@ def build(
         config.image_name,
         "--build-arg",
         f"CLAUDE_CODE_VERSION={claude_version}",
+        "--build-arg",
+        f"CODEX_VERSION={codex_version}",
     ]
     if no_cache:
         cmd.append("--no-cache")
@@ -266,12 +276,37 @@ async def dev(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    start_phase: Annotated[
+        int | None,
+        typer.Option("--start-phase", help="Phase number to start from (skip earlier phases)."),
+    ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Dev agent to implement phases from implementation docs.
 
     Takes the output of 'dkmv plan' and implements each phase sequentially.
+    Use --start-phase or --start-task to resume after a failure.
     """
+    if start_phase is not None and start_task is not None:
+        console.print(
+            "Error: --start-phase and --start-task are mutually exclusive.",
+            style="bold red",
+        )
+        raise typer.Exit(code=1)
+
     from dkmv.project import find_project_root, get_repo
     from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
     from dkmv.tasks.models import CLIOverrides
@@ -290,6 +325,23 @@ async def dev(
 
     phases = _discover_phases(impl_docs_dir)
 
+    if start_phase is not None:
+        total = len(phases)
+        phases = [p for p in phases if p["phase_number"] >= start_phase]
+        if not phases:
+            console.print(
+                f"Error: No phases with number >= {start_phase}. "
+                f"Available: {', '.join(str(p['phase_number']) for p in _discover_phases(impl_docs_dir))}",
+                style="bold red",
+            )
+            raise typer.Exit(code=1)
+        skipped = total - len(phases)
+        if skipped:
+            console.print(
+                f"Resuming from phase {start_phase} (skipping {skipped} earlier phase{'s' if skipped != 1 else ''})",
+                style="cyan",
+            )
+
     resolved_feature = feature_name or impl_docs_dir.name
     resolved_branch = branch or f"feature/{resolved_feature}-dev"
 
@@ -303,6 +355,7 @@ async def dev(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     component_dir = resolve_component("dev", project_root=project_root)
@@ -323,6 +376,8 @@ async def dev(
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
+        context_paths=context,
+        start_task=start_task,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:
@@ -399,13 +454,26 @@ async def plan(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Plan agent to convert a PRD into implementation documents.
 
     Produces features.md, user_stories.md, phaseN_*.md, tasks.md, progress.md,
-    README.md, and CLAUDE.md in docs/implementation/{feature_name}/.
+    README.md, and GUIDE.md in docs/implementation/{feature_name}/.
     """
     import json as json_mod
 
@@ -434,6 +502,7 @@ async def plan(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     component_dir = resolve_component("plan", project_root=project_root)
@@ -455,6 +524,8 @@ async def plan(
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
         on_pause=None if auto else _rich_pause_callback,
+        context_paths=context,
+        start_task=start_task,
     )
 
     # Plan report display from saved artifact
@@ -563,7 +634,20 @@ async def qa(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the QA agent to evaluate, fix, and re-evaluate a branch.
@@ -597,6 +681,7 @@ async def qa(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     component_dir = resolve_component("qa", project_root=project_root)
@@ -618,6 +703,8 @@ async def qa(
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
         on_pause=None if auto else _qa_pause_callback,
+        context_paths=context,
+        start_task=start_task,
     )
 
     # QA report display from saved artifact
@@ -671,6 +758,19 @@ async def docs(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Docs agent to update documentation and create a PR.
@@ -708,6 +808,7 @@ async def docs(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     component_dir = resolve_component("docs", project_root=project_root)
@@ -728,6 +829,8 @@ async def docs(
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
+        context_paths=context,
+        start_task=start_task,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
 
@@ -795,6 +898,19 @@ async def run_component(
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running.")
     ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run a component (directory of task YAML files)."""
@@ -817,6 +933,7 @@ async def run_component(
         max_turns=max_turns,
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
+        agent=agent,
     )
 
     sandbox = SandboxManager()
@@ -836,6 +953,8 @@ async def run_component(
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
+        context_paths=context,
+        start_task=start_task,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:
