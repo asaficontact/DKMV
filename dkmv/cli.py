@@ -473,7 +473,7 @@ async def plan(
     """Run the Plan agent to convert a PRD into implementation documents.
 
     Produces features.md, user_stories.md, phaseN_*.md, tasks.md, progress.md,
-    README.md, and CLAUDE.md in docs/implementation/{feature_name}/.
+    README.md, and GUIDE.md in docs/implementation/{feature_name}/.
     """
     import json as json_mod
 

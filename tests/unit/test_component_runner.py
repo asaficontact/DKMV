@@ -1379,7 +1379,7 @@ class TestPromptsLog:
         component_runner._save_prompts_log(result.run_id, comp_dir.name, result.task_results)
 
         content = (run_dir / "prompts_log.md").read_text()
-        assert "### CLAUDE.md" in content
+        assert "### Instructions" in content
         assert "DKMV Agent" in content
 
     async def test_prompts_log_includes_prompt_content(
@@ -1799,7 +1799,7 @@ class TestAgentMdFile:
     ) -> None:
         comp_dir = _create_manifest_component_dir(tmp_path, num_tasks=1)
         task_loader.load_manifest.return_value = _mock_manifest(
-            agent_md_file="/nonexistent/CLAUDE.md",
+            agent_md_file="/nonexistent/GUIDE.md",
             tasks=[_mock_task_ref("01-task1.yaml")],
         )
         task_loader.load.return_value = _make_task("task1")
@@ -2483,8 +2483,8 @@ class TestPromptsLogEdgeCases:
         assert log_file.exists()
         content = log_file.read_text()
         assert "## Task 1: task1" in content
-        # No CLAUDE.md or Prompt sections since files don't exist
-        assert "### CLAUDE.md" not in content
+        # No Instructions or Prompt sections since files don't exist
+        assert "### Instructions" not in content
         assert "### Prompt" not in content
 
     async def test_prompts_log_skips_empty_prompt_file(

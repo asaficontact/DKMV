@@ -1,6 +1,6 @@
 name: assembly
 description: >
-  Assemble master task list, progress tracker, README, and CLAUDE.md.
+  Assemble master task list, progress tracker, README, and GUIDE.md.
   Reads all phase documents and compiles derivative documents for
   the implementation output directory.
 commit: true
@@ -15,7 +15,7 @@ instructions: |
   ## Assembly Rules
   - Output directory: `{{ tasks.analyze.outputs.analysis.output_dir }}` — write all deliverables here
   - Read all phase documents from the output directory
-  - Compile tasks.md, progress.md, README.md, and CLAUDE.md into the output directory
+  - Compile tasks.md, progress.md, README.md, and GUIDE.md into the output directory
   - Copy or reference the PRD in the output directory
   - Do NOT modify existing phase documents, features.md, or user_stories.md
   - Do NOT write any implementation code
@@ -208,9 +208,9 @@ prompt: |
   2. If the PRD defines data formats, schemas, or API contracts, extract them into dedicated reference docs.
   3. Don't duplicate what's in the PRD — phase docs reference PRD sections.
 
-  ## Step 12: Create the Implementation CLAUDE.md
+  ## Step 12: Create the Implementation Guide → GUIDE.md
 
-  Write `<output_dir>/CLAUDE.md` with this structure:
+  Write `<output_dir>/GUIDE.md` with this structure:
 
   ```markdown
   # {Project} — Implementation Guide
@@ -291,7 +291,7 @@ prompt: |
   {List files/modules/APIs that are stable and must not be modified}
   ```
 
-  ### CLAUDE.md Heuristics
+  ### GUIDE.md Heuristics
   - Goes in the implementation directory, not the project root
   - Keep under 200 lines — concise briefing, not a PRD copy
   - "DO NOT CHANGE" section is critical — AI agents can't infer boundaries from omission
@@ -302,8 +302,8 @@ prompt: |
   Before finalizing, perform the following verification:
 
   1. **Re-read all phase documents and cross-reference with tasks.md.** Every task in every phase document must appear in tasks.md, and vice versa. Verify task IDs, descriptions, and dependency annotations match.
-  2. **Check completeness** — does tasks.md have an accurate progress summary with correct total count? Does CLAUDE.md have all required sections (Document Map, Quality Gates, Conventions, DO NOT CHANGE)? Does README.md list every document in the output directory?
-  3. **Check correctness** — are all cross-references accurate (task IDs, feature IDs, phase document filenames)? Does the Document Map in CLAUDE.md match the actual files created? Are phase links in tasks.md correct?
+  2. **Check completeness** — does tasks.md have an accurate progress summary with correct total count? Does GUIDE.md have all required sections (Document Map, Quality Gates, Conventions, DO NOT CHANGE)? Does README.md list every document in the output directory?
+  3. **Check correctness** — are all cross-references accurate (task IDs, feature IDs, phase document filenames)? Does the Document Map in GUIDE.md match the actual files created? Are phase links in tasks.md correct?
   4. **Verify traceability** — pick 3 random tasks from tasks.md and trace them back through the phase doc, user story, feature, and PRD section. If any link is broken, investigate and fix.
   5. **Fix genuine gaps** — if you find mismatched counts, broken cross-references, missing documents, or inaccurate metadata, fix them now.
 
@@ -316,11 +316,11 @@ prompt: |
   - <output_dir>/tasks.md ({N} tasks)
   - <output_dir>/progress.md
   - <output_dir>/README.md
-  - <output_dir>/CLAUDE.md
+  - <output_dir>/GUIDE.md
   - <output_dir>/{prd_name}.md (copy/reference)
   ```
 
   ## Constraints
-  - Write only tasks.md, progress.md, README.md, CLAUDE.md, and PRD copy to the output directory
+  - Write only tasks.md, progress.md, README.md, GUIDE.md, and PRD copy to the output directory
   - Do NOT modify phase documents, features.md, or user_stories.md
   - All cross-references must be accurate

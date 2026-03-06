@@ -27,7 +27,7 @@ instructions: |
   - Update `features.md` with task ID ranges after decomposition
   - Update `user_stories.md` traceability matrix with task IDs
   - Do NOT write any implementation code
-  - Do NOT create tasks.md, progress.md, README.md, or CLAUDE.md yet
+  - Do NOT create tasks.md, progress.md, README.md, or GUIDE.md yet
   - Each phase must end with verifiable functionality
   - No task should exceed 3 hours estimated scope
   - One task = 1-3 files modified
@@ -312,4 +312,4 @@ prompt: |
 
   ## Constraints
   - Write only phaseN_*.md files (and update features.md/user_stories.md)
-  - Do NOT create tasks.md, progress.md, README.md, or CLAUDE.md yet
+  - Do NOT create tasks.md, progress.md, README.md, or GUIDE.md yet

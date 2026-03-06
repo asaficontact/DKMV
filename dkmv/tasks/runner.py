@@ -37,12 +37,13 @@ class TaskRunner:
         self._stream_parser = stream_parser
         self._console = console
 
-    def _resolve_param(self, task_value: T | None, cli_value: T | None, config_value: T) -> T:
-        if task_value is not None:
-            return task_value
-        if cli_value is not None:
-            return cli_value
-        return config_value
+    def _resolve_param(self, primary: T | None, secondary: T | None, fallback: T) -> T:
+        """Return first non-None value. Callers must pass CLI first, then task, then config."""
+        if primary is not None:
+            return primary
+        if secondary is not None:
+            return secondary
+        return fallback
 
     async def _inject_inputs(self, task: TaskDefinition, session: SandboxSession) -> dict[str, str]:
         env_vars: dict[str, str] = {}
@@ -128,15 +129,15 @@ class TaskRunner:
         env_vars: dict[str, str],
         adapter: AgentAdapter,
     ) -> StreamResult:
-        model = self._resolve_param(task.model, cli_overrides.model, config.default_model)
+        model = self._resolve_param(cli_overrides.model, task.model, config.default_model)
         max_turns = self._resolve_param(
-            task.max_turns, cli_overrides.max_turns, config.default_max_turns
+            cli_overrides.max_turns, task.max_turns, config.default_max_turns
         )
         timeout = self._resolve_param(
-            task.timeout_minutes, cli_overrides.timeout_minutes, config.timeout_minutes
+            cli_overrides.timeout_minutes, task.timeout_minutes, config.timeout_minutes
         )
         budget = self._resolve_param(
-            task.max_budget_usd, cli_overrides.max_budget_usd, config.max_budget_usd
+            cli_overrides.max_budget_usd, task.max_budget_usd, config.max_budget_usd
         )
 
         stream_result = StreamResult()
@@ -169,21 +170,6 @@ class TaskRunner:
                 stream_result.session_id = event.get("session_id", "")
 
         return stream_result
-
-    async def _stream_claude(
-        self,
-        task: TaskDefinition,
-        session: SandboxSession,
-        run_id: str,
-        config: DKMVConfig,
-        cli_overrides: CLIOverrides,
-        env_vars: dict[str, str],
-    ) -> StreamResult:
-        from dkmv.adapters.claude import ClaudeCodeAdapter
-
-        return await self._stream_agent(
-            task, session, run_id, config, cli_overrides, env_vars, ClaudeCodeAdapter()
-        )
 
     @staticmethod
     def _validate_required_fields(output: TaskOutput, content: str) -> str | None:
@@ -242,16 +228,16 @@ class TaskRunner:
             f"Please fix this issue and produce the required output files."
         )
 
-        model = self._resolve_param(task.model, cli_overrides.model, config.default_model)
+        model = self._resolve_param(cli_overrides.model, task.model, config.default_model)
         max_turns = min(
-            self._resolve_param(task.max_turns, cli_overrides.max_turns, config.default_max_turns),
+            self._resolve_param(cli_overrides.max_turns, task.max_turns, config.default_max_turns),
             10,
         )
         timeout = self._resolve_param(
-            task.timeout_minutes, cli_overrides.timeout_minutes, config.timeout_minutes
+            cli_overrides.timeout_minutes, task.timeout_minutes, config.timeout_minutes
         )
         budget = self._resolve_param(
-            task.max_budget_usd, cli_overrides.max_budget_usd, config.max_budget_usd
+            cli_overrides.max_budget_usd, task.max_budget_usd, config.max_budget_usd
         )
 
         from dkmv.core.stream import StreamParser
@@ -283,32 +269,6 @@ class TaskRunner:
                 stream_result.turns = event.get("num_turns", 0)
                 stream_result.session_id = event.get("session_id", "")
         return stream_result
-
-    async def _retry_claude(
-        self,
-        task: TaskDefinition,
-        session: SandboxSession,
-        run_id: str,
-        config: DKMVConfig,
-        cli_overrides: CLIOverrides,
-        env_vars: dict[str, str],
-        session_id: str,
-        error_message: str,
-    ) -> StreamResult:
-        """Resume Claude Code session with a corrective prompt (backwards-compat alias)."""
-        from dkmv.adapters.claude import ClaudeCodeAdapter
-
-        return await self._retry_agent(
-            task,
-            session,
-            run_id,
-            config,
-            cli_overrides,
-            env_vars,
-            session_id,
-            error_message,
-            ClaudeCodeAdapter(),
-        )
 
     async def _git_teardown(self, task: TaskDefinition, session: SandboxSession) -> None:
         if not task.commit and not task.push:
@@ -365,11 +325,11 @@ class TaskRunner:
             adapter = get_adapter(agent_name)
 
             # T091: validate model-agent compatibility
-            resolved_model = task.model or cli_overrides.model or config.default_model
+            resolved_model = cli_overrides.model or task.model or config.default_model
             agent_explicit = task.agent is not None or cli_overrides.agent is not None
             model_explicit = task.model is not None or cli_overrides.model is not None
             try:
-                validate_agent_model(
+                validated_model = validate_agent_model(
                     agent_name,
                     resolved_model,
                     agent_explicit=agent_explicit,
@@ -382,6 +342,10 @@ class TaskRunner:
                     status="failed",
                     error_message=str(e),
                 )
+
+            # Apply auto-substituted model so _stream_agent picks it up
+            if validated_model != resolved_model:
+                task.model = validated_model
 
         # T092: log capability gaps
         max_turns_val = task.max_turns or cli_overrides.max_turns
@@ -404,6 +368,7 @@ class TaskRunner:
             env_vars = {**(shared_env_vars or {})}
             task_env_vars = await self._inject_inputs(task, session)
             env_vars.update(task_env_vars)
+            env_vars.update(adapter.get_env_overrides())
             claude_md = await self._write_instructions(
                 task, session, component_agent_md, context_files=context_files, adapter=adapter
             )

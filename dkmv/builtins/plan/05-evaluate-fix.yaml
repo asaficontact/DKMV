@@ -44,7 +44,7 @@ prompt: |
      - tasks.md
      - progress.md
      - README.md
-     - CLAUDE.md
+     - GUIDE.md
 
   {% if design_docs_path is defined and design_docs_path %}
   Also review `.agent/design_docs/` for context.
@@ -162,7 +162,7 @@ prompt: |
       "tasks.md",
       "progress.md",
       "README.md",
-      "CLAUDE.md"
+      "GUIDE.md"
     ],
     "summary": "All 38 verification checks pass. 3 issues found and fixed in 2 iterations."
   }

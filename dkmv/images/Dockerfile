@@ -62,6 +62,12 @@ ARG CODEX_VERSION=0.110.0
 # Build tools:
 #   build-essential  - gcc, make, etc. for native Node modules
 #
+# Search & file tools (used by both Claude Code and Codex agents):
+#   ripgrep          - fast regex search (Codex requires rg on PATH)
+#   fd-find          - fast file finder (Debian installs as fdfind; symlinked to fd)
+#   bat              - syntax-highlighted cat (Debian installs as batcat; symlinked to bat)
+#   fzf              - fuzzy finder for interactive selection
+#
 # Python stack:
 #   python3, python3-pip, python3-venv, pipx
 #   Required for SWE-ReX and any Python-based tooling Claude might use.
@@ -81,6 +87,10 @@ RUN apt-get update \
         sudo \
         less \
         procps \
+        ripgrep \
+        fd-find \
+        bat \
+        fzf \
         python3 \
         python3-pip \
         python3-venv \
@@ -99,6 +109,11 @@ RUN apt-get update \
     # -- Cleanup to reduce image size --
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian renames fd→fdfind and bat→batcat to avoid package name clashes.
+# Both Codex and Claude Code expect the standard names on PATH.
+RUN ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    && ln -s /usr/bin/batcat /usr/local/bin/bat
 
 # ---------------------------------------------------------------------------
 # Claude Code installation (as root, before USER switch)
@@ -138,7 +153,7 @@ RUN userdel --remove node \
 # /home/dkmv/workspace - cloned repo (created at runtime by BaseComponent)
 # /home/dkmv/.claude   - Claude Code config/state directory
 RUN mkdir -p /home/dkmv/workspace /home/dkmv/.claude /home/dkmv/.codex \
-    && printf '[sandbox_workspace_write]\nnetwork_access = true\n' \
+    && printf 'web_search = "live"\n\n[sandbox_workspace_write]\nnetwork_access = true\n' \
        > /home/dkmv/.codex/config.toml \
     && chown -R dkmv:dkmv /home/dkmv
 
@@ -199,6 +214,12 @@ ENV IS_SANDBOX=1
 # CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK: When running headless (no TTY),
 # Claude Code may refuse to start. This disables that check.
 ENV CLAUDE_CODE_DISABLE_NONINTERACTIVE_CHECK=1
+
+# CODEX_UNSAFE_ALLOW_NO_SANDBOX: Tells Codex CLI to skip Landlock/seccomp
+# sandbox initialization. Docker provides container-level isolation, making
+# Codex's internal Landlock sandbox redundant. Without this, Codex panics
+# with LandlockRestrict because Docker doesn't expose Landlock kernel APIs.
+ENV CODEX_UNSAFE_ALLOW_NO_SANDBOX=1
 
 # ---------------------------------------------------------------------------
 # Working directory

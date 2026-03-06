@@ -19,7 +19,7 @@ instructions: |
   ## Phase {{ item.phase_number }} Implementation Rules
   - Read the phase document at `.agent/impl_docs/{{ item.phase_file }}`
   - Read `.agent/impl_docs/tasks.md` for the master task list and context
-  - The implementation guide (CLAUDE.md) is already loaded into your context — follow its conventions, quality gates, and process
+  - The implementation guide (GUIDE.md) is already loaded into your context — follow its conventions, quality gates, and process
   - Implement ALL tasks listed for Phase {{ item.phase_number }}
   - Write tests for all new public interfaces
   - Run the full test suite before finishing — all tests must pass
@@ -35,7 +35,7 @@ prompt: |
   You are implementing Phase {{ item.phase_number }}: {{ item.phase_name }}.
 
   ## Context
-  Your implementation guide (CLAUDE.md) is already loaded — it contains the project conventions,
+  Your implementation guide (GUIDE.md) is already loaded — it contains the project conventions,
   quality gates, document map, and the 6-step implementation process. Follow it.
 
   Key files in `.agent/impl_docs/`:

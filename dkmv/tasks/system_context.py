@@ -12,7 +12,7 @@ build on yours.
 2. **Check `.agent/` for context.** This directory contains inputs (PRDs, design
    docs) and outputs from prior tasks. Review it to understand what came before you.
 3. **Follow your task instructions.** Your specific task is defined in the prompt.
-   The CLAUDE.md layers below provide component-wide and task-specific rules.
+   The instruction layers below provide component-wide and task-specific rules.
 4. **Follow existing conventions.** Read the codebase before writing. Match patterns
    and style.
 5. **Make reasonable decisions.** When facing ambiguity, choose the pragmatic path

@@ -19,6 +19,9 @@ class AgentAdapter(Protocol):
     @property
     def name(self) -> str: ...
 
+    @property
+    def display_name(self) -> str: ...
+
     def build_command(
         self,
         prompt_file: str,

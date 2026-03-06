@@ -15,8 +15,8 @@ def test_build_command_basic():
     cmd = adapter.build_command("/tmp/p.md", "gpt-5.3-codex", 100, 30)
     assert "codex exec" in cmd
     assert "--json" in cmd
-    assert "--full-auto" in cmd
-    assert "--sandbox danger-full-access" in cmd
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+    assert "--full-auto" not in cmd
     assert "--skip-git-repo-check" in cmd
     assert "-m gpt-5.3-codex" in cmd
     assert "$(cat /tmp/p.md)" in cmd
@@ -37,7 +37,7 @@ def test_build_command_resume():
     cmd = adapter.build_command("/tmp/p.md", "gpt-5.3-codex", 100, 30, resume_session_id="sess-123")
     assert "codex exec resume sess-123" in cmd
     assert "--json" in cmd
-    assert "--full-auto" in cmd
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
 
 def test_build_command_env_vars():
@@ -315,8 +315,9 @@ def test_validate_model_claude_rejected():
     assert CodexCLIAdapter().validate_model("claude-opus-4-6") is False
 
 
-def test_get_env_overrides_empty():
-    assert CodexCLIAdapter().get_env_overrides() == {}
+def test_get_env_overrides_sandbox_disabled():
+    overrides = CodexCLIAdapter().get_env_overrides()
+    assert overrides == {"CODEX_UNSAFE_ALLOW_NO_SANDBOX": "1"}
 
 
 def test_get_auth_config_with_key():

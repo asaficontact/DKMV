@@ -54,10 +54,9 @@ class CodexCLIAdapter:
             f"cd {shlex.quote(working_dir)} && "
             f"{env_prefix}{exec_part} "
             "--json "
-            "--full-auto "
-            "--sandbox danger-full-access "
+            "--dangerously-bypass-approvals-and-sandbox "
             "--skip-git-repo-check "
-            f"-m {model} "
+            f"-m {shlex.quote(model)} "
             f'"$(cat {prompt_file})"'
             " < /dev/null > /tmp/dkmv_stream.jsonl 2>/tmp/dkmv_stream.err & echo $!"
         )
@@ -150,7 +149,11 @@ class CodexCLIAdapter:
                 total_cost_usd=0.0,
                 num_turns=self._turn_count,
                 session_id=self._session_id,
-                raw=raw,
+                raw={
+                    **raw,
+                    "total_input_tokens": self._total_input_tokens,
+                    "total_output_tokens": self._total_output_tokens,
+                },
             )
 
         if event_type == "error":
@@ -194,7 +197,7 @@ class CodexCLIAdapter:
         return (env_vars, [], None)
 
     def get_env_overrides(self) -> dict[str, str]:
-        return {}
+        return {"CODEX_UNSAFE_ALLOW_NO_SANDBOX": "1"}
 
     def supports_resume(self) -> bool:
         return True

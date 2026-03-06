@@ -169,7 +169,7 @@ def test_codex_resume_command_format():
     )
     assert "codex exec resume thread-xyz" in cmd
     assert "--json" in cmd
-    assert "--full-auto" in cmd
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
 
 def test_codex_no_resume_uses_exec():

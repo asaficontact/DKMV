@@ -17,6 +17,7 @@ from dkmv.project import (
     AuthMethod,
     CredentialSources,
     ProjectConfig,
+    ProjectDefaults,
     find_project_root,
     load_project_config,
 )
@@ -372,23 +373,30 @@ def run_init(
     auth_method: AuthMethod = "api_key"
     codex_api_key_source: str = "none"
     _do_claude_auth: bool = True  # whether to validate Claude credentials
+    _default_agent: str | None = None  # set when auth choice implies a specific agent
 
     if yes:
-        # Auto-detect: prefer API key if available, then OAuth
+        # Auto-detect Codex credentials early (needed for fallback)
+        codex_source, codex_found = discover_codex_key(project_root)
+        codex_api_key_source = codex_source if codex_found else "none"
+
+        # Auto-detect: prefer API key, then OAuth, then Codex-only
         if api_key_found:
             auth_method = "api_key"
         elif oauth_found:
             auth_method = "oauth"
+        elif codex_found:
+            auth_method = "codex"
+            _do_claude_auth = False
+            _default_agent = "codex"
         else:
             console.print(
                 "[red]Error:[/red] No authentication found. "
-                "Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN."
+                "Set ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, "
+                "or CODEX_API_KEY / OPENAI_API_KEY."
             )
             raise typer.Exit(code=1)
 
-        # Auto-detect Codex credentials
-        codex_source, codex_found = discover_codex_key(project_root)
-        codex_api_key_source = codex_source if codex_found else "none"
         if codex_found:
             console.print(f"  Codex API key:     [green]found[/green] ({codex_source})")
         else:
@@ -406,8 +414,9 @@ def run_init(
         if auth_choice_raw == "2":
             auth_method = "oauth"
         elif auth_choice_raw == "3":
-            auth_method = "api_key"
+            auth_method = "codex"
             _do_claude_auth = False
+            _default_agent = "codex"
         elif auth_choice_raw == "4":
             auth_method = "api_key"
         else:
@@ -420,6 +429,11 @@ def run_init(
                 console.print(f"  Codex API key:     [green]found[/green] ({codex_source})")
             else:
                 console.print("  Codex API key:     [yellow]not found[/yellow]")
+                _prompt_and_write_credential(
+                    project_root, "CODEX_API_KEY", "Enter your Codex/OpenAI API key"
+                )
+                codex_api_key_source = ".env"
+                console.print("  Codex API key:     [green]saved to .env[/green]")
 
     # Validate Claude credentials if needed
     if _do_claude_auth:
@@ -500,6 +514,7 @@ def run_init(
             github_token_source=gh_token_source,
             codex_api_key_source=codex_api_key_source,
         ),
+        defaults=ProjectDefaults(agent=_default_agent),
     )
 
     write_project_config(project_root, project_config)

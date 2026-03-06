@@ -158,5 +158,12 @@ def load_config(require_api_key: bool = True) -> DKMVConfig:
                 err=True,
             )
             raise typer.Exit(code=1)
+        if auth_method == "codex" and not config.codex_api_key:
+            typer.echo(
+                "Error: CODEX_API_KEY not set. "
+                "Set it via environment variable, OPENAI_API_KEY, or .env file.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
     return config

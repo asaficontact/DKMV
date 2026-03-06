@@ -417,7 +417,7 @@ class ComponentRunner:
         component_name: str,
         task_results: list[TaskResult],
     ) -> None:
-        """Assemble a unified prompts log from per-task CLAUDE.md and prompt files."""
+        """Assemble a unified prompts log from per-task instructions and prompt files."""
         run_dir = self._run_manager._run_dir(run_id)
         sections: list[str] = [f"# Component: {component_name} — Prompts & Instructions Log\n"]
 
@@ -426,7 +426,7 @@ class ComponentRunner:
 
             claude_md_file = run_dir / f"claude_md_{result.task_name}.md"
             if claude_md_file.exists():
-                sections.append("### CLAUDE.md\n")
+                sections.append("### Instructions\n")
                 sections.append(f"```markdown\n{claude_md_file.read_text()}```\n")
 
             prompt_file = run_dir / f"prompt_{result.task_name}.md"
@@ -672,7 +672,6 @@ class ComponentRunner:
                     component_agent_md=component_agent_md,
                     shared_env_vars=shared_env_vars,
                     context_files=context_files,
-                    adapter=adapter,
                 )
                 task_results.append(result)
 

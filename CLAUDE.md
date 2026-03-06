@@ -27,16 +27,20 @@ Project-scoped initialization for DKMV: a `dkmv init` command that creates `.dkm
 - ADR-0010: Container-side directory rename — `.dkmv/` → `.agent/` inside Docker containers
 - ADR-0011: Repo argument to option — breaking change: `repo` becomes `--repo` on wrapper commands
 
-## Current State (All Phases Complete)
+## Current State
 
-**Init v1 implementation is complete (Phases 1-5):**
-- 590+ tests passing, 91%+ coverage
+**Init v1 (Phases 1-5) and multi-agent adapter architecture are complete:**
+- 963 tests passing, 88.5% coverage
 - All quality gates green (ruff, mypy, pytest)
 - `dkmv init` creates `.dkmv/` with config, credentials, and component registry
 - `--repo` is optional on all 5 run commands when initialized
 - Container-side rename: `.dkmv/` (host) → `.agent/` (container)
 - Run outputs stored in `.dkmv/runs/` when initialized
 - Component registry: `dkmv register/unregister/components` commands
+- Multi-agent: `AgentAdapter` protocol with Claude Code and Codex CLI adapters
+- Agent-agnostic deliverables: plan assembly produces `GUIDE.md` (not provider-specific)
+- CLI `--agent` flag and `DKMV_AGENT` env var for agent selection
+- Parameter precedence: CLI flags > task YAML > config defaults
 
 ## Implementation Process
 
@@ -100,6 +104,7 @@ Every phase must pass these before proceeding:
 class DKMVConfig(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
     anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+    claude_oauth_token: str = Field(default="", validation_alias="CLAUDE_CODE_OAUTH_TOKEN")
     github_token: str = Field(default="", validation_alias="GITHUB_TOKEN")
     default_model: str = Field(default="claude-sonnet-4-6", validation_alias="DKMV_MODEL")
     default_max_turns: int = Field(default=100, validation_alias="DKMV_MAX_TURNS")
@@ -108,6 +113,9 @@ class DKMVConfig(BaseSettings):
     timeout_minutes: int = Field(default=30, validation_alias="DKMV_TIMEOUT")
     memory_limit: str = Field(default="8g", validation_alias="DKMV_MEMORY")
     max_budget_usd: float | None = Field(default=None, validation_alias="DKMV_MAX_BUDGET_USD")
+    codex_api_key: str = Field(default="", validation_alias="CODEX_API_KEY")
+    default_agent: str = Field(default="claude", validation_alias="DKMV_AGENT")
+    auth_method: AuthMethod = Field(default="api_key")
 
 def load_config(require_api_key: bool = True) -> DKMVConfig:
 ```
@@ -166,7 +174,7 @@ tests/
 
 ### AgentAdapter Protocol (`dkmv/adapters/base.py`)
 
-All agent backends implement the `AgentAdapter` Protocol. Key methods: `build_command()`, `parse_event()`, `is_result_event()`, `extract_result()`, `get_auth_env_vars()`, `get_docker_args()`, `supports_budget()`, `supports_max_turns()`, `supports_resume()`.
+All agent backends implement the `AgentAdapter` Protocol. Key properties: `name`, `display_name`, `instructions_path`, `prepend_instructions`, `gitignore_entries`, `default_model`. Key methods: `build_command()`, `parse_event()`, `is_result_event()`, `extract_result()`, `get_auth_config()`, `get_env_overrides()`, `validate_model()`, `supports_budget()`, `supports_max_turns()`, `supports_resume()`.
 
 ### Adapter Registry (`dkmv/adapters/__init__.py`)
 

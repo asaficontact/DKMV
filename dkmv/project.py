@@ -6,7 +6,7 @@ from typing import Literal
 import typer
 from pydantic import BaseModel, field_validator
 
-AuthMethod = Literal["api_key", "oauth"]
+AuthMethod = Literal["api_key", "oauth", "codex"]
 
 
 class CredentialSources(BaseModel):

@@ -228,7 +228,7 @@ class TestInstructionsWriting:
 
 
 class TestParameterCascade:
-    async def test_task_model_wins(
+    async def test_cli_model_wins_over_task(
         self,
         sandbox: AsyncMock,
         run_manager: RunManager,
@@ -257,7 +257,7 @@ class TestParameterCascade:
 
         await runner.run(task, session, run_id, config, CLIOverrides(model="claude-haiku-4-5"))
 
-        assert captured["model"] == "claude-opus-4-6"
+        assert captured["model"] == "claude-haiku-4-5"
 
     async def test_cli_model_used_when_task_none(
         self,

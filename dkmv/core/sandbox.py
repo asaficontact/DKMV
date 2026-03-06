@@ -205,7 +205,7 @@ class SandboxManager:
 
         result = await self.execute(session, cmd)
         lines = result.output.strip().splitlines()
-        _display = getattr(adapter, "display_name", adapter.name)
+        _display = adapter.display_name
         if not lines:
             msg = f"Failed to launch {_display}: no PID returned"
             raise RuntimeError(msg)
@@ -314,32 +314,3 @@ class SandboxManager:
                     session._extra_sessions.remove("tail")
             except Exception:
                 pass
-
-    async def stream_claude(
-        self,
-        session: SandboxSession,
-        prompt: str,
-        model: str,
-        max_turns: int,
-        timeout_minutes: int,
-        max_budget_usd: float | None = None,
-        working_dir: str = "/home/dkmv/workspace",
-        env_vars: dict[str, str] | None = None,
-        resume_session_id: str | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
-        from dkmv.adapters.claude import ClaudeCodeAdapter
-
-        adapter = ClaudeCodeAdapter()
-        async for event in self.stream_agent(
-            adapter,
-            session,
-            prompt,
-            model,
-            max_turns,
-            timeout_minutes,
-            max_budget_usd,
-            working_dir,
-            env_vars,
-            resume_session_id,
-        ):
-            yield event

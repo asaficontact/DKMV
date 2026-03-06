@@ -163,8 +163,8 @@ class TestComponentManifest:
         assert m.agent_md_file is None
 
     def test_agent_md_file_set(self) -> None:
-        m = ComponentManifest(name="test", agent_md_file="/tmp/CLAUDE.md")
-        assert m.agent_md_file == "/tmp/CLAUDE.md"
+        m = ComponentManifest(name="test", agent_md_file="/tmp/GUIDE.md")
+        assert m.agent_md_file == "/tmp/GUIDE.md"
 
     def test_manifest_name_required(self) -> None:
         with pytest.raises(ValidationError):
@@ -421,7 +421,7 @@ class TestBuiltinManifestLoading:
         assert len(manifest.tasks) == 1
         assert manifest.tasks[0].file == "implement-phase.yaml"
         assert manifest.tasks[0].for_each == "phases"
-        assert manifest.agent_md_file == "/tmp/impl-docs/CLAUDE.md"
+        assert manifest.agent_md_file == "/tmp/impl-docs/GUIDE.md"
 
     def test_qa_manifest_loads(self) -> None:
         from dkmv.tasks.discovery import resolve_component
@@ -433,7 +433,7 @@ class TestBuiltinManifestLoading:
         assert len(manifest.inputs) == 1
         assert len(manifest.tasks) == 3
         assert manifest.tasks[0].pause_after is True
-        assert manifest.agent_md_file == "/tmp/impl-docs/CLAUDE.md"
+        assert manifest.agent_md_file == "/tmp/impl-docs/GUIDE.md"
 
     def test_docs_manifest_loads(self) -> None:
         from dkmv.tasks.discovery import resolve_component
@@ -445,7 +445,7 @@ class TestBuiltinManifestLoading:
         assert len(manifest.inputs) == 1
         assert manifest.inputs[0].name == "impl_docs"
         assert len(manifest.tasks) == 3
-        assert manifest.agent_md_file == "/tmp/impl-docs/CLAUDE.md"
+        assert manifest.agent_md_file == "/tmp/impl-docs/GUIDE.md"
 
     def test_plan_manifest_loads(self) -> None:
         from dkmv.tasks.discovery import resolve_component
