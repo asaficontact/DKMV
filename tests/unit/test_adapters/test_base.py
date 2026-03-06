@@ -108,9 +108,9 @@ def test_validate_agent_model_auto_substitute_returns_default(caplog):
         result = validate_agent_model(
             "codex", "claude-sonnet-4-6", agent_explicit=True, model_explicit=False
         )
-    assert result == "gpt-5.3-codex"
+    assert result == "gpt-5.4"
     assert (
-        "gpt-5.3-codex" in caplog.text
+        "gpt-5.4" in caplog.text
         or "using default" in caplog.text
         or "not compatible" in caplog.text
     )

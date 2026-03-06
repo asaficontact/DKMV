@@ -106,7 +106,7 @@ def test_validate_agent_model_auto_substitute_codex(caplog):
         result = validate_agent_model(
             "codex", "claude-sonnet-4-6", agent_explicit=True, model_explicit=False
         )
-    assert result == "gpt-5.3-codex"
+    assert result == "gpt-5.4"
 
 
 def test_validate_agent_model_auto_substitute_claude(caplog):

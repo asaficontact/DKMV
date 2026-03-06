@@ -207,7 +207,7 @@ class CodexCLIAdapter:
 
     @property
     def default_model(self) -> str:
-        return "gpt-5.3-codex"
+        return "gpt-5.4"
 
     def validate_model(self, model: str) -> bool:
         if model.startswith("gpt-"):

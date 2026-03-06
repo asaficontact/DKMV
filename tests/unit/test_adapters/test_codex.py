@@ -297,7 +297,7 @@ def test_supports_max_turns_false():
 
 
 def test_default_model():
-    assert CodexCLIAdapter().default_model == "gpt-5.3-codex"
+    assert CodexCLIAdapter().default_model == "gpt-5.4"
 
 
 def test_validate_model_gpt():
