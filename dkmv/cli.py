@@ -300,6 +300,13 @@ async def dev(
     Takes the output of 'dkmv plan' and implements each phase sequentially.
     Use --start-phase or --start-task to resume after a failure.
     """
+    if start_phase is not None and start_task is not None:
+        console.print(
+            "Error: --start-phase and --start-task are mutually exclusive.",
+            style="bold red",
+        )
+        raise typer.Exit(code=1)
+
     from dkmv.project import find_project_root, get_repo
     from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
     from dkmv.tasks.models import CLIOverrides
@@ -310,13 +317,6 @@ async def dev(
     config_obj = load_config()
     project_root = find_project_root()
     resolved_repo = get_repo(repo)
-
-    if start_phase is not None and start_task is not None:
-        console.print(
-            "Error: --start-phase and --start-task are mutually exclusive.",
-            style="bold red",
-        )
-        raise typer.Exit(code=1)
 
     impl_docs_dir = Path(impl_docs).resolve()
     if not impl_docs_dir.is_dir():

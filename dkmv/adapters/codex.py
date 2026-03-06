@@ -51,7 +51,7 @@ class CodexCLIAdapter:
             exec_part = "codex exec"
 
         cmd = (
-            f"cd {working_dir} && "
+            f"cd {shlex.quote(working_dir)} && "
             f"{env_prefix}{exec_part} "
             "--json "
             "--full-auto "
