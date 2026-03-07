@@ -277,6 +277,69 @@ class TestOAuthAuthentication:
             load_config()
 
 
+class TestDockerSocketConfig:
+    def test_docker_socket_default_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        monkeypatch.delenv("DKMV_DOCKER_SOCKET", raising=False)
+        config = load_config()
+        assert config.docker_socket is False
+
+    def test_docker_socket_from_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        monkeypatch.setenv("DKMV_DOCKER_SOCKET", "true")
+        config = load_config()
+        assert config.docker_socket is True
+
+    def test_docker_socket_from_project_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        monkeypatch.delenv("DKMV_DOCKER_SOCKET", raising=False)
+        dkmv_dir = tmp_path / ".dkmv"
+        dkmv_dir.mkdir()
+        cfg = {
+            "version": 1,
+            "project_name": "test",
+            "repo": "https://github.com/org/repo",
+            "default_branch": "main",
+            "sandbox": {"docker_socket": True},
+            "credentials": {"auth_method": "api_key"},
+        }
+        (dkmv_dir / "config.json").write_text(json.dumps(cfg))
+        config = load_config()
+        assert config.docker_socket is True
+
+    def test_docker_socket_env_overrides_project_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        monkeypatch.setenv("DKMV_DOCKER_SOCKET", "false")
+        dkmv_dir = tmp_path / ".dkmv"
+        dkmv_dir.mkdir()
+        cfg = {
+            "version": 1,
+            "project_name": "test",
+            "repo": "https://github.com/org/repo",
+            "default_branch": "main",
+            "sandbox": {"docker_socket": True},
+            "credentials": {"auth_method": "api_key"},
+        }
+        (dkmv_dir / "config.json").write_text(json.dumps(cfg))
+        config = load_config()
+        # Env var set (even to false) means field is in model_fields_set → project config skipped
+        assert config.docker_socket is False
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # OPENAI_API_KEY Fallback Tests (T073)
 # ═══════════════════════════════════════════════════════════════════════

@@ -293,6 +293,9 @@ async def dev(
     agent: Annotated[
         str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
     ] = None,
+    docker: Annotated[
+        bool, typer.Option("--docker", help="Mount host Docker socket into sandbox.")
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Dev agent to implement phases from implementation docs.
@@ -378,6 +381,7 @@ async def dev(
         verbose=verbose or _verbose,
         context_paths=context,
         start_task=start_task,
+        docker_socket=docker,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
     if result.error_message:
@@ -468,6 +472,9 @@ async def plan(
     agent: Annotated[
         str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
     ] = None,
+    docker: Annotated[
+        bool, typer.Option("--docker", help="Mount host Docker socket into sandbox.")
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Plan agent to convert a PRD into implementation documents.
@@ -526,6 +533,7 @@ async def plan(
         on_pause=None if auto else _rich_pause_callback,
         context_paths=context,
         start_task=start_task,
+        docker_socket=docker,
     )
 
     # Plan report display from saved artifact
@@ -648,6 +656,9 @@ async def qa(
     agent: Annotated[
         str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
     ] = None,
+    docker: Annotated[
+        bool, typer.Option("--docker", help="Mount host Docker socket into sandbox.")
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the QA agent to evaluate, fix, and re-evaluate a branch.
@@ -705,6 +716,7 @@ async def qa(
         on_pause=None if auto else _qa_pause_callback,
         context_paths=context,
         start_task=start_task,
+        docker_socket=docker,
     )
 
     # QA report display from saved artifact
@@ -771,6 +783,9 @@ async def docs(
             "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
         ),
     ] = None,
+    docker: Annotated[
+        bool, typer.Option("--docker", help="Mount host Docker socket into sandbox.")
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run the Docs agent to update documentation and create a PR.
@@ -831,6 +846,7 @@ async def docs(
         verbose=verbose or _verbose,
         context_paths=context,
         start_task=start_task,
+        docker_socket=docker,
     )
     console.print(f"Run {result.run_id} completed with status: {result.status}")
 
@@ -911,6 +927,9 @@ async def run_component(
             "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
         ),
     ] = None,
+    docker: Annotated[
+        bool, typer.Option("--docker", help="Mount host Docker socket into sandbox.")
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
 ) -> None:
     """Run a component (directory of task YAML files)."""
@@ -953,6 +972,7 @@ async def run_component(
         cli_overrides=cli_overrides,
         keep_alive=keep_alive,
         verbose=verbose or _verbose,
+        docker_socket=docker,
         context_paths=context,
         start_task=start_task,
     )

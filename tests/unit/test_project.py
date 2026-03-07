@@ -85,6 +85,18 @@ class TestProjectConfigModel:
         assert cfg.defaults.model == "claude-opus-4-20250514"
         assert cfg.sandbox.image == "custom:v2"
 
+    def test_sandbox_settings_docker_socket_default_false(self) -> None:
+        cfg = ProjectConfig(project_name="test", repo="https://github.com/o/r")
+        assert cfg.sandbox.docker_socket is False
+
+    def test_sandbox_settings_docker_socket_true(self) -> None:
+        cfg = ProjectConfig(
+            project_name="test",
+            repo="https://github.com/o/r",
+            sandbox=SandboxSettings(docker_socket=True),
+        )
+        assert cfg.sandbox.docker_socket is True
+
     def test_valid_config_minimal(self) -> None:
         cfg = ProjectConfig(project_name="test", repo="https://github.com/o/r")
         assert cfg.version == 1

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -118,6 +119,7 @@ def _mock_config() -> MagicMock:
     cfg.image_name = "dkmv-sandbox:latest"
     cfg.memory_limit = "8g"
     cfg.default_agent = "claude"
+    cfg.docker_socket = False
     return cfg
 
 
@@ -2408,7 +2410,7 @@ class TestBuildSandboxConfigGithubToken:
         assert temp_file is None
         assert result.env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-test"
         assert "ANTHROPIC_API_KEY" not in result.env_vars
-        assert result.docker_args == []
+        assert result.docker_args == ["--shm-size=2g"]
 
     def test_build_sandbox_config_api_key_when_no_oauth(self) -> None:
         """auth_method=api_key → ANTHROPIC_API_KEY passed, not CLAUDE_CODE_OAUTH_TOKEN."""
@@ -2423,6 +2425,88 @@ class TestBuildSandboxConfigGithubToken:
         assert temp_file is None
         assert result.env_vars["ANTHROPIC_API_KEY"] == "sk-ant-api-key"
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
+
+
+class TestBuildSandboxConfigDockerSocket:
+    """Test _build_sandbox_config Docker socket mount logic."""
+
+    def _mock_socket_exists(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        original_exists = os.path.exists
+
+        def patched_exists(path: str) -> bool:
+            if path == "/var/run/docker.sock":
+                return True
+            return original_exists(path)
+
+        monkeypatch.setattr("os.path.exists", patched_exists)
+        monkeypatch.setattr(
+            "os.stat",
+            lambda p: (
+                type("stat", (), {"st_gid": 999})() if p == "/var/run/docker.sock" else os.stat(p)
+            ),
+        )
+
+    def test_docker_socket_via_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._mock_socket_exists(monkeypatch)
+        config = _mock_config()
+        config.docker_socket = False
+        runner = ComponentRunner(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
+        )
+        result, _ = runner._build_sandbox_config(config, 30, docker_socket=True)
+        assert "-v" in result.docker_args
+        sock_mount = result.docker_args[result.docker_args.index("-v") + 1]
+        assert "/var/run/docker.sock" in sock_mount
+        assert "--group-add=999" in result.docker_args
+
+    def test_docker_socket_via_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._mock_socket_exists(monkeypatch)
+        config = _mock_config()
+        config.docker_socket = True
+        runner = ComponentRunner(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
+        )
+        result, _ = runner._build_sandbox_config(config, 30)
+        assert "-v" in result.docker_args
+
+    def test_no_docker_socket_by_default(self) -> None:
+        config = _mock_config()
+        config.docker_socket = False
+        runner = ComponentRunner(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
+        )
+        result, _ = runner._build_sandbox_config(config, 30)
+        assert "-v" not in result.docker_args
+        assert "--group-add=999" not in " ".join(result.docker_args)
+
+    def test_docker_socket_coexists_with_shm_size(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._mock_socket_exists(monkeypatch)
+        config = _mock_config()
+        config.docker_socket = False
+        runner = ComponentRunner(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
+        )
+        result, _ = runner._build_sandbox_config(config, 30, docker_socket=True)
+        assert "--shm-size=2g" in result.docker_args
+        assert "-v" in result.docker_args
+
+    def test_docker_socket_missing_no_mount(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        original_exists = os.path.exists
+
+        def patched_exists(path: str) -> bool:
+            if path == "/var/run/docker.sock":
+                return False
+            return original_exists(path)
+
+        monkeypatch.setattr("os.path.exists", patched_exists)
+        config = _mock_config()
+        config.docker_socket = False
+        runner = ComponentRunner(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
+        )
+        result, _ = runner._build_sandbox_config(config, 30, docker_socket=True)
+        assert "-v" not in result.docker_args
+        assert "--group-add=999" not in " ".join(result.docker_args)
 
 
 class TestSetupWorkspaceGitAuth:

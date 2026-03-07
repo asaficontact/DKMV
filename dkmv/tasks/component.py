@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shlex
 import time
 from collections.abc import Awaitable, Callable
@@ -62,6 +63,7 @@ class ComponentRunner:
         config: DKMVConfig,
         timeout_minutes: int,
         agents_needed: set[str] | None = None,
+        docker_socket: bool = False,
     ) -> tuple[SandboxConfig, Path | None]:
         """Build sandbox config and return (config, temp_credentials_file).
 
@@ -74,7 +76,7 @@ class ComponentRunner:
             agents_needed = {"claude"}
 
         env_vars: dict[str, str] = {}
-        docker_args: list[str] = []
+        docker_args: list[str] = ["--shm-size=2g"]
         temp_creds_file: Path | None = None
 
         # Collect credentials for all needed agents
@@ -85,6 +87,23 @@ class ComponentRunner:
             docker_args.extend(extra_args)
             if creds_file is not None:
                 temp_creds_file = creds_file
+
+        # Mount host Docker socket if requested (DooD)
+        if docker_socket or config.docker_socket:
+            sock_path = "/var/run/docker.sock"
+            if os.path.exists(sock_path):
+                docker_args.extend(["-v", f"{sock_path}:{sock_path}"])
+                # Match host socket GID so non-root user can access it
+                try:
+                    sock_gid = os.stat(sock_path).st_gid
+                    docker_args.append(f"--group-add={sock_gid}")
+                except OSError:
+                    logger.warning("Could not stat Docker socket GID")
+                logger.info("Docker socket mount enabled (--docker)")
+            else:
+                logger.warning(
+                    "Docker socket not found at %s — --docker flag has no effect", sock_path
+                )
 
         # GitHub token always included (agent-agnostic)
         if config.github_token:
@@ -454,6 +473,7 @@ class ComponentRunner:
         on_pause: Callable[[PauseRequest], Awaitable[PauseResponse]] | None = None,
         context_paths: list[Path] | None = None,
         start_task: str | None = None,
+        docker_socket: bool = False,
     ) -> ComponentResult:
         start_time = time.monotonic()
         session: SandboxSession | None = None
@@ -522,7 +542,7 @@ class ComponentRunner:
                     pass  # Pre-scan failures are non-fatal
 
             sandbox_config, temp_creds_file = self._build_sandbox_config(
-                config, timeout, agents_needed
+                config, timeout, agents_needed, docker_socket=docker_socket
             )
             session = await self._sandbox.start(sandbox_config, component_dir.name)
 

@@ -28,6 +28,7 @@ class ProjectDefaults(BaseModel):
 
 class SandboxSettings(BaseModel):
     image: str | None = None
+    docker_socket: bool = False
 
 
 class ProjectConfig(BaseModel):

@@ -76,6 +76,11 @@ ARG CODEX_VERSION=0.110.0
 # GitHub CLI (gh):
 #   Installed from GitHub's official apt repository for Debian.
 #   The Debian-packaged version is too old and has broken API calls.
+#
+# Docker CLI + Compose (optional --docker socket mount):
+#   docker-ce-cli       - Docker CLI only (no daemon). Used when host Docker
+#                         socket is mounted via --docker flag.
+#   docker-compose-plugin - docker compose v2 plugin (supabase, etc.)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git \
@@ -104,8 +109,14 @@ RUN apt-get update \
     && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
        | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    # -- Docker CLI: add official apt repo (CLI only, no daemon) --
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
+       | tee /etc/apt/sources.list.d/docker.list > /dev/null \
     && apt-get update \
-    && apt-get install -y --no-install-recommends gh \
+    && apt-get install -y --no-install-recommends gh docker-ce-cli docker-compose-plugin \
     # -- Cleanup to reduce image size --
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -114,6 +125,21 @@ RUN apt-get update \
 # Both Codex and Claude Code expect the standard names on PATH.
 RUN ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && ln -s /usr/bin/batcat /usr/local/bin/bat
+
+# ---------------------------------------------------------------------------
+# Playwright + Chromium (headless browser for testing)
+# ---------------------------------------------------------------------------
+# Agents often need to run Playwright for E2E testing. Installing the browser
+# and system dependencies at build time avoids the agent wasting tokens trying
+# to install it at runtime.
+#
+# PLAYWRIGHT_BROWSERS_PATH: Store browsers in /opt so they're accessible to
+# all users (root installs, dkmv user runs).
+# --with-deps: Installs system libraries Chromium needs (libglib, libnss, etc.)
+# We only install chromium to keep image size reasonable (~300MB vs ~1.5GB all).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN npx playwright install --with-deps chromium \
+    && chmod -R o+rx /opt/playwright
 
 # ---------------------------------------------------------------------------
 # Claude Code installation (as root, before USER switch)
@@ -145,7 +171,9 @@ RUN userdel --remove node \
     && groupadd --gid 1000 dkmv \
     && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash dkmv \
     && echo "dkmv ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/dkmv \
-    && chmod 0440 /etc/sudoers.d/dkmv
+    && chmod 0440 /etc/sudoers.d/dkmv \
+    && groupadd -f docker \
+    && usermod -aG docker dkmv
 
 # ---------------------------------------------------------------------------
 # Directory structure

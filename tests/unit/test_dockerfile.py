@@ -45,3 +45,25 @@ def test_dockerfile_codex_install_after_claude() -> None:
     assert claude_pos != -1
     assert codex_pos != -1
     assert codex_pos > claude_pos
+
+
+def test_dockerfile_installs_docker_cli() -> None:
+    content = DOCKERFILE.read_text()
+    assert "docker-ce-cli" in content
+
+
+def test_dockerfile_installs_docker_compose_plugin() -> None:
+    content = DOCKERFILE.read_text()
+    assert "docker-compose-plugin" in content
+
+
+def test_dockerfile_docker_group_for_dkmv_user() -> None:
+    content = DOCKERFILE.read_text()
+    assert "groupadd -f docker" in content
+    assert "usermod -aG docker dkmv" in content
+
+
+def test_dockerfile_installs_playwright_chromium() -> None:
+    content = DOCKERFILE.read_text()
+    assert "PLAYWRIGHT_BROWSERS_PATH" in content
+    assert "playwright install --with-deps chromium" in content

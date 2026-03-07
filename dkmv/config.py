@@ -32,6 +32,9 @@ class DKMVConfig(BaseSettings):
     # Agent selection
     default_agent: str = Field(default="claude", validation_alias="DKMV_AGENT")
 
+    # Docker socket mount (opt-in for DooD)
+    docker_socket: bool = Field(default=False, validation_alias="DKMV_DOCKER_SOCKET")
+
     # Set by load_config() from project config; not loaded from env vars.
     # The validation_alias prevents pydantic-settings from reading AUTH_METHOD env var.
     auth_method: AuthMethod = Field(default="api_key", validation_alias="__DKMV_AUTH_METHOD")
@@ -115,6 +118,8 @@ def load_config(require_api_key: bool = True) -> DKMVConfig:
             config.memory_limit = project.defaults.memory
         if project.sandbox.image is not None and "image_name" not in config.model_fields_set:
             config.image_name = project.sandbox.image
+        if project.sandbox.docker_socket and "docker_socket" not in config.model_fields_set:
+            config.docker_socket = project.sandbox.docker_socket
         if project.defaults.agent is not None and "default_agent" not in config.model_fields_set:
             config.default_agent = project.defaults.agent
 
