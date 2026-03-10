@@ -17,5 +17,5 @@ tasks:
   - file: implement-phase.yaml
     for_each: "phases"
     max_turns: 100
-    timeout_minutes: 30
-    max_budget_usd: 5.00
+    timeout_minutes: 120
+    max_budget_usd: 10.00

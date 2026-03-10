@@ -327,7 +327,7 @@ class TaskRunner:
             # T091: validate model-agent compatibility
             resolved_model = cli_overrides.model or task.model or config.default_model
             agent_explicit = task.agent is not None or cli_overrides.agent is not None
-            model_explicit = task.model is not None or cli_overrides.model is not None
+            model_explicit = cli_overrides.model is not None
             try:
                 validated_model = validate_agent_model(
                     agent_name,

@@ -717,6 +717,7 @@ class ComponentRunner:
 
                 if result.status in ("failed", "timed_out"):
                     component_status = result.status
+                    error_message = result.error_message
                     for remaining_file, *_ in expanded_refs[i + 1 :]:
                         task_results.append(
                             TaskResult(
