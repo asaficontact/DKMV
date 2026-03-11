@@ -5,7 +5,7 @@ from importlib.resources import files
 from pathlib import Path
 
 
-BUILTIN_COMPONENTS = {"dev", "qa", "docs", "plan"}
+BUILTIN_COMPONENTS = {"dev", "qa", "docs", "plan", "ship"}
 
 
 class ComponentNotFoundError(Exception):

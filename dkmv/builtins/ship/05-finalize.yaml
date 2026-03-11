@@ -1,0 +1,110 @@
+name: finalize
+description: >
+  Clean up the agent workspace, compose a comprehensive PR description,
+  and create the pull request.
+commit: true
+push: true
+
+outputs:
+  - path: pr_result.json
+    required: true
+    save: true
+
+instructions: |
+  ## PR Creation Rules
+  - ALWAYS clean up the `.agent/` directory before creating the PR
+  - Review ALL changes on the branch — not just the latest commits
+  - The PR description must cover the entire implementation
+  - Use `gh pr create` to create the pull request
+  - If the PR already exists, update its description instead
+
+prompt: |
+  You are creating a comprehensive pull request for a feature implementation.
+
+  ## Context
+
+  - Evaluation status: {{ tasks.evaluate_fix.outputs.eval_result.status }}
+  - Issues found: {{ tasks.evaluate_fix.outputs.eval_result.issues_found }}
+  - Issues fixed: {{ tasks.evaluate_fix.outputs.eval_result.issues_fixed }}
+  - Final test results: {{ tasks.evaluate_fix.outputs.eval_result.final_test_results | default('{}') }}
+
+  ## Phase 1: Analyze All Branch Changes
+
+  1. Determine the base branch:
+  {% if pr_base is defined and pr_base %}
+     Use `{{ pr_base }}` as the base branch.
+  {% else %}
+     Run: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`
+     to determine the repository's default branch.
+  {% endif %}
+  2. Run `git log --oneline <base>..HEAD` to see all commits
+  3. Run `git diff <base>...HEAD --stat` to see all changed files
+
+  ## Phase 2: Update Documentation
+
+  4. **Audit documentation** — review the following for accuracy against the implementation:
+     - `README.md` — does it mention the new feature? Update usage examples if needed.
+     - `CHANGELOG.md` — add an entry for this change (if the project uses a changelog).
+     - Any docs referenced in the PRD or relevant to the changed code.
+  5. **Update documentation** — make targeted updates only where the implementation
+     changes documented behavior, adds new features, or changes existing APIs.
+     Do NOT rewrite docs that are unaffected.
+  6. **Commit doc updates** (if any): `git add -A && git commit -m "docs: update documentation for <feature>"`
+
+  ## Phase 3: Compose PR Description
+
+  7. Write a PR title: short (under 70 chars), conventional format:
+     `feat(<scope>): <description>`
+  8. Write the PR body:
+
+  ```
+  ## Summary
+  [1-3 sentences: what this PR does and why]
+
+  ## Changes
+  - [Key implementation changes grouped by area]
+
+  ## Tests
+  - [Test results: total, passed, failed, coverage]
+
+  ## Quality
+  - [Linting, type checking, other quality gates]
+
+  ## Breaking Changes
+  [List any, or "None"]
+  ```
+
+  ## Phase 4: Clean Up Agent Workspace
+
+  9. Save pr_result.json to a temp location:
+     `cp .agent/pr_result.json /tmp/pr_result.json 2>/dev/null || true`
+  10. Commit any remaining `.agent/` files:
+      `git add .agent/ && git commit -m "chore: save agent artifacts before cleanup" || true`
+  11. Remove `.agent/` from the repository:
+      `git rm -r .agent/ && git commit -m "chore: remove agent workspace"`
+  12. Push: `git push origin HEAD`
+
+  ## Phase 5: Create the PR
+
+  13. Create the PR:
+      `gh pr create --base <base_branch> --title "<title>" --body "<body>"`
+  14. If a PR already exists, run:
+      `gh pr edit --title "<title>" --body "<body>"`
+  15. Save the result — recreate `.agent/` first:
+      `mkdir -p .agent`
+      Then write `.agent/pr_result.json`:
+  ```json
+  {
+    "pr_url": "https://github.com/owner/repo/pull/42",
+    "pr_number": 42,
+    "pr_title": "feat(scope): description",
+    "base_branch": "main",
+    "status": "created|updated"
+  }
+  ```
+
+  ## Constraints
+  - Do NOT modify implementation code
+  - Do NOT skip the `.agent/` cleanup
+  - Be accurate — do not fabricate results
+  - If `gh pr create` fails, set status to "failed" with error message

@@ -1,0 +1,124 @@
+name: analyze
+description: >
+  Analyze the PRD and explore the repository to produce a structured
+  analysis with features, constraints, architecture notes, and
+  implementation approach.
+commit: false
+push: false
+
+outputs:
+  - path: analysis.json
+    required: true
+    save: true
+    required_fields:
+      - features
+      - constraints
+      - architecture_notes
+      - implementation_approach
+
+instructions: |
+  ## Analysis Rules
+  - Read the full PRD at `.agent/prd.md` before doing anything else
+  - Explore the repo: project structure, conventions, test patterns, CI/CD config, linting setup
+  - If design docs exist at `.agent/design_docs/`, incorporate them
+  - Research technologies/libraries mentioned in the PRD
+  - Identify files to modify vs create
+  - Do NOT write any implementation code
+  - Produce `.agent/analysis.json` with the structure described below
+
+prompt: |
+  You are a senior software architect analyzing a PRD for end-to-end delivery.
+
+  ## Setup
+
+  1. Read the PRD at `.agent/prd.md` thoroughly — this is your primary input
+  2. Explore the repository structure: project layout, conventions, test patterns, CI/CD, linting
+  {% if design_docs_path is defined and design_docs_path %}
+  3. Read design documents at `.agent/design_docs/` for architectural context
+  {% endif %}
+
+  ## Step 1: Deep Analysis
+
+  Analyze the PRD systematically. Extract:
+  - **Features** — distinct functional capabilities to build
+  - **Constraints** — technical, business, and operational limits
+  - **Architecture notes** — key technical decisions implied by the PRD
+  - **Implementation approach** — high-level strategy for delivering this
+
+  ## Step 2: Repository Exploration
+
+  Explore the codebase to understand:
+  - Project structure and conventions
+  - Test framework and patterns
+  - Linting and type-checking setup
+  - CI/CD configuration
+  - Existing patterns that the implementation should follow
+
+  ## Step 3: Research
+
+  For technologies/libraries mentioned in the PRD:
+  - Verify they exist and are actively maintained
+  - Evaluate alternatives if applicable
+  - Document decisions in `technology_decisions`
+
+  ## Output
+
+  Write `.agent/analysis.json` with this structure:
+  ```json
+  {
+    "features": [{"id": "F1", "name": "...", "description": "..."}],
+    "constraints": ["..."],
+    "architecture_notes": ["..."],
+    "implementation_approach": "High-level strategy description",
+    "existing_patterns": {
+      "test_framework": "e.g., pytest",
+      "linting": "e.g., ruff",
+      "type_checking": "e.g., mypy"
+    },
+    "files_to_modify": ["path/to/file.py"],
+    "files_to_create": ["path/to/new_file.py"],
+    "technology_decisions": [
+      {
+        "area": "e.g., HTTP framework",
+        "chosen": "e.g., FastAPI",
+        "alternatives_considered": ["Flask"],
+        "rationale": "Why this choice"
+      }
+    ],
+    "risks": [{"risk": "...", "mitigation": "..."}],
+    "estimated_complexity": "small|medium|large",
+    "questions": [
+      {
+        "id": "q1",
+        "question": "Which approach do you prefer for X?",
+        "options": [
+          {"value": "a", "label": "Option A", "description": "Trade-off details"},
+          {"value": "b", "label": "Option B", "description": "Trade-off details"}
+        ],
+        "default": "a"
+      }
+    ]
+  }
+  ```
+
+  ### Questions Guidance
+
+  Produce 2-4 questions about decisions that significantly affect implementation.
+  Each question must have 2-4 concrete options with descriptions.
+  Set a sensible `default` based on your analysis.
+  If the PRD is unambiguous, you may include fewer or no questions.
+
+  ## Self-Review
+
+  Before finalizing your output, perform the following verification:
+
+  1. **Re-read the PRD** at `.agent/prd.md` end-to-end. For each section, verify that your analysis.json captures the relevant features, constraints, and risks. Flag any PRD requirement you missed.
+  2. **Check completeness** — are all required fields present and non-empty? Does every feature have an id, name, and description? Does every risk have a mitigation?
+  3. **Check correctness** — does your analysis match what the PRD actually says? Re-read any section you're unsure about. Don't invent constraints or risks that aren't in the PRD.
+  4. **Verify technology decisions** — confirm each technology choice is justified and alternatives were considered.
+  5. **Fix genuine gaps** — if you find missing features, mischaracterized risks, or incorrect constraints, fix them now before writing the final output.
+
+  ## Constraints
+  - Do NOT write implementation code
+  - Output only `.agent/analysis.json`
+  - The analysis must be valid JSON

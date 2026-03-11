@@ -22,7 +22,7 @@ agent_md: |
 
   - `.agent/prd.md` — The PRD (source of truth, read-only)
   - `.agent/design_docs/` — Design documents (if provided)
-  - `.agent/analysis.json` — PRD analysis (produced by task 1, includes `output_dir`)
+  - `.agent/analysis.json` — PRD analysis (produced by task 1, includes `output_dir`). If the user answered questions, each question in the `questions` array will have a `user_answer` field with their choice.
   - `docs/implementation/<name>/` — Implementation output directory (determined by task 1)
 
   ## Planning Rules
@@ -30,6 +30,7 @@ agent_md: |
   - Do NOT write any implementation code
   - Task 1 chooses the output subdirectory name and records it as `output_dir` in `.agent/analysis.json`
   - Tasks 2-5 receive the output directory path directly in their prompts — no need to re-read analysis.json for it
+  - If questions in `.agent/analysis.json` have `user_answer` fields, those are the user's decisions — follow them
   - Reference PRD sections, do not copy verbatim
   - Every task must be independently testable
   - Every phase must end with verifiable functionality

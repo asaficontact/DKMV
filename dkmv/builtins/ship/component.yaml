@@ -1,0 +1,71 @@
+name: ship
+description: >
+  End-to-end delivery component: analyzes a PRD, creates a lightweight
+  implementation plan, implements code with tests, evaluates and fixes
+  issues iteratively, then creates a pull request. Designed for
+  well-scoped 1-2 feature PRDs.
+model: claude-sonnet-4-6
+
+inputs:
+  - name: prd
+    type: file
+    src: "{{ prd_path }}"
+    dest: prd.md
+
+  - name: design_docs
+    type: file
+    src: "{{ design_docs_path | default('') }}"
+    dest: design_docs/
+    optional: true
+
+agent_md: |
+  ## Ship Component — End-to-End Delivery
+
+  You are executing a streamlined delivery pipeline. The entire flow
+  (analyze → plan → implement → evaluate → PR) happens in this single
+  session. Each task builds on the outputs of previous tasks.
+
+  ## Workspace Layout
+
+  - `.agent/prd.md` — The PRD (source of truth, read-only)
+  - `.agent/design_docs/` — Design documents (if provided)
+  - `.agent/analysis.json` — PRD analysis (produced by task 1). If the user answered questions, each question in the `questions` array will have a `user_answer` field with their choice.
+  - `.agent/plan.json` — Implementation plan (produced by task 2)
+  - `.agent/impl_result.json` — Implementation results (produced by task 3)
+  - `.agent/eval_result.json` — Evaluation results (produced by task 4)
+  - `.agent/pr_result.json` — PR creation results (produced by task 5)
+
+  ## Rules
+
+  - Follow existing code conventions in the repository
+  - Write tests alongside implementation code
+  - Run the full test suite before marking implementation complete
+  - Commit frequently with conventional commit messages
+  - Do not push to main/master directly
+  - Update relevant documentation (README, CHANGELOG, docs/) to reflect implementation changes before creating the PR
+
+tasks:
+  - file: 01-analyze.yaml
+    model: claude-opus-4-6
+    max_turns: 60
+    timeout_minutes: 20
+    max_budget_usd: 2.00
+    pause_after: true
+  - file: 02-plan.yaml
+    model: claude-opus-4-6
+    max_turns: 60
+    timeout_minutes: 20
+    max_budget_usd: 3.00
+  - file: 03-implement.yaml
+    max_turns: 150
+    timeout_minutes: 180
+    max_budget_usd: 15.00
+  - file: 04-evaluate_fix.yaml
+    model: claude-opus-4-6
+    max_turns: 100
+    timeout_minutes: 60
+    max_budget_usd: 8.00
+  - file: 05-finalize.yaml
+    max_turns: 60
+    timeout_minutes: 15
+    max_budget_usd: 1.50

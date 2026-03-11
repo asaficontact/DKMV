@@ -22,6 +22,7 @@ class TestMainCallback:
             "plan",
             "qa",
             "docs",
+            "ship",
             "init",
             "register",
             "runs",
@@ -190,6 +191,17 @@ class TestComponentCommandHelp:
         assert result.exit_code == 0
         assert "--prd" in result.output
         assert "--design-docs" in result.output
+        assert "--feature-name" in result.output
+        assert "--repo" in result.output
+        assert "--auto" in result.output
+
+    def test_ship_help(self) -> None:
+        result = runner.invoke(app, ["ship", "--help"])
+        assert result.exit_code == 0
+        assert "--prd" in result.output
+        assert "--design-docs" in result.output
+        assert "--pr-base" in result.output
+        assert "--max-iterations" in result.output
         assert "--feature-name" in result.output
         assert "--repo" in result.output
         assert "--auto" in result.output

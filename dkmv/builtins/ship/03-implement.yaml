@@ -1,0 +1,93 @@
+name: implement
+description: >
+  Execute the implementation plan step by step: write code, write tests,
+  run verification, and commit after each step.
+commit: true
+push: true
+
+outputs:
+  - path: impl_result.json
+    required: true
+    save: true
+    required_fields:
+      - status
+      - files_changed
+      - test_results
+
+instructions: |
+  ## Implementation Rules
+  - Follow the plan in `.agent/plan.json` step by step
+  - Write tests alongside implementation code
+  - Run step verification after each step
+  - Commit with conventional commit messages after each step
+  - After all steps: run FULL test suite + quality commands
+  - Fix any failures before producing the result
+
+prompt: |
+  You are a senior software engineer implementing a feature end-to-end.
+
+  ## Setup
+
+  1. Read the PRD at `.agent/prd.md`
+  2. Read the analysis at `.agent/analysis.json`
+  3. Read the plan at `.agent/plan.json`
+
+  ## Plan Context
+
+  - Summary: {{ tasks.plan.outputs.plan.summary }}
+  - Estimated steps: {{ tasks.plan.outputs.plan.estimated_steps }}
+  - Test strategy: {{ tasks.plan.outputs.plan.test_strategy }}
+
+  ## Implementation Process
+
+  For each step in the plan:
+  1. **Implement** — write the code and tests described in the step
+  2. **Verify** — run the step's verification command
+  3. **Fix** — if verification fails, fix and re-verify
+  4. **Commit** — `git add` the changed files and commit with a conventional message
+     (e.g., `feat(scope): add X`, `test(scope): add tests for X`)
+
+  After ALL steps are complete:
+  1. Run the full test suite using the framework from the plan's test_strategy.
+     Use `{{ tasks.plan.outputs.plan.test_strategy.framework }}` as the test runner.
+     If test_files are specified in the plan, run those. Otherwise, run the default test discovery.
+  2. Run all quality commands from the test strategy:
+     {% for cmd in tasks.plan.outputs.plan.test_strategy.quality_commands %}
+     - `{{ cmd }}`
+     {% endfor %}
+  3. Fix any failures
+  4. Push all commits: `git push origin HEAD`
+
+  ## Output
+
+  Write `.agent/impl_result.json` with this structure:
+  ```json
+  {
+    "status": "completed|partial",
+    "steps_completed": ["S1", "S2", "S3"],
+    "steps_skipped": [],
+    "files_changed": ["src/foo.py", "tests/test_foo.py"],
+    "files_created": ["src/bar.py"],
+    "test_results": {
+      "total": 25,
+      "passed": 25,
+      "failed": 0,
+      "coverage": 85
+    },
+    "quality_results": {
+      "linting": "pass",
+      "type_checking": "pass"
+    },
+    "commits": [
+      "abc1234 feat(auth): add JWT token generation",
+      "def5678 test(auth): add auth module tests"
+    ],
+    "notes": ""
+  }
+  ```
+
+  ## Constraints
+  - Follow existing code conventions
+  - Write tests alongside implementation
+  - Commit frequently with conventional commit messages
+  - Do NOT push to main/master directly

@@ -560,6 +560,154 @@ async def plan(
         console.print(f"Error: {result.error_message}", style="bold red")
 
 
+@app.command()
+@async_command
+async def ship(
+    prd: Annotated[Path, typer.Option("--prd", help="Path to the PRD file.")],
+    repo: Annotated[
+        str | None,
+        typer.Option("--repo", help="Repository URL (default: from project config)."),
+    ] = None,
+    branch: Annotated[str | None, typer.Option("--branch", help="Branch name to use.")] = None,
+    design_docs: Annotated[
+        Path | None, typer.Option("--design-docs", help="Path to design documents directory.")
+    ] = None,
+    pr_base: Annotated[
+        str | None,
+        typer.Option("--pr-base", help="Base branch for PR (default: repo default branch)."),
+    ] = None,
+    max_iterations: Annotated[
+        int, typer.Option("--max-iterations", help="Max evaluate-fix iterations.")
+    ] = 3,
+    feature_name: Annotated[
+        str | None, typer.Option("--feature-name", help="Feature name for tracking.")
+    ] = None,
+    model: Annotated[str | None, typer.Option("--model", help="Model to use for this run.")] = None,
+    max_turns: Annotated[
+        int | None, typer.Option("--max-turns", help="Maximum agent turns.")
+    ] = None,
+    max_budget_usd: Annotated[
+        float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
+    ] = None,
+    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    keep_alive: Annotated[
+        bool, typer.Option("--keep-alive", help="Keep container running after completion.")
+    ] = False,
+    context: Annotated[
+        list[Path] | None,
+        typer.Option("--context", help="Local file or directory to include as extra context."),
+    ] = None,
+    start_task: Annotated[
+        str | None,
+        typer.Option(
+            "--start-task", help="Task name or 1-based index to start from (skip earlier tasks)."
+        ),
+    ] = None,
+    auto: Annotated[bool, typer.Option("--auto", help="Skip interactive pauses.")] = False,
+    agent: Annotated[
+        str | None, typer.Option("--agent", help="Agent to use (claude, codex).")
+    ] = None,
+    docker: Annotated[
+        bool, typer.Option("--docker", help="Mount host Docker socket into sandbox.")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output.")] = False,
+) -> None:
+    """Run the Ship agent for end-to-end delivery of a well-scoped PRD.
+
+    Analyzes the PRD, creates an implementation plan, implements code with
+    tests, evaluates and fixes issues iteratively, then creates a pull request.
+    """
+    import json as json_mod
+
+    from dkmv.project import find_project_root, get_repo
+    from dkmv.tasks import ComponentRunner, TaskLoader, TaskRunner, resolve_component
+    from dkmv.tasks.models import CLIOverrides
+    from dkmv.core.runner import RunManager
+    from dkmv.core.sandbox import SandboxManager
+    from dkmv.core.stream import StreamParser
+
+    config_obj = load_config()
+    project_root = find_project_root()
+    resolved_repo = get_repo(repo)
+
+    resolved_feature = feature_name or Path(prd).stem
+    resolved_branch = branch or f"feature/{resolved_feature}"
+
+    variables: dict[str, str | int] = {
+        "prd_path": str(prd),
+        "max_iterations": max_iterations,
+    }
+    if design_docs:
+        variables["design_docs_path"] = str(design_docs)
+    if pr_base:
+        variables["pr_base"] = pr_base
+
+    cli_overrides = CLIOverrides(
+        model=model,
+        max_turns=max_turns,
+        timeout_minutes=timeout,
+        max_budget_usd=max_budget_usd,
+        agent=agent,
+    )
+
+    component_dir = resolve_component("ship", project_root=project_root)
+    sandbox = SandboxManager()
+    run_mgr = RunManager(output_dir=config_obj.output_dir)
+    parser = StreamParser(verbose=verbose or _verbose)
+    loader = TaskLoader()
+    task_runner = TaskRunner(sandbox, run_mgr, parser, Console())
+    runner = ComponentRunner(sandbox, run_mgr, loader, task_runner, Console())
+
+    result = await runner.run(
+        component_dir=component_dir,
+        repo=resolved_repo,
+        branch=resolved_branch,
+        feature_name=resolved_feature,
+        variables=variables,
+        config=config_obj,
+        cli_overrides=cli_overrides,
+        keep_alive=keep_alive,
+        verbose=verbose or _verbose,
+        on_pause=None if auto else _rich_pause_callback,
+        context_paths=context,
+        start_task=start_task,
+        docker_socket=docker,
+    )
+
+    # Ship report display from saved artifacts
+    eval_file = config_obj.output_dir / "runs" / result.run_id / "eval_result.json"
+    if result.status == "completed" and eval_file.exists():
+        eval_data = json_mod.loads(eval_file.read_text())
+        eval_status = eval_data.get("status", "unknown")
+        if eval_status == "pass":
+            console.print("SHIP: PASS", style="bold green")
+        else:
+            console.print("SHIP: FAIL", style="bold red")
+        found = eval_data.get("issues_found", 0)
+        fixed = eval_data.get("issues_fixed", 0)
+        iters = eval_data.get("iterations", 0)
+        console.print(f"Issues found: {found}, fixed: {fixed}, iterations: {iters}")
+        test_results = eval_data.get("final_test_results", {})
+        if test_results:
+            total = test_results.get("total", 0)
+            passed = test_results.get("passed", 0)
+            failed = test_results.get("failed", 0)
+            console.print(f"Tests: {total} total, {passed} passed, {failed} failed")
+    else:
+        console.print(f"Run {result.run_id} completed with status: {result.status}")
+
+    # PR result display
+    pr_file = config_obj.output_dir / "runs" / result.run_id / "pr_result.json"
+    if result.status == "completed" and pr_file.exists():
+        pr_data = json_mod.loads(pr_file.read_text())
+        pr_url = pr_data.get("pr_url", "")
+        if pr_url:
+            console.print(f"PR: {pr_url}", style="bold green")
+
+    if result.error_message:
+        console.print(f"Error: {result.error_message}", style="bold red")
+
+
 async def _qa_pause_callback(request: PauseRequest) -> PauseResponse:
     """Present QA evaluation results and let the user choose: fix, ship, or abort."""
     import json as json_mod

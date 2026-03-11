@@ -36,7 +36,8 @@ prompt: |
 
   1. The output directory is `{{ tasks.analyze.outputs.analysis.output_dir }}` — all deliverables go here
   2. Create the output directory if it doesn't exist: `mkdir -p {{ tasks.analyze.outputs.analysis.output_dir }}`
-  3. Read `.agent/analysis.json` for the full PRD analysis (features, constraints, risks, architecture notes)
+  3. Read `.agent/analysis.json` for the full PRD analysis (features, constraints, risks, architecture notes).
+     If the `questions` array contains entries with a `user_answer` field, those are the user's decisions — incorporate them into your work.
   4. Re-read the PRD at `.agent/prd.md` for reference
 
   ## Analysis Context
@@ -57,6 +58,17 @@ prompt: |
   {% for ng in tasks.analyze.outputs.analysis.non_goals %}
   - {{ ng }}
   {% endfor %}
+
+  {% if tasks.analyze.outputs.analysis.questions is defined %}
+  {% set answered = tasks.analyze.outputs.analysis.questions | selectattr('user_answer', 'defined') | list %}
+  {% if answered %}
+
+  User decisions:
+  {% for q in answered %}
+  - **{{ q.question }}** → {{ q.user_answer }}
+  {% endfor %}
+  {% endif %}
+  {% endif %}
 
   {% if design_docs_path is defined and design_docs_path %}
   ## Design Documents

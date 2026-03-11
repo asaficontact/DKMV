@@ -389,6 +389,50 @@ class ComponentRunner:
         return PauseRequest(task_name=task_name, questions=questions, context=context)
 
     @staticmethod
+    def _merge_pause_answers(
+        outputs: dict[str, str], answers: dict[str, str]
+    ) -> dict[str, str] | None:
+        """Merge user answers into the output JSON that contains the questions.
+
+        Finds the output file with a ``questions`` array and annotates each
+        question object with a ``user_answer`` field.  Returns the updated
+        outputs dict (same keys, updated content) or ``None`` when no
+        questions array was found (caller should fall back to writing
+        ``user_decisions.json``).
+        """
+        if not answers:
+            return None
+
+        for path, content in outputs.items():
+            try:
+                data = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            raw_questions = data.get("questions")
+            if not isinstance(raw_questions, list):
+                continue
+
+            # Merge answers into the questions array
+            merged = False
+            for q in raw_questions:
+                if not isinstance(q, dict):
+                    continue
+                q_id = q.get("id")
+                if q_id and str(q_id) in answers:
+                    q["user_answer"] = answers[str(q_id)]
+                    merged = True
+
+            if merged:
+                updated_content = json.dumps(data, indent=2)
+                updated_outputs = dict(outputs)
+                updated_outputs[path] = updated_content
+                return updated_outputs
+
+        return None
+
+    @staticmethod
     def _resolve_start_task(
         start_task: str,
         expanded_refs: list[tuple[Path, ManifestTaskRef | None, dict[str, Any] | None, int | None]],
@@ -700,11 +744,38 @@ class ComponentRunner:
                     if task_ref and task_ref.pause_after:
                         pause_request = self._build_pause_request(task.name, result.outputs)
                         pause_response = await on_pause(pause_request)
-                        await self._sandbox.write_file(
-                            session,
-                            f"{WORKSPACE_DIR}/.agent/user_decisions.json",
-                            json.dumps(pause_response.answers, indent=2),
+
+                        # Merge answers into the source output JSON when it
+                        # contains a questions array (plan/ship pattern).
+                        # Falls back to a separate user_decisions.json for
+                        # callbacks that don't produce questions (QA pattern).
+                        merged_outputs = self._merge_pause_answers(
+                            result.outputs, pause_response.answers
                         )
+                        if merged_outputs is not None:
+                            # Update the in-memory result so _build_variables()
+                            # picks up the merged version for Jinja2 templates.
+                            old_outputs = result.outputs
+                            result.outputs = merged_outputs
+                            # Rewrite changed files in the container and update
+                            # saved artifacts so the run dir stays in sync.
+                            for path, content in merged_outputs.items():
+                                if content == old_outputs.get(path):
+                                    continue
+                                await self._sandbox.write_file(
+                                    session,
+                                    f"{WORKSPACE_DIR}/.agent/{path}",
+                                    content,
+                                )
+                                filename = Path(path).name
+                                self._run_manager.save_artifact(run_id, filename, content)
+                        else:
+                            await self._sandbox.write_file(
+                                session,
+                                f"{WORKSPACE_DIR}/.agent/user_decisions.json",
+                                json.dumps(pause_response.answers, indent=2),
+                            )
+
                         if pause_response.skip_remaining:
                             for remaining_file, *_ in expanded_refs[i + 1 :]:
                                 task_results.append(

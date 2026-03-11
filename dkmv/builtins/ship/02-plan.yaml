@@ -1,0 +1,92 @@
+name: plan
+description: >
+  Create a flat, ordered list of atomic implementation steps based on
+  the analysis. Each step is independently verifiable.
+commit: false
+push: false
+
+outputs:
+  - path: plan.json
+    required: true
+    save: true
+    required_fields:
+      - steps
+      - test_strategy
+
+instructions: |
+  ## Planning Rules
+  - Read `.agent/analysis.json` and `.agent/prd.md`
+  - Read `.agent/analysis.json` — if questions have a `user_answer` field, those are the user's decisions. Incorporate them into the plan.
+  - Create a flat ordered list of atomic implementation steps
+  - Each step should be 5-30 min for an experienced dev, independently verifiable
+  - Do NOT write any implementation code
+
+prompt: |
+  You are a senior software architect creating an implementation plan.
+
+  ## Setup
+
+  1. Read the PRD at `.agent/prd.md`
+  2. Read the analysis at `.agent/analysis.json`. If any questions in the
+     `questions` array have a `user_answer` field, those are the user's
+     decisions — factor them into the plan.
+
+  ## Context from Analysis
+
+  - Features: {{ tasks.analyze.outputs.analysis.features }}
+  - Implementation approach: {{ tasks.analyze.outputs.analysis.implementation_approach }}
+  - Constraints: {{ tasks.analyze.outputs.analysis.constraints }}
+  - Architecture notes: {{ tasks.analyze.outputs.analysis.architecture_notes }}
+  {% if tasks.analyze.outputs.analysis.questions is defined %}
+  {% set answered = tasks.analyze.outputs.analysis.questions | selectattr('user_answer', 'defined') | list %}
+  {% if answered %}
+
+  ## User Decisions
+  {% for q in answered %}
+  - **{{ q.question }}** → {{ q.user_answer }}
+  {% endfor %}
+  {% endif %}
+  {% endif %}
+
+  ## Create Implementation Plan
+
+  Create a flat, ordered list of atomic implementation steps:
+
+  1. **Order matters** — steps execute sequentially, dependencies must come first
+  2. **Atomic** — each step produces a verifiable result
+  3. **5-30 min each** — for an experienced developer
+  4. **5-20 steps typical** — for a well-scoped 1-2 feature PRD
+  5. **Include tests** — test creation is part of implementation steps, not separate
+
+  ## Output
+
+  Write `.agent/plan.json` with this structure:
+  ```json
+  {
+    "summary": "One-line description of what will be built",
+    "steps": [
+      {
+        "id": "S1",
+        "description": "What to implement",
+        "files_to_create": ["path/to/new.py"],
+        "files_to_modify": ["path/to/existing.py"],
+        "verification": "Command to verify this step (e.g., pytest tests/test_foo.py -v)",
+        "depends_on": []
+      }
+    ],
+    "test_strategy": {
+      "framework": "e.g., pytest",
+      "test_files": ["tests/test_foo.py"],
+      "coverage_target": 80,
+      "quality_commands": ["ruff check .", "mypy src/"]
+    },
+    "files_to_create": ["all new files across all steps"],
+    "files_to_modify": ["all modified files across all steps"],
+    "estimated_steps": 10
+  }
+  ```
+
+  ## Constraints
+  - Do NOT write implementation code
+  - Output only `.agent/plan.json`
+  - The plan must be valid JSON

@@ -1,0 +1,115 @@
+name: evaluate_fix
+description: >
+  Evaluate the implementation against PRD requirements, fix issues
+  iteratively, and produce a final evaluation report.
+commit: true
+push: true
+
+outputs:
+  - path: eval_result.json
+    required: true
+    save: true
+    required_fields:
+      - status
+      - iterations
+      - issues_found
+      - issues_fixed
+
+instructions: |
+  ## Evaluation Rules
+  - Read the PRD, plan, analysis, and implementation result
+  - For each PRD requirement: check implementation, tests, and edge cases
+  - Also check: no regressions, code style, error handling, security, performance
+  - Iterate up to {{ max_iterations | default(3) }} times: evaluate → fix → re-test
+  - Stop when all issues are fixed OR max iterations reached
+  - Write the final report to `.agent/eval_result.json`
+
+prompt: |
+  You are a senior QA engineer evaluating a feature implementation.
+
+  ## Setup
+
+  1. Read the PRD at `.agent/prd.md`
+  2. Read the analysis at `.agent/analysis.json`
+  3. Read the plan at `.agent/plan.json`
+  4. Read the implementation result at `.agent/impl_result.json`
+
+  ## Implementation Context
+
+  - Status: {{ tasks.implement.outputs.impl_result.status }}
+  - Test results: {{ tasks.implement.outputs.impl_result.test_results }}
+  - Files changed: {{ tasks.implement.outputs.impl_result.files_changed }}
+
+  ## Evaluation Process
+
+  Iterate up to {{ max_iterations | default(3) }} times:
+
+  ### Each Iteration:
+
+  1. **Run full test suite** + all quality commands
+  2. **Review PRD requirements** — for each requirement:
+     - Is it implemented correctly?
+     - Are there tests covering it?
+     - Are edge cases handled?
+  3. **Check quality**:
+     - No regressions in existing tests
+     - Code follows project style conventions
+     - Error handling is appropriate
+     - No security issues (OWASP top 10)
+     - No obvious performance issues
+  4. **List issues found** with severity (critical, major, minor)
+  5. **Verify and triage each issue** before attempting a fix:
+     - Read the relevant code and gather context
+     - Confirm the issue is genuine (not a false positive or misunderstanding)
+     - Classify it: does it require a code fix, or is it a false positive / out of scope / deferred?
+     - Only fix issues that are confirmed genuine and in scope
+  6. **Fix confirmed issues** directly in the code
+  7. **Re-run tests** to verify fixes don't break anything
+  8. **Commit fixes**: `git add . && git commit -m "fix(scope): description"`
+
+  ### Stop Conditions:
+  - All issues fixed → status: "pass"
+  - Max iterations reached with remaining issues → status: "fail"
+  - No issues found on first check → status: "pass"
+
+  After the final iteration, push: `git push origin HEAD`
+
+  ## Output
+
+  Write `.agent/eval_result.json` with this structure:
+  ```json
+  {
+    "status": "pass|fail",
+    "iterations": 2,
+    "issues_found": 5,
+    "issues_fixed": 5,
+    "issues_remaining": 0,
+    "issues": [
+      {
+        "id": "I1",
+        "severity": "major",
+        "description": "Missing input validation on ...",
+        "file": "src/foo.py",
+        "fixed": true,
+        "resolution": "fixed|false_positive|out_of_scope|deferred",
+        "fix_description": "Added validation in foo() method"
+      }
+    ],
+    "final_test_results": {
+      "total": 30,
+      "passed": 30,
+      "failed": 0,
+      "coverage": 88
+    },
+    "final_quality_results": {
+      "linting": "pass",
+      "type_checking": "pass"
+    },
+    "summary": "All issues fixed in 2 iterations. 30 tests passing."
+  }
+  ```
+
+  ## Constraints
+  - Fix issues directly — don't just report them
+  - Commit all fixes with conventional commit messages
+  - The report must be valid JSON

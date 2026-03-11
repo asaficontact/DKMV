@@ -284,7 +284,7 @@ class TestComponentLoading:
         assert yaml_files[5].name == "component.yaml"
 
     def test_all_builtins_have_component_yaml(self) -> None:
-        for name in ("dev", "qa", "docs", "plan"):
+        for name in ("dev", "qa", "docs", "plan", "ship"):
             component_dir = resolve_component(name)
             assert (component_dir / "component.yaml").exists(), f"{name} missing component.yaml"
 
@@ -293,7 +293,7 @@ class TestDiscovery:
     """Verify resolve_component finds all built-ins."""
 
     def test_resolve_all_builtins(self) -> None:
-        for name in ("dev", "qa", "docs", "plan"):
+        for name in ("dev", "qa", "docs", "plan", "ship"):
             path = resolve_component(name)
             assert path.is_dir()
 
@@ -677,3 +677,378 @@ class TestLoadComponent:
         assert tasks[2].name == "phases"
         assert tasks[3].name == "assembly"
         assert tasks[4].name == "evaluate-fix"
+
+    def test_ship_load_component_returns_five_tasks(self) -> None:
+        component_dir = resolve_component("ship")
+        loader = TaskLoader()
+        tasks = loader.load_component(component_dir, SHIP_SAMPLE_VARS)
+        assert len(tasks) == 5
+        assert tasks[0].name == "analyze"
+        assert tasks[1].name == "plan"
+        assert tasks[2].name == "implement"
+        assert tasks[3].name == "evaluate_fix"
+        assert tasks[4].name == "finalize"
+
+
+SHIP_SAMPLE_VARS: dict[str, Any] = {
+    **SAMPLE_VARS,
+    "prd_path": "/tmp/test-prd.md",
+    "max_iterations": 3,
+    "tasks": {
+        "analyze": {
+            "status": "completed",
+            "cost": "0.50",
+            "turns": "10",
+            "outputs": {
+                "analysis": {
+                    "features": [{"id": "F1", "name": "Auth", "description": "User auth"}],
+                    "constraints": ["Python 3.12+"],
+                    "architecture_notes": ["Modular design"],
+                    "implementation_approach": "Add auth module with JWT",
+                    "existing_patterns": {"test_framework": "pytest"},
+                    "files_to_modify": ["src/app.py"],
+                    "files_to_create": ["src/auth.py"],
+                    "technology_decisions": [],
+                    "risks": [],
+                    "estimated_complexity": "small",
+                }
+            },
+        },
+        "plan": {
+            "status": "completed",
+            "cost": "0.80",
+            "turns": "15",
+            "outputs": {
+                "plan": {
+                    "summary": "Add JWT auth to the API",
+                    "steps": [{"id": "S1", "description": "Create auth module"}],
+                    "test_strategy": {
+                        "framework": "pytest",
+                        "test_files": [],
+                        "quality_commands": [],
+                    },
+                    "estimated_steps": 5,
+                }
+            },
+        },
+        "implement": {
+            "status": "completed",
+            "cost": "5.00",
+            "turns": "80",
+            "outputs": {
+                "impl_result": {
+                    "status": "completed",
+                    "files_changed": ["src/auth.py"],
+                    "test_results": {"total": 20, "passed": 20, "failed": 0},
+                }
+            },
+        },
+        "evaluate_fix": {
+            "status": "completed",
+            "cost": "3.00",
+            "turns": "40",
+            "outputs": {
+                "eval_result": {
+                    "status": "pass",
+                    "iterations": 1,
+                    "issues_found": 2,
+                    "issues_fixed": 2,
+                    "final_test_results": {"total": 22, "passed": 22, "failed": 0},
+                }
+            },
+        },
+    },
+}
+
+
+class TestShipYAMLValidation:
+    """Verify ship YAML files load and validate correctly."""
+
+    def test_ship_analyze_yaml_loads(self) -> None:
+        component_dir = resolve_component("ship")
+        loader = TaskLoader()
+        task = loader.load(component_dir / "01-analyze.yaml", SHIP_SAMPLE_VARS)
+        assert task.name == "analyze"
+        assert task.commit is False
+        assert task.push is False
+        assert len(task.outputs) == 1
+        assert task.outputs[0].required is True
+
+    def test_ship_plan_yaml_loads(self) -> None:
+        component_dir = resolve_component("ship")
+        loader = TaskLoader()
+        task = loader.load(component_dir / "02-plan.yaml", SHIP_SAMPLE_VARS)
+        assert task.name == "plan"
+        assert task.commit is False
+        assert task.push is False
+        assert len(task.outputs) == 1
+        assert task.outputs[0].required is True
+
+    def test_ship_implement_yaml_loads(self) -> None:
+        component_dir = resolve_component("ship")
+        loader = TaskLoader()
+        task = loader.load(component_dir / "03-implement.yaml", SHIP_SAMPLE_VARS)
+        assert task.name == "implement"
+        assert task.commit is True
+        assert task.push is True
+        assert len(task.outputs) == 1
+        assert task.outputs[0].required is True
+
+    def test_ship_evaluate_fix_yaml_loads(self) -> None:
+        component_dir = resolve_component("ship")
+        loader = TaskLoader()
+        task = loader.load(component_dir / "04-evaluate_fix.yaml", SHIP_SAMPLE_VARS)
+        assert task.name == "evaluate_fix"
+        assert task.commit is True
+        assert task.push is True
+        assert len(task.outputs) == 1
+        assert task.outputs[0].required is True
+        assert "status" in task.outputs[0].required_fields
+        assert "iterations" in task.outputs[0].required_fields
+        assert "issues_found" in task.outputs[0].required_fields
+        assert "issues_fixed" in task.outputs[0].required_fields
+
+    def test_ship_finalize_yaml_loads(self) -> None:
+        component_dir = resolve_component("ship")
+        loader = TaskLoader()
+        task = loader.load(component_dir / "05-finalize.yaml", SHIP_SAMPLE_VARS)
+        assert task.name == "finalize"
+        assert task.commit is True
+        assert task.push is True
+        assert len(task.outputs) == 1
+        assert task.outputs[0].required is True
+
+
+class TestShipComponentLoading:
+    """Verify ship component directory structure."""
+
+    def test_ship_component_has_manifest_and_five_tasks(self) -> None:
+        component_dir = resolve_component("ship")
+        yaml_files = sorted(component_dir.glob("*.yaml"))
+        assert len(yaml_files) == 6  # component.yaml + 5 task YAMLs
+        assert yaml_files[0].name == "01-analyze.yaml"
+        assert yaml_files[4].name == "05-finalize.yaml"
+        assert yaml_files[5].name == "component.yaml"
+
+    def test_ship_yaml_files_exist(self) -> None:
+        path = resolve_component("ship")
+        assert (path / "01-analyze.yaml").exists()
+        assert (path / "02-plan.yaml").exists()
+        assert (path / "03-implement.yaml").exists()
+        assert (path / "04-evaluate_fix.yaml").exists()
+        assert (path / "05-finalize.yaml").exists()
+
+
+class TestShipCLIWrappers:
+    """Verify ship CLI wrapper correctly translates flags to ComponentRunner.run() args."""
+
+    def test_ship_wrapper_maps_prd_to_variable(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(app, ["ship", "--repo", str(tmp_path), "--prd", str(prd)])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_runner.run.call_args[1]
+        assert call_kwargs["variables"]["prd_path"] == str(prd)
+
+    def test_ship_wrapper_maps_max_iterations(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(
+                app,
+                ["ship", "--repo", str(tmp_path), "--prd", str(prd), "--max-iterations", "5"],
+            )
+
+        assert result.exit_code == 0
+        call_kwargs = mock_runner.run.call_args[1]
+        assert call_kwargs["variables"]["max_iterations"] == 5
+
+    def test_ship_wrapper_maps_optional_design_docs(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+        design = tmp_path / "design"
+        design.mkdir()
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "ship",
+                    "--repo",
+                    str(tmp_path),
+                    "--prd",
+                    str(prd),
+                    "--design-docs",
+                    str(design),
+                ],
+            )
+
+        assert result.exit_code == 0
+        variables = mock_runner.run.call_args[1]["variables"]
+        assert "design_docs_path" in variables
+
+    def test_ship_wrapper_maps_optional_pr_base(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "ship",
+                    "--repo",
+                    str(tmp_path),
+                    "--prd",
+                    str(prd),
+                    "--pr-base",
+                    "develop",
+                ],
+            )
+
+        assert result.exit_code == 0
+        variables = mock_runner.run.call_args[1]["variables"]
+        assert variables["pr_base"] == "develop"
+
+    def test_ship_wrapper_pr_base_omitted_by_default(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(app, ["ship", "--repo", str(tmp_path), "--prd", str(prd)])
+
+        assert result.exit_code == 0
+        variables = mock_runner.run.call_args[1]["variables"]
+        assert "pr_base" not in variables
+
+    def test_ship_feature_name_defaults_to_prd_stem(self, tmp_path: Path) -> None:
+        prd = tmp_path / "my-feature.md"
+        prd.write_text("# PRD\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(app, ["ship", "--repo", str(tmp_path), "--prd", str(prd)])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_runner.run.call_args[1]
+        assert call_kwargs["feature_name"] == "my-feature"
+
+    def test_ship_branch_defaults_to_feature_name(self, tmp_path: Path) -> None:
+        prd = tmp_path / "my-feature.md"
+        prd.write_text("# PRD\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(app, ["ship", "--repo", str(tmp_path), "--prd", str(prd)])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_runner.run.call_args[1]
+        assert call_kwargs["branch"] == "feature/my-feature"
+
+    def test_ship_max_iterations_default_is_3(self, tmp_path: Path) -> None:
+        prd = tmp_path / "prd.md"
+        prd.write_text("# PRD\n")
+
+        mock_runner = MagicMock()
+        mock_result = MagicMock(run_id="r1", status="completed", error_message="")
+        mock_runner.run = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("dkmv.cli.load_config", return_value=_mock_config()),
+            patch("dkmv.tasks.ComponentRunner", return_value=mock_runner),
+            patch("dkmv.core.runner.RunManager"),
+            patch("dkmv.core.sandbox.SandboxManager"),
+            patch("dkmv.core.stream.StreamParser"),
+            patch("dkmv.tasks.loader.TaskLoader"),
+            patch("dkmv.tasks.runner.TaskRunner"),
+        ):
+            result = runner.invoke(app, ["ship", "--repo", str(tmp_path), "--prd", str(prd)])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_runner.run.call_args[1]
+        assert call_kwargs["variables"]["max_iterations"] == 3

@@ -145,3 +145,103 @@ class TestBuildPauseRequest:
     def test_task_name_propagated(self) -> None:
         result = ComponentRunner._build_pause_request("my-task", {})
         assert result.task_name == "my-task"
+
+
+class TestMergePauseAnswers:
+    def test_merges_answers_into_questions(self) -> None:
+        outputs = {
+            "analysis.json": json.dumps(
+                {
+                    "features": ["F1"],
+                    "questions": [
+                        {"id": "q1", "question": "Which DB?", "default": "pg"},
+                        {"id": "q2", "question": "Which cache?", "default": "redis"},
+                    ],
+                }
+            )
+        }
+        result = ComponentRunner._merge_pause_answers(outputs, {"q1": "mysql", "q2": "memcached"})
+        assert result is not None
+        data = json.loads(result["analysis.json"])
+        assert data["questions"][0]["user_answer"] == "mysql"
+        assert data["questions"][1]["user_answer"] == "memcached"
+        # Non-question fields unchanged
+        assert data["features"] == ["F1"]
+
+    def test_partial_answers_only_merges_matched(self) -> None:
+        outputs = {
+            "analysis.json": json.dumps(
+                {
+                    "questions": [
+                        {"id": "q1", "question": "Which DB?"},
+                        {"id": "q2", "question": "Which cache?"},
+                    ]
+                }
+            )
+        }
+        result = ComponentRunner._merge_pause_answers(outputs, {"q1": "pg"})
+        assert result is not None
+        data = json.loads(result["analysis.json"])
+        assert data["questions"][0]["user_answer"] == "pg"
+        assert "user_answer" not in data["questions"][1]
+
+    def test_returns_none_when_no_questions_array(self) -> None:
+        outputs = {"analysis.json": json.dumps({"features": [], "constraints": []})}
+        result = ComponentRunner._merge_pause_answers(outputs, {"q1": "pg"})
+        assert result is None
+
+    def test_returns_none_for_empty_answers(self) -> None:
+        outputs = {
+            "analysis.json": json.dumps({"questions": [{"id": "q1", "question": "Which DB?"}]})
+        }
+        result = ComponentRunner._merge_pause_answers(outputs, {})
+        assert result is None
+
+    def test_returns_none_for_non_json_output(self) -> None:
+        outputs = {"output.txt": "plain text"}
+        result = ComponentRunner._merge_pause_answers(outputs, {"q1": "pg"})
+        assert result is None
+
+    def test_skips_non_dict_questions(self) -> None:
+        outputs = {
+            "out.json": json.dumps({"questions": ["not a dict", {"id": "q1", "question": "Q?"}]})
+        }
+        result = ComponentRunner._merge_pause_answers(outputs, {"q1": "yes"})
+        assert result is not None
+        data = json.loads(result["out.json"])
+        assert data["questions"][1]["user_answer"] == "yes"
+
+    def test_only_merges_into_file_with_questions(self) -> None:
+        outputs = {
+            "analysis.json": json.dumps({"questions": [{"id": "q1", "question": "Which DB?"}]}),
+            "other.json": json.dumps({"data": "untouched"}),
+        }
+        result = ComponentRunner._merge_pause_answers(outputs, {"q1": "pg"})
+        assert result is not None
+        # analysis.json has merge
+        assert "user_answer" in json.loads(result["analysis.json"])["questions"][0]
+        # other.json is unchanged
+        assert result["other.json"] == outputs["other.json"]
+
+    def test_answer_id_not_in_questions_ignored(self) -> None:
+        outputs = {"out.json": json.dumps({"questions": [{"id": "q1", "question": "Which DB?"}]})}
+        result = ComponentRunner._merge_pause_answers(outputs, {"q99": "unknown"})
+        # No matching question → no merge happened
+        assert result is None
+
+    def test_questions_without_id_skipped(self) -> None:
+        outputs = {
+            "out.json": json.dumps(
+                {
+                    "questions": [
+                        {"question": "No ID"},
+                        {"id": "q1", "question": "Has ID"},
+                    ]
+                }
+            )
+        }
+        result = ComponentRunner._merge_pause_answers(outputs, {"q1": "yes"})
+        assert result is not None
+        data = json.loads(result["out.json"])
+        assert "user_answer" not in data["questions"][0]
+        assert data["questions"][1]["user_answer"] == "yes"

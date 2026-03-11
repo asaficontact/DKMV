@@ -1059,12 +1059,20 @@ class TestPauseAfter:
         pause_req = on_pause.call_args[0][0]
         assert pause_req.task_name == "task1"
         assert len(pause_req.questions) == 1
-        # Verify user_decisions.json was written
+        # Answers should be merged into analysis.json, not written to user_decisions.json
+        merged_data = json.loads(result.task_results[0].outputs["analysis.json"])
+        assert merged_data["questions"][0]["user_answer"] == "pg"
+        # Container file should be rewritten with merged content
         sandbox.write_file.assert_any_call(
             sandbox.start.return_value,
-            "/home/dkmv/workspace/.agent/user_decisions.json",
-            json.dumps({"q1": "pg"}, indent=2),
+            "/home/dkmv/workspace/.agent/analysis.json",
+            json.dumps(merged_data, indent=2),
         )
+        # user_decisions.json should NOT be written (merge succeeded)
+        decisions_calls = [
+            c for c in sandbox.write_file.call_args_list if "/user_decisions.json" in str(c)
+        ]
+        assert decisions_calls == []
 
     async def test_pause_callback_invoked_without_questions(
         self,
@@ -1107,7 +1115,7 @@ class TestPauseAfter:
 
         assert result.status == "completed"
         on_pause.assert_awaited_once()
-        # Verify user_decisions.json was written even with empty answers
+        # No questions array in output → fallback to user_decisions.json
         sandbox.write_file.assert_any_call(
             sandbox.start.return_value,
             "/home/dkmv/workspace/.agent/user_decisions.json",
@@ -1326,6 +1334,234 @@ class TestPauseAfter:
         assert len(result.task_results) == 2
         assert all(r.status == "completed" for r in result.task_results)
         assert task_runner.run.await_count == 2
+
+    async def test_pause_merge_partial_answers(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        task_loader: MagicMock,
+        task_runner: AsyncMock,
+        config: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Only answered questions get user_answer; unanswered ones stay unchanged."""
+        comp_dir = _create_pause_manifest_component(tmp_path, pause_after=True)
+        analysis_json = json.dumps(
+            {
+                "features": [],
+                "questions": [
+                    {"id": "q1", "question": "Which DB?", "options": [], "default": "pg"},
+                    {"id": "q2", "question": "Which cache?", "options": [], "default": "redis"},
+                ],
+            }
+        )
+        task_loader.load_manifest.return_value = _mock_manifest(
+            tasks=[
+                _mock_task_ref("01-task1.yaml", pause_after=True),
+                _mock_task_ref("02-task2.yaml"),
+            ],
+        )
+
+        result1 = _make_task_result("task1")
+        result1.outputs = {"analysis.json": analysis_json}
+        result2 = _make_task_result("task2")
+
+        task_loader.load.side_effect = [_make_task("task1"), _make_task("task2")]
+        task_runner.run.side_effect = [result1, result2]
+
+        # User only answered q1, not q2
+        on_pause = AsyncMock(return_value=PauseResponse(answers={"q1": "mysql"}))
+
+        result = await component_runner.run(
+            comp_dir,
+            "https://github.com/t/r",
+            None,
+            "feat",
+            {},
+            config,
+            CLIOverrides(),
+            on_pause=on_pause,
+        )
+
+        assert result.status == "completed"
+        merged = json.loads(result.task_results[0].outputs["analysis.json"])
+        assert merged["questions"][0]["user_answer"] == "mysql"
+        assert "user_answer" not in merged["questions"][1]
+
+    async def test_pause_merge_with_multiple_outputs(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        task_loader: MagicMock,
+        task_runner: AsyncMock,
+        config: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Merge targets the output file with questions, not other outputs."""
+        comp_dir = _create_pause_manifest_component(tmp_path, pause_after=True)
+        analysis_json = json.dumps(
+            {
+                "features": [],
+                "questions": [
+                    {"id": "q1", "question": "Which DB?", "options": [], "default": "pg"}
+                ],
+            }
+        )
+        other_json = json.dumps({"some": "data"})
+
+        task_loader.load_manifest.return_value = _mock_manifest(
+            tasks=[
+                _mock_task_ref("01-task1.yaml", pause_after=True),
+                _mock_task_ref("02-task2.yaml"),
+            ],
+        )
+
+        result1 = _make_task_result("task1")
+        result1.outputs = {"analysis.json": analysis_json, "other.json": other_json}
+        result2 = _make_task_result("task2")
+
+        task_loader.load.side_effect = [_make_task("task1"), _make_task("task2")]
+        task_runner.run.side_effect = [result1, result2]
+
+        on_pause = AsyncMock(return_value=PauseResponse(answers={"q1": "pg"}))
+
+        result = await component_runner.run(
+            comp_dir,
+            "https://github.com/t/r",
+            None,
+            "feat",
+            {},
+            config,
+            CLIOverrides(),
+            on_pause=on_pause,
+        )
+
+        assert result.status == "completed"
+        # analysis.json should have user_answer merged
+        merged = json.loads(result.task_results[0].outputs["analysis.json"])
+        assert merged["questions"][0]["user_answer"] == "pg"
+        # other.json should be unchanged
+        assert result.task_results[0].outputs["other.json"] == other_json
+
+    async def test_pause_empty_answers_no_merge(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        task_loader: MagicMock,
+        task_runner: AsyncMock,
+        config: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Empty answers dict should fall back to user_decisions.json."""
+        comp_dir = _create_pause_manifest_component(tmp_path, pause_after=True)
+        analysis_json = json.dumps(
+            {
+                "features": [],
+                "questions": [
+                    {"id": "q1", "question": "Which DB?", "options": [], "default": "pg"}
+                ],
+            }
+        )
+        task_loader.load_manifest.return_value = _mock_manifest(
+            tasks=[
+                _mock_task_ref("01-task1.yaml", pause_after=True),
+                _mock_task_ref("02-task2.yaml"),
+            ],
+        )
+
+        result1 = _make_task_result("task1")
+        result1.outputs = {"analysis.json": analysis_json}
+        result2 = _make_task_result("task2")
+
+        task_loader.load.side_effect = [_make_task("task1"), _make_task("task2")]
+        task_runner.run.side_effect = [result1, result2]
+
+        # Empty answers — nothing to merge
+        on_pause = AsyncMock(return_value=PauseResponse(answers={}))
+
+        result = await component_runner.run(
+            comp_dir,
+            "https://github.com/t/r",
+            None,
+            "feat",
+            {},
+            config,
+            CLIOverrides(),
+            on_pause=on_pause,
+        )
+
+        assert result.status == "completed"
+        # No merge → fallback to user_decisions.json
+        sandbox.write_file.assert_any_call(
+            sandbox.start.return_value,
+            "/home/dkmv/workspace/.agent/user_decisions.json",
+            json.dumps({}, indent=2),
+        )
+        # analysis.json should NOT have user_answer field
+        original = json.loads(result.task_results[0].outputs["analysis.json"])
+        assert "user_answer" not in original["questions"][0]
+
+    async def test_pause_merge_updates_jinja_variables(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        task_loader: MagicMock,
+        task_runner: AsyncMock,
+        config: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """After merge, _build_variables should expose user_answer in Jinja2 templates."""
+        comp_dir = _create_pause_manifest_component(tmp_path, pause_after=True)
+        analysis_json = json.dumps(
+            {
+                "features": ["F1"],
+                "questions": [
+                    {"id": "q1", "question": "Which DB?", "options": [], "default": "pg"}
+                ],
+            }
+        )
+        task_loader.load_manifest.return_value = _mock_manifest(
+            tasks=[
+                _mock_task_ref("01-task1.yaml", pause_after=True),
+                _mock_task_ref("02-task2.yaml"),
+            ],
+        )
+
+        result1 = _make_task_result("task1")
+        result1.outputs = {"analysis.json": analysis_json}
+        result2 = _make_task_result("task2")
+
+        task_loader.load.side_effect = [_make_task("task1"), _make_task("task2")]
+        task_runner.run.side_effect = [result1, result2]
+
+        on_pause = AsyncMock(return_value=PauseResponse(answers={"q1": "mysql"}))
+
+        result = await component_runner.run(
+            comp_dir,
+            "https://github.com/t/r",
+            None,
+            "feat",
+            {},
+            config,
+            CLIOverrides(),
+            on_pause=on_pause,
+        )
+
+        assert result.status == "completed"
+        # Verify by calling _build_variables directly on the task results
+        variables = component_runner._build_variables(
+            {},
+            "https://github.com/t/r",
+            "main",
+            "feat",
+            "test",
+            "r1",
+            CLIOverrides(),
+            config,
+            result.task_results,
+        )
+        analysis = variables["tasks"]["task1"]["outputs"]["analysis"]
+        assert analysis["questions"][0]["user_answer"] == "mysql"
 
 
 class TestPromptsLog:

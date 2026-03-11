@@ -169,7 +169,7 @@ class TestListAll:
     def test_no_project_root_returns_builtins_only(self) -> None:
         infos = ComponentRegistry.list_all()
         names = {i.name for i in infos}
-        assert names == {"dev", "qa", "docs", "plan"}
+        assert names == {"dev", "qa", "docs", "plan", "ship"}
         for info in infos:
             assert info.component_type == "built-in"
 

@@ -132,7 +132,7 @@ class TestBuiltinResolution:
             assert name in msg
 
     def test_all_builtins_recognized(self) -> None:
-        assert BUILTIN_COMPONENTS == {"dev", "qa", "docs", "plan"}
+        assert BUILTIN_COMPONENTS == {"dev", "qa", "docs", "plan", "ship"}
 
 
 class TestRegistryResolution:
