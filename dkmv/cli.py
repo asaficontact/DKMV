@@ -273,6 +273,9 @@ async def dev(
         float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
     ] = None,
     timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    memory: Annotated[
+        str | None, typer.Option("--memory", help="Container memory limit (e.g. 8g, 16g).")
+    ] = None,
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
@@ -359,6 +362,7 @@ async def dev(
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
         agent=agent,
+        memory=memory,
     )
 
     component_dir = resolve_component("dev", project_root=project_root)
@@ -455,6 +459,9 @@ async def plan(
         float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
     ] = None,
     timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    memory: Annotated[
+        str | None, typer.Option("--memory", help="Container memory limit (e.g. 8g, 16g).")
+    ] = None,
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
@@ -510,6 +517,7 @@ async def plan(
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
         agent=agent,
+        memory=memory,
     )
 
     component_dir = resolve_component("plan", project_root=project_root)
@@ -590,6 +598,9 @@ async def ship(
         float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
     ] = None,
     timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    memory: Annotated[
+        str | None, typer.Option("--memory", help="Container memory limit (e.g. 8g, 16g).")
+    ] = None,
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
@@ -648,6 +659,7 @@ async def ship(
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
         agent=agent,
+        memory=memory,
     )
 
     component_dir = resolve_component("ship", project_root=project_root)
@@ -787,6 +799,9 @@ async def qa(
         float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
     ] = None,
     timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    memory: Annotated[
+        str | None, typer.Option("--memory", help="Container memory limit (e.g. 8g, 16g).")
+    ] = None,
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
@@ -841,6 +856,7 @@ async def qa(
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
         agent=agent,
+        memory=memory,
     )
 
     component_dir = resolve_component("qa", project_root=project_root)
@@ -915,6 +931,9 @@ async def docs(
         float | None, typer.Option("--max-budget-usd", help="Maximum budget in USD.")
     ] = None,
     timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in minutes.")] = None,
+    memory: Annotated[
+        str | None, typer.Option("--memory", help="Container memory limit (e.g. 8g, 16g).")
+    ] = None,
     keep_alive: Annotated[
         bool, typer.Option("--keep-alive", help="Keep container running after completion.")
     ] = False,
@@ -972,6 +991,7 @@ async def docs(
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
         agent=agent,
+        memory=memory,
     )
 
     component_dir = resolve_component("docs", project_root=project_root)
@@ -1056,6 +1076,9 @@ async def run_component(
     timeout: Annotated[
         int | None, typer.Option("--timeout", help="Default timeout in minutes.")
     ] = None,
+    memory: Annotated[
+        str | None, typer.Option("--memory", help="Container memory limit (e.g. 8g, 16g).")
+    ] = None,
     max_budget_usd: Annotated[
         float | None, typer.Option("--max-budget-usd", help="Default budget in USD.")
     ] = None,
@@ -1101,6 +1124,7 @@ async def run_component(
         timeout_minutes=timeout,
         max_budget_usd=max_budget_usd,
         agent=agent,
+        memory=memory,
     )
 
     sandbox = SandboxManager()

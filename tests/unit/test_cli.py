@@ -206,6 +206,15 @@ class TestComponentCommandHelp:
         assert "--repo" in result.output
         assert "--auto" in result.output
 
+    @pytest.mark.parametrize(
+        "cmd",
+        ["dev", "plan", "ship", "qa", "docs", "run"],
+    )
+    def test_memory_flag_in_help(self, cmd: str) -> None:
+        result = runner.invoke(app, [cmd, "--help"])
+        assert result.exit_code == 0
+        assert "--memory" in result.output
+
 
 def _mock_config() -> MagicMock:
     """Create a mock DKMVConfig with all needed attributes."""

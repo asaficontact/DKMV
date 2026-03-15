@@ -585,6 +585,9 @@ class ComponentRunner:
                 except Exception:
                     pass  # Pre-scan failures are non-fatal
 
+            if cli_overrides.memory is not None:
+                config.memory_limit = cli_overrides.memory
+
             sandbox_config, temp_creds_file = self._build_sandbox_config(
                 config, timeout, agents_needed, docker_socket=docker_socket
             )

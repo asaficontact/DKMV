@@ -130,3 +130,4 @@ class CLIOverrides:
     timeout_minutes: int | None = None
     max_budget_usd: float | None = None
     agent: str | None = None
+    memory: str | None = None

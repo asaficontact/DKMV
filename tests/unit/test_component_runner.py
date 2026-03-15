@@ -201,6 +201,58 @@ class TestContainerLifecycle:
 
         sandbox.stop.assert_awaited_once_with(sandbox.start.return_value, keep_alive=True)
 
+    async def test_memory_override_applied_to_config(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        task_loader: MagicMock,
+        task_runner: AsyncMock,
+        config: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        comp_dir = _create_component_dir(tmp_path, num_tasks=1)
+        task_loader.load.return_value = _make_task("task1")
+        task_runner.run.return_value = _make_task_result("task1")
+        config.memory_limit = "8g"
+
+        await component_runner.run(
+            comp_dir,
+            "https://github.com/t/r",
+            None,
+            "feat",
+            {},
+            config,
+            CLIOverrides(memory="16g"),
+        )
+
+        assert config.memory_limit == "16g"
+
+    async def test_memory_override_not_applied_when_none(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        task_loader: MagicMock,
+        task_runner: AsyncMock,
+        config: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        comp_dir = _create_component_dir(tmp_path, num_tasks=1)
+        task_loader.load.return_value = _make_task("task1")
+        task_runner.run.return_value = _make_task_result("task1")
+        config.memory_limit = "8g"
+
+        await component_runner.run(
+            comp_dir,
+            "https://github.com/t/r",
+            None,
+            "feat",
+            {},
+            config,
+            CLIOverrides(),
+        )
+
+        assert config.memory_limit == "8g"
+
     async def test_container_stopped_on_error(
         self,
         component_runner: ComponentRunner,
