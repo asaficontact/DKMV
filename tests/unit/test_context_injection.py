@@ -205,6 +205,91 @@ class TestInjectContextFiles:
         assert len(result) == 1
 
 
+# ── CONTEXT_SKIP_DIRS filtering ───────────────────────────────────────
+
+
+class TestContextSkipDirs:
+    @pytest.mark.parametrize("dirname", ["node_modules", ".git", ".venv", "__pycache__"])
+    async def test_skipped_dirs_excluded(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        tmp_path: Path,
+        dirname: str,
+    ) -> None:
+        ctx_dir = tmp_path / "project"
+        ctx_dir.mkdir()
+        (ctx_dir / "src").mkdir()
+        (ctx_dir / "src" / "app.py").write_text("main code")
+        skip = ctx_dir / dirname
+        skip.mkdir()
+        (skip / "junk.txt").write_text("should be skipped")
+
+        session = MagicMock()
+        result = await component_runner._inject_context_files(session, [ctx_dir])
+
+        assert ".agent/context/project/src/app.py" in result
+        assert not any(dirname in r for r in result)
+
+    async def test_nested_skipped_dir_excluded(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        ctx_dir = tmp_path / "project"
+        ctx_dir.mkdir()
+        (ctx_dir / "good.py").write_text("keep")
+        deep = ctx_dir / "frontend" / "node_modules" / "pkg"
+        deep.mkdir(parents=True)
+        (deep / "index.js").write_text("skip me")
+
+        session = MagicMock()
+        result = await component_runner._inject_context_files(session, [ctx_dir])
+
+        assert result == [".agent/context/project/good.py"]
+
+    async def test_similar_name_not_excluded(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        ctx_dir = tmp_path / "project"
+        ctx_dir.mkdir()
+        legit = ctx_dir / "git_utils"
+        legit.mkdir()
+        (legit / "helper.py").write_text("legit code")
+
+        session = MagicMock()
+        result = await component_runner._inject_context_files(session, [ctx_dir])
+
+        assert ".agent/context/project/git_utils/helper.py" in result
+
+    async def test_normal_files_alongside_skipped_dirs(
+        self,
+        component_runner: ComponentRunner,
+        sandbox: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        ctx_dir = tmp_path / "repo"
+        ctx_dir.mkdir()
+        (ctx_dir / "README.md").write_text("readme")
+        (ctx_dir / "src").mkdir()
+        (ctx_dir / "src" / "main.py").write_text("code")
+        for skip in [".git", "node_modules", "__pycache__", ".venv"]:
+            d = ctx_dir / skip
+            d.mkdir()
+            (d / "file.txt").write_text("noise")
+
+        session = MagicMock()
+        result = await component_runner._inject_context_files(session, [ctx_dir])
+
+        assert ".agent/context/repo/README.md" in result
+        assert ".agent/context/repo/src/main.py" in result
+        assert len(result) == 2
+
+
 # ── ComponentRunner.run passes context_files to task_runner ──────────
 
 

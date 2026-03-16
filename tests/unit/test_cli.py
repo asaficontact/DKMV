@@ -27,6 +27,7 @@ class TestMainCallback:
             "register",
             "runs",
             "show",
+            "stats",
             "attach",
             "stop",
             "unregister",
@@ -861,3 +862,235 @@ class TestDocsPostRunDisplay:
 
         assert result.exit_code == 0
         assert "Component timed out" in result.output
+
+
+# ── Stats command tests ──────────────────────────────────────────────
+
+
+class TestStatsCommand:
+    def test_stats_help(self) -> None:
+        result = runner.invoke(app, ["stats", "--help"])
+        assert result.exit_code == 0
+        assert "Run ID" in result.output
+
+    def test_stats_run_not_found(self, tmp_path: Path) -> None:
+        mock_cfg = MagicMock()
+        mock_cfg.output_dir = tmp_path
+
+        mock_run_mgr = MagicMock()
+        mock_run_mgr.get_run.side_effect = FileNotFoundError("not found")
+
+        with (
+            patch("dkmv.cli.load_config", return_value=mock_cfg),
+            patch("dkmv.core.runner.RunManager", return_value=mock_run_mgr),
+        ):
+            result = runner.invoke(app, ["stats", "nonexistent"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+    def test_stats_no_container(self, tmp_path: Path) -> None:
+        mock_cfg = MagicMock()
+        mock_cfg.output_dir = tmp_path
+
+        detail = MagicMock()
+        detail.run_id = "r1"
+        detail.component = "plan"
+        detail.status = "running"
+        detail.feature_name = "feat"
+        detail.branch = "feat/x"
+        detail.model = "claude-sonnet-4-6"
+        detail.config = {"_started_at": "2026-03-16T10:00:00+00:00", "timeout_minutes": 20}
+        detail.total_cost_usd = 1.0
+        detail.num_turns = 5
+        detail.stream_events_count = 100
+        detail.duration_seconds = 0
+
+        mock_run_mgr = MagicMock()
+        mock_run_mgr.get_run.return_value = detail
+        mock_run_mgr.get_container_name.return_value = None
+
+        with (
+            patch("dkmv.cli.load_config", return_value=mock_cfg),
+            patch("dkmv.core.runner.RunManager", return_value=mock_run_mgr),
+        ):
+            result = runner.invoke(app, ["stats", "r1"])
+
+        assert result.exit_code == 0
+        assert "plan" in result.output
+        assert "No container info" in result.output
+
+    def test_stats_shows_run_info(self, tmp_path: Path) -> None:
+        mock_cfg = MagicMock()
+        mock_cfg.output_dir = tmp_path
+
+        detail = MagicMock()
+        detail.run_id = "260316-plan-odin"
+        detail.component = "plan"
+        detail.status = "completed"
+        detail.feature_name = "odin"
+        detail.branch = "feat/base"
+        detail.model = "claude-opus-4-6"
+        detail.config = {}
+        detail.total_cost_usd = 2.50
+        detail.num_turns = 15
+        detail.stream_events_count = 500
+        detail.duration_seconds = 300
+
+        mock_run_mgr = MagicMock()
+        mock_run_mgr.get_run.return_value = detail
+        mock_run_mgr.get_container_name.return_value = None
+
+        with (
+            patch("dkmv.cli.load_config", return_value=mock_cfg),
+            patch("dkmv.core.runner.RunManager", return_value=mock_run_mgr),
+        ):
+            result = runner.invoke(app, ["stats", "260316-plan-odin"])
+
+        assert result.exit_code == 0
+        assert "plan" in result.output
+        assert "odin" in result.output
+        assert "$2.50" in result.output
+        assert "15" in result.output
+
+    def test_stats_container_stopped(self, tmp_path: Path) -> None:
+        mock_cfg = MagicMock()
+        mock_cfg.output_dir = tmp_path
+
+        detail = MagicMock()
+        detail.run_id = "r1"
+        detail.component = "dev"
+        detail.status = "completed"
+        detail.feature_name = "f"
+        detail.branch = "b"
+        detail.model = "m"
+        detail.config = {}
+        detail.total_cost_usd = 0
+        detail.num_turns = 0
+        detail.stream_events_count = 0
+        detail.duration_seconds = 60
+
+        mock_run_mgr = MagicMock()
+        mock_run_mgr.get_run.return_value = detail
+        mock_run_mgr.get_container_name.return_value = "dkmv-sandbox-abc"
+
+        inspect_result = MagicMock()
+        inspect_result.returncode = 0
+        inspect_result.stdout = "false\n"
+
+        with (
+            patch("dkmv.cli.load_config", return_value=mock_cfg),
+            patch("dkmv.core.runner.RunManager", return_value=mock_run_mgr),
+            patch("subprocess.run", return_value=inspect_result),
+        ):
+            result = runner.invoke(app, ["stats", "r1"])
+
+        assert result.exit_code == 0
+        assert "stopped" in result.output
+
+    def test_stats_live_container(self, tmp_path: Path) -> None:
+        mock_cfg = MagicMock()
+        mock_cfg.output_dir = tmp_path
+
+        detail = MagicMock()
+        detail.run_id = "r1"
+        detail.component = "ship"
+        detail.status = "running"
+        detail.feature_name = "f"
+        detail.branch = "b"
+        detail.model = "m"
+        detail.config = {"_started_at": "2026-03-16T10:00:00+00:00", "timeout_minutes": 30}
+        detail.total_cost_usd = 1.5
+        detail.num_turns = 10
+        detail.stream_events_count = 200
+        detail.duration_seconds = 0
+
+        mock_run_mgr = MagicMock()
+        mock_run_mgr.get_run.return_value = detail
+        mock_run_mgr.get_container_name.return_value = "dkmv-sandbox-xyz"
+
+        inspect_ok = MagicMock()
+        inspect_ok.returncode = 0
+        inspect_ok.stdout = "true\n"
+
+        stats_json = (
+            '{"cpu":"12.3%","mem_usage":"4.1GiB / 16GiB",'
+            '"mem_perc":"25.6%","net_io":"50MB / 2MB",'
+            '"block_io":"100MB / 200MB","pids":"8"}'
+        )
+        stats_ok = MagicMock()
+        stats_ok.returncode = 0
+        stats_ok.stdout = stats_json + "\n"
+
+        call_count = 0
+
+        def mock_subprocess_run(cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if "inspect" in cmd:
+                return inspect_ok
+            return stats_ok
+
+        with (
+            patch("dkmv.cli.load_config", return_value=mock_cfg),
+            patch("dkmv.core.runner.RunManager", return_value=mock_run_mgr),
+            patch("subprocess.run", side_effect=mock_subprocess_run),
+        ):
+            result = runner.invoke(app, ["stats", "r1"])
+
+        assert result.exit_code == 0
+        assert "4.1GiB / 16GiB" in result.output
+        assert "12.3%" in result.output
+        assert "50MB / 2MB" in result.output
+        assert "100MB / 200MB" in result.output
+
+    def test_stats_no_run_id_finds_latest_running(self, tmp_path: Path) -> None:
+        mock_cfg = MagicMock()
+        mock_cfg.output_dir = tmp_path
+
+        summary = MagicMock()
+        summary.run_id = "latest-run"
+
+        detail = MagicMock()
+        detail.run_id = "latest-run"
+        detail.component = "plan"
+        detail.status = "running"
+        detail.feature_name = "auto"
+        detail.branch = "b"
+        detail.model = "m"
+        detail.config = {}
+        detail.total_cost_usd = 0
+        detail.num_turns = 0
+        detail.stream_events_count = 0
+        detail.duration_seconds = 0
+
+        mock_run_mgr = MagicMock()
+        mock_run_mgr.list_runs.return_value = [summary]
+        mock_run_mgr.get_run.return_value = detail
+        mock_run_mgr.get_container_name.return_value = None
+
+        with (
+            patch("dkmv.cli.load_config", return_value=mock_cfg),
+            patch("dkmv.core.runner.RunManager", return_value=mock_run_mgr),
+        ):
+            result = runner.invoke(app, ["stats"])
+
+        assert result.exit_code == 0
+        assert "latest-run" in result.output
+        mock_run_mgr.list_runs.assert_called_once_with(status="running", limit=1)
+
+    def test_stats_no_running_containers(self, tmp_path: Path) -> None:
+        mock_cfg = MagicMock()
+        mock_cfg.output_dir = tmp_path
+
+        mock_run_mgr = MagicMock()
+        mock_run_mgr.list_runs.return_value = []
+
+        with (
+            patch("dkmv.cli.load_config", return_value=mock_cfg),
+            patch("dkmv.core.runner.RunManager", return_value=mock_run_mgr),
+        ):
+            result = runner.invoke(app, ["stats"])
+
+        assert result.exit_code == 0
+        assert "No running containers" in result.output

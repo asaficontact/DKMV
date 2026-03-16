@@ -27,6 +27,27 @@ logger = logging.getLogger(__name__)
 WORKSPACE_DIR = "/home/dkmv/workspace"
 AGENT_EMAIL = "dkmv-agent@noreply.dkmv.dev"
 
+CONTEXT_SKIP_DIRS = {
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".eggs",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".angular",
+    ".janus",
+    ".dkmv",
+}
+
 
 def _agent_git_name(component_name: str) -> str:
     """Build a deterministic git author name for the component."""
@@ -282,6 +303,8 @@ class ComponentRunner:
             if path.is_dir():
                 for file_path in path.rglob("*"):
                     if not file_path.is_file():
+                        continue
+                    if CONTEXT_SKIP_DIRS & set(file_path.relative_to(path).parts):
                         continue
                     try:
                         content = file_path.read_text()

@@ -1259,6 +1259,147 @@ def show(
 
 
 @app.command()
+def stats(
+    run_id: Annotated[
+        str | None, typer.Argument(help="Run ID to inspect (default: latest running).")
+    ] = None,
+) -> None:
+    """Show live resource usage for a running container."""
+    import json as json_mod
+
+    from dkmv.core.runner import RunManager
+
+    config = load_config(require_api_key=False)
+    run_mgr = RunManager(output_dir=config.output_dir)
+
+    # If no run_id, find the latest running run
+    if run_id is None:
+        summaries = run_mgr.list_runs(status="running", limit=1)  # type: ignore[arg-type]
+        if not summaries:
+            console.print("No running containers found.", style="dim")
+            raise typer.Exit(code=0)
+        run_id = summaries[0].run_id
+
+    try:
+        detail = run_mgr.get_run(run_id)
+    except FileNotFoundError:
+        console.print(f"Error: Run '{run_id}' not found.", style="bold red")
+        raise typer.Exit(code=1)
+    except ValueError as e:
+        console.print(f"Error: {e}", style="bold red")
+        raise typer.Exit(code=1)
+
+    container_name = run_mgr.get_container_name(detail.run_id)
+
+    # ── Run info ─────────────────────────────────────────────────────
+    status_style = {
+        "completed": "green",
+        "running": "yellow",
+        "failed": "red",
+        "timed_out": "red",
+    }.get(detail.status, "")
+
+    console.print(f"[bold]Run {detail.run_id}[/bold]")
+    console.print(f"  Component:  {detail.component}")
+    console.print(
+        f"  Status:     [{status_style}]{detail.status}[/{status_style}]"
+        if status_style
+        else f"  Status:     {detail.status}"
+    )
+    console.print(f"  Feature:    {detail.feature_name or '-'}")
+    console.print(f"  Branch:     {detail.branch or '-'}")
+    console.print(f"  Model:      {detail.model or '-'}")
+
+    # ── Timing ───────────────────────────────────────────────────────
+    started_at = detail.config.get("_started_at", "")
+    timeout_min = detail.config.get("timeout_minutes", 0)
+    elapsed_seconds = 0.0
+    remaining_str = "-"
+
+    if started_at:
+        try:
+            start_dt = datetime.fromisoformat(started_at)
+            elapsed_seconds = (datetime.now(UTC) - start_dt).total_seconds()
+            if timeout_min and detail.status == "running":
+                remaining = (timeout_min * 60) - elapsed_seconds
+                if remaining > 0:
+                    remaining_str = f"{_format_duration(remaining)}"
+                else:
+                    remaining_str = "[red]exceeded[/red]"
+        except (ValueError, TypeError):
+            pass
+
+    if detail.status == "running" and elapsed_seconds > 0:
+        console.print(f"  Elapsed:    {_format_duration(elapsed_seconds)}")
+    else:
+        console.print(f"  Duration:   {_format_duration(detail.duration_seconds)}")
+    if timeout_min:
+        console.print(f"  Timeout:    {timeout_min}m ({remaining_str} remaining)")
+    console.print(f"  Cost:       ${detail.total_cost_usd:.2f}")
+    console.print(f"  Turns:      {detail.num_turns}")
+    console.print(f"  Events:     {detail.stream_events_count}")
+
+    # ── Container stats ──────────────────────────────────────────────
+    if not container_name:
+        console.print("\n  [dim]No container info available.[/dim]")
+        return
+
+    console.print(f"\n[bold]Container {container_name}[/bold]")
+
+    # Check if container is running
+    inspect_result = subprocess.run(
+        ["docker", "inspect", "--format", "{{.State.Running}}", container_name],
+        capture_output=True,
+        text=True,
+    )
+    if inspect_result.returncode != 0:
+        console.print("  [dim]Container no longer exists.[/dim]")
+        return
+    is_running = inspect_result.stdout.strip() == "true"
+    if not is_running:
+        console.print("  [dim]Container is stopped.[/dim]")
+        return
+
+    # Get live stats
+    stats_result = subprocess.run(
+        [
+            "docker",
+            "stats",
+            "--no-stream",
+            "--format",
+            '{"cpu":"{{.CPUPerc}}","mem_usage":"{{.MemUsage}}",'
+            '"mem_perc":"{{.MemPerc}}","net_io":"{{.NetIO}}",'
+            '"block_io":"{{.BlockIO}}","pids":"{{.PIDs}}"}',
+            container_name,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if stats_result.returncode != 0:
+        console.print("  [dim]Could not fetch container stats.[/dim]")
+        return
+
+    try:
+        s = json_mod.loads(stats_result.stdout.strip())
+    except json_mod.JSONDecodeError:
+        console.print("  [dim]Could not parse container stats.[/dim]")
+        return
+
+    mem_perc_str = s.get("mem_perc", "0%").rstrip("%")
+    try:
+        mem_perc = float(mem_perc_str)
+    except ValueError:
+        mem_perc = 0.0
+    mem_style = "green" if mem_perc < 70 else "yellow" if mem_perc < 90 else "red"
+
+    console.print(f"  Memory:     [{mem_style}]{s['mem_usage']}  ({s['mem_perc']})[/{mem_style}]")
+    console.print(f"  CPU:        {s['cpu']}")
+    console.print(f"  Net I/O:    {s['net_io']}")
+    console.print(f"  Block I/O:  {s['block_io']}")
+    console.print(f"  PIDs:       {s['pids']}")
+
+
+@app.command()
 def attach(
     run_id: Annotated[str, typer.Argument(help="Run ID to attach to.")],
 ) -> None:
