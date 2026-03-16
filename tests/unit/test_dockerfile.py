@@ -67,3 +67,18 @@ def test_dockerfile_installs_playwright_chromium() -> None:
     content = DOCKERFILE.read_text()
     assert "PLAYWRIGHT_BROWSERS_PATH" in content
     assert "playwright install --with-deps chromium" in content
+
+
+def test_dockerfile_installs_rust() -> None:
+    content = DOCKERFILE.read_text()
+    assert "rustup.rs" in content
+    assert ".cargo/bin" in content
+
+
+def test_dockerfile_rust_installed_as_dkmv_user() -> None:
+    content = DOCKERFILE.read_text()
+    user_pos = content.find("USER dkmv")
+    rust_pos = content.find("rustup.rs")
+    assert user_pos != -1
+    assert rust_pos != -1
+    assert rust_pos > user_pos, "Rust must be installed after USER dkmv switch"

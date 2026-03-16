@@ -214,14 +214,29 @@ RUN pipx install swe-rex \
     && pipx ensurepath
 
 # ---------------------------------------------------------------------------
+# Rust toolchain (as dkmv user)
+# ---------------------------------------------------------------------------
+# Install Rust via rustup with the stable toolchain. Agents building Rust
+# projects need cargo, rustc, and associated tools available immediately
+# without wasting turns on runtime installation.
+#
+# -y: non-interactive, accept defaults
+# --default-toolchain stable: pin to stable channel
+# --profile minimal: skip docs/clippy/rustfmt to save ~200MB (agents can
+#   install them if needed with `rustup component add`)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal
+
+# ---------------------------------------------------------------------------
 # Environment variables
 # ---------------------------------------------------------------------------
 
 # PATH: Ensure the dkmv user can find:
+#   - Rust toolchain (~/.cargo/bin, includes cargo, rustc, rustup)
 #   - pipx-installed binaries (~/.local/bin, includes swerex-remote)
 #   - npm global binaries (/usr/local/bin, already in default PATH)
 #   - Standard system paths
-ENV PATH="/home/dkmv/.local/bin:${PATH}"
+ENV PATH="/home/dkmv/.cargo/bin:/home/dkmv/.local/bin:${PATH}"
 
 # NODE_OPTIONS: Prevent Node.js OOM crashes.
 # Claude Code idles at 400-700 MB but grows to 1-4 GB during active prompts.
