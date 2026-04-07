@@ -5,7 +5,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-RunStatus = Literal["pending", "running", "completed", "failed", "timed_out"]
+RunStatus = Literal[
+    "pending", "running", "paused", "stopping", "cancelled", "completed", "failed", "timed_out"
+]
 ComponentName = str
 
 

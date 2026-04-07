@@ -457,34 +457,37 @@ dkmv unregister security-audit               # unregister
 dkmv plan   --branch <name> --prd <path> [--repo <url>] [--design-docs <dir>]
             [--feature-name <name>] [--context <path> ...] [--auto]
             [--agent <name>] [--model <m>] [--max-turns <n>] [--timeout <min>]
-            [--max-budget-usd <n>] [--start-task <name-or-index>]
-            [--keep-alive] [--verbose]
+            [--max-budget-usd <n>] [--memory <size>]
+            [--start-task <name-or-index>] [--keep-alive] [--verbose]
 
 dkmv dev    --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
             [--context <path> ...] [--agent <name>] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>]
+            [--timeout <min>] [--max-budget-usd <n>] [--memory <size>]
             [--start-phase <n>] [--start-task <name-or-index>]
             [--keep-alive] [--verbose]
 
 dkmv qa     --branch <name> --impl-docs <dir> [--repo <url>] [--feature-name <name>]
             [--context <path> ...] [--auto] [--agent <name>] [--model <m>]
             [--max-turns <n>] [--timeout <min>] [--max-budget-usd <n>]
-            [--start-task <name-or-index>] [--keep-alive] [--verbose]
+            [--memory <size>] [--start-task <name-or-index>]
+            [--keep-alive] [--verbose]
 
 dkmv docs   --branch <name> [--repo <url>] [--impl-docs <dir>] [--create-pr] [--pr-base <branch>]
             [--context <path> ...] [--agent <name>] [--model <m>] [--max-turns <n>]
-            [--timeout <min>] [--max-budget-usd <n>]
+            [--timeout <min>] [--max-budget-usd <n>] [--memory <size>]
             [--start-task <name-or-index>] [--keep-alive] [--verbose]
 
 dkmv run    <component> --branch <name> [--repo <url>] [--feature-name <name>]
             [--var KEY=VALUE ...] [--context <path> ...] [--agent <name>]
             [--model <m>] [--max-turns <n>] [--timeout <min>] [--max-budget-usd <n>]
-            [--start-task <name-or-index>] [--keep-alive] [--verbose]
+            [--memory <size>] [--start-task <name-or-index>]
+            [--keep-alive] [--verbose]
 ```
 
 > `--repo` is optional when the project is initialized with `dkmv init`.
 > `--context` accepts files or directories. Pass multiple times for multiple paths.
 > `--agent` selects the AI agent backend (`claude` or `codex`). Overrides `DKMV_AGENT`.
+> `--memory` sets the Docker container memory limit (e.g. `8g`, `16g`). Overrides `DKMV_MEMORY`. Default: `8g`.
 > `--start-task` skips to a specific task by name or 1-based index. `--start-phase` (dev only) skips to a phase number.
 
 ### Project Commands

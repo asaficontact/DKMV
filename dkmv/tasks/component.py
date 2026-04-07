@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -497,6 +498,24 @@ class ComponentRunner:
                 )
         return TaskResult(task_name=task.name, status="pre-existing", outputs=outputs)
 
+    @staticmethod
+    def _emit_lifecycle(
+        on_event: Callable[[dict[str, Any]], None] | None,
+        run_manager: RunManager,
+        run_id: str,
+        event_type: str,
+        **fields: Any,
+    ) -> None:
+        """Emit a normalized lifecycle event through on_event and stream log."""
+        event: dict[str, Any] = {
+            "type": event_type,
+            "lifecycle": True,
+            **fields,
+        }
+        run_manager.append_stream(run_id, event)
+        if on_event is not None:
+            on_event(event)
+
     def _save_prompts_log(
         self,
         run_id: str,
@@ -541,6 +560,9 @@ class ComponentRunner:
         context_paths: list[Path] | None = None,
         start_task: str | None = None,
         docker_socket: bool = False,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        on_run_id: Callable[[str], None] | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> ComponentResult:
         start_time = time.monotonic()
         session: SandboxSession | None = None
@@ -549,6 +571,7 @@ class ComponentRunner:
         task_results: list[TaskResult] = []
         run_id = ""
         temp_creds_file: Path | None = None
+        cancelled = False
 
         try:
             yaml_files = self._scan_yaml_files(component_dir)
@@ -580,6 +603,8 @@ class ComponentRunner:
                 verbose=verbose,
             )
             run_id = self._run_manager.start_run(component_dir.name, base_config)
+            if on_run_id is not None:
+                on_run_id(run_id)
 
             timeout = (
                 cli_overrides.timeout_minutes
@@ -628,6 +653,17 @@ class ComponentRunner:
                 has_github_token=bool(config.github_token),
                 adapter=adapter,
                 agents_needed=agents_needed,
+            )
+
+            self._emit_lifecycle(
+                on_event,
+                self._run_manager,
+                run_id,
+                "run_started",
+                component=component_dir.name,
+                repo=repo,
+                branch=branch or "",
+                feature_name=feature_name,
             )
 
             # Inject ad-hoc context files
@@ -708,6 +744,18 @@ class ComponentRunner:
 
             # Execute tasks sequentially with per-task loading
             for i, (yaml_file, task_ref, for_each_item, for_each_index) in enumerate(expanded_refs):
+                # Cooperative cancel check between tasks
+                if cancel_event is not None and cancel_event.is_set():
+                    component_status = "cancelled"
+                    for remaining_file, *_ in expanded_refs[i:]:
+                        task_results.append(
+                            TaskResult(
+                                task_name=remaining_file.stem,
+                                status="skipped",
+                            )
+                        )
+                    break
+
                 cumulative_vars = self._build_variables(
                     variables,
                     repo,
@@ -742,16 +790,42 @@ class ComponentRunner:
                     )
                     continue
 
-                self._run_manager.append_stream(
-                    run_id,
-                    {
-                        "type": "task_start",
-                        "task_name": task.name,
-                        "task_description": task.description,
-                        "task_index": i,
-                        "total_tasks": len(expanded_refs),
-                    },
-                )
+                # Build a unique step instance id for artifact isolation
+                _step_instance = task.name
+                if for_each_index is not None:
+                    _step_instance = f"{task.name}__idx_{for_each_index}"
+
+                task_start_event: dict[str, Any] = {
+                    "type": "task_start",
+                    "task_name": task.name,
+                    "task_description": task.description,
+                    "task_index": i,
+                    "total_tasks": len(expanded_refs),
+                    "_step_instance": _step_instance,
+                }
+                if for_each_item is not None:
+                    task_start_event["for_each_item"] = for_each_item
+                if for_each_index is not None:
+                    task_start_event["for_each_index"] = for_each_index
+                self._run_manager.append_stream(run_id, task_start_event)
+                if on_event is not None:
+                    on_event(task_start_event)
+
+                # Wrap on_event to inject task context into raw events
+                _task_name = task.name
+                _task_idx = i
+
+                def _context_on_event(
+                    evt: dict[str, Any],
+                    _name: str = _task_name,
+                    _idx: int = _task_idx,
+                    _si: str = _step_instance,
+                ) -> None:
+                    evt.setdefault("_task_name", _name)
+                    evt.setdefault("_task_idx", _idx)
+                    evt.setdefault("_step_instance", _si)
+                    if on_event is not None:
+                        on_event(evt)
 
                 result = await self._task_runner.run(
                     task,
@@ -762,13 +836,45 @@ class ComponentRunner:
                     component_agent_md=component_agent_md,
                     shared_env_vars=shared_env_vars,
                     context_files=context_files,
+                    on_event=_context_on_event,
+                    step_instance=_step_instance,
                 )
                 task_results.append(result)
+
+                _task_lifecycle_fields: dict[str, Any] = {
+                    "task_name": task.name,
+                    "task_index": i,
+                    "status": result.status,
+                    "cost_usd": result.total_cost_usd,
+                    "duration_seconds": result.duration_seconds,
+                    "error_message": result.error_message,
+                    "_step_instance": _step_instance,
+                }
+                if for_each_index is not None:
+                    _task_lifecycle_fields["for_each_index"] = for_each_index
+                self._emit_lifecycle(
+                    on_event,
+                    self._run_manager,
+                    run_id,
+                    "task_completed" if result.status == "completed" else "task_failed",
+                    **_task_lifecycle_fields,
+                )
 
                 # Pause-after: invoke callback if task succeeded and pause is configured
                 if result.status == "completed" and manifest and on_pause:
                     if task_ref and task_ref.pause_after:
                         pause_request = self._build_pause_request(task.name, result.outputs)
+
+                        self._emit_lifecycle(
+                            on_event,
+                            self._run_manager,
+                            run_id,
+                            "pause_requested",
+                            task_name=task.name,
+                            task_index=i,
+                            _step_instance=_step_instance,
+                        )
+
                         pause_response = await on_pause(pause_request)
 
                         # Merge answers into the source output JSON when it
@@ -802,6 +908,17 @@ class ComponentRunner:
                                 json.dumps(pause_response.answers, indent=2),
                             )
 
+                        self._emit_lifecycle(
+                            on_event,
+                            self._run_manager,
+                            run_id,
+                            "pause_resolved",
+                            task_name=task.name,
+                            task_index=i,
+                            skip_remaining=pause_response.skip_remaining,
+                            _step_instance=_step_instance,
+                        )
+
                         if pause_response.skip_remaining:
                             for remaining_file, *_ in expanded_refs[i + 1 :]:
                                 task_results.append(
@@ -827,6 +944,10 @@ class ComponentRunner:
         except TimeoutError:
             component_status = "timed_out"
             error_message = "Component timed out"
+        except asyncio.CancelledError:
+            component_status = "cancelled"
+            error_message = "Run was cancelled"
+            cancelled = True
         except Exception as e:
             component_status = "failed"
             error_message = str(e)
@@ -871,5 +992,26 @@ class ComponentRunner:
             )
 
             self._save_prompts_log(run_id, component_dir.name, task_results)
+
+            _event_type_map = {
+                "completed": "run_completed",
+                "cancelled": "run_cancelled",
+                "timed_out": "run_timed_out",
+            }
+            event_type = _event_type_map.get(component_status, "run_failed")
+            self._emit_lifecycle(
+                on_event,
+                self._run_manager,
+                run_id,
+                event_type,
+                component=component_dir.name,
+                status=component_status,
+                total_cost_usd=total_cost,
+                duration_seconds=duration,
+                error_message=error_message,
+            )
+
+        if cancelled:
+            raise asyncio.CancelledError()
 
         return component_result

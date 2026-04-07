@@ -113,7 +113,7 @@ class TaskResult(BaseModel):
 class ComponentResult(BaseModel):
     run_id: str
     component: str
-    status: Literal["completed", "failed", "timed_out"]
+    status: Literal["completed", "failed", "timed_out", "cancelled"]
     repo: str
     branch: str
     feature_name: str

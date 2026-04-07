@@ -5,7 +5,7 @@ import logging
 import shlex
 import time
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, Callable, TypeVar
 
 from rich.console import Console
 
@@ -128,6 +128,7 @@ class TaskRunner:
         cli_overrides: CLIOverrides,
         env_vars: dict[str, str],
         adapter: AgentAdapter,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> StreamResult:
         model = self._resolve_param(cli_overrides.model, task.model, config.default_model)
         max_turns = self._resolve_param(
@@ -161,6 +162,8 @@ class TaskRunner:
             env_vars=env_vars or None,
         ):
             self._run_manager.append_stream(run_id, event)
+            if on_event is not None:
+                on_event(event)
             parsed = task_parser.parse_line(json.dumps(event))
             if parsed:
                 task_parser.render_event(parsed)
@@ -192,8 +195,10 @@ class TaskRunner:
         task: TaskDefinition,
         session: SandboxSession,
         run_id: str,
+        step_instance: str | None = None,
     ) -> tuple[dict[str, str], str | None]:
         outputs: dict[str, str] = {}
+        artifact_dir_name = step_instance or task.name
         for output in task.outputs:
             if not await self._sandbox.file_exists(session, output.path):
                 if output.required:
@@ -206,7 +211,9 @@ class TaskRunner:
             outputs[output.path] = content
             if output.save:
                 filename = Path(output.path).name
-                self._run_manager.save_artifact(run_id, filename, content)
+                self._run_manager.save_task_artifact(
+                    run_id, artifact_dir_name, filename, content, original_path=output.path
+                )
         return outputs, None
 
     async def _retry_agent(
@@ -220,6 +227,7 @@ class TaskRunner:
         session_id: str,
         error_message: str,
         adapter: AgentAdapter,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> StreamResult:
         """Resume agent session with a corrective prompt."""
         corrective_prompt = (
@@ -261,6 +269,8 @@ class TaskRunner:
             resume_session_id=session_id,
         ):
             self._run_manager.append_stream(run_id, event)
+            if on_event is not None:
+                on_event(event)
             parsed = retry_parser.parse_line(json.dumps(event))
             if parsed:
                 retry_parser.render_event(parsed)
@@ -317,6 +327,8 @@ class TaskRunner:
         shared_env_vars: dict[str, str] | None = None,
         context_files: list[str] | None = None,
         adapter: AgentAdapter | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        step_instance: str | None = None,
     ) -> TaskResult:
         if adapter is None:
             from dkmv.adapters import get_adapter, validate_agent_model
@@ -376,7 +388,7 @@ class TaskRunner:
             self._run_manager.save_task_prompt(run_id, task.name, task.prompt or "")
 
             stream_result = await self._stream_agent(
-                task, session, run_id, config, cli_overrides, env_vars, adapter
+                task, session, run_id, config, cli_overrides, env_vars, adapter, on_event
             )
             result.total_cost_usd = stream_result.cost
             result.num_turns = stream_result.turns
@@ -386,7 +398,7 @@ class TaskRunner:
             # never lost when a metadata file is missing.
             await self._git_teardown(task, session)
 
-            outputs, error = await self._collect_outputs(task, session, run_id)
+            outputs, error = await self._collect_outputs(task, session, run_id, step_instance)
             if error and stream_result.session_id:
                 logger.info("Output collection failed (%s), retrying with --resume", error)
                 retry_result = await self._retry_agent(
@@ -399,12 +411,13 @@ class TaskRunner:
                     stream_result.session_id,
                     error,
                     adapter,
+                    on_event,
                 )
                 result.total_cost_usd += retry_result.cost
                 result.num_turns += retry_result.turns
                 if retry_result.session_id:
                     result.session_id = retry_result.session_id
-                outputs, error = await self._collect_outputs(task, session, run_id)
+                outputs, error = await self._collect_outputs(task, session, run_id, step_instance)
 
             if error:
                 result.error_message = error

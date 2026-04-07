@@ -58,6 +58,8 @@ class RunManager:
         os.replace(tmp_path, final_path)
 
     def append_stream(self, run_id: str, event: dict[str, Any]) -> None:
+        if "_ts" not in event:
+            event["_ts"] = datetime.now(UTC).isoformat()
         run_dir = self._run_dir(run_id)
         with (run_dir / "stream.jsonl").open("a") as f:
             f.write(json.dumps(event) + "\n")
@@ -78,6 +80,32 @@ class RunManager:
 
     def save_artifact(self, run_id: str, filename: str, content: str) -> None:
         (self._run_dir(run_id) / filename).write_text(content)
+
+    def save_task_artifact(
+        self,
+        run_id: str,
+        task_name: str,
+        filename: str,
+        content: str,
+        original_path: str = "",
+    ) -> Path:
+        """Save a task-scoped artifact under runs/{run_id}/tasks/{task_name}/.
+
+        Also writes a metadata sidecar ({filename}.meta.json) with provenance.
+        Returns the path where the artifact was written.
+        """
+        task_dir = self._run_dir(run_id) / "tasks" / task_name
+        task_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = task_dir / filename
+        artifact_path.write_text(content)
+
+        meta = {
+            "task_name": task_name,
+            "original_path": original_path,
+            "filename": filename,
+        }
+        (task_dir / f"{filename}.meta.json").write_text(json.dumps(meta, indent=2))
+        return artifact_path
 
     def save_task_prompt(self, run_id: str, task_name: str, prompt: str) -> None:
         (self._run_dir(run_id) / f"prompt_{task_name}.md").write_text(prompt)

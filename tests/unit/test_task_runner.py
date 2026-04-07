@@ -452,8 +452,10 @@ class TestOutputCollection:
         )
 
         run_dir = run_manager._runs_dir / run_id
-        assert (run_dir / "saved.md").exists()
+        # Task artifacts are now saved under tasks/{task_name}/
+        assert (run_dir / "tasks" / "test-task" / "saved.md").exists()
         assert not (run_dir / "unsaved.md").exists()
+        assert not (run_dir / "tasks" / "test-task" / "unsaved.md").exists()
 
     async def test_claude_md_saved_as_artifact(
         self,
