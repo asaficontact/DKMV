@@ -24,10 +24,24 @@ POSTs**, and this middleware enforces all four layers in front of the API:
    the ``Authorization`` header), but we additionally reject browser
    form-encoded submissions outright as defense-in-depth.
 
-Exempt paths (no token / no checks): the unauthenticated liveness probe
-``/api/v1/healthz`` and the framework's docs endpoints, so ``docker compose``
-health checks and local docs work without a token. Everything else under the
-API is gated.
+Token-exempt path (and *only* the token check is ever waived): the
+unauthenticated liveness probe at the **exact** path ``/api/v1/healthz``, so a
+``docker compose`` health check can confirm the process is up before the token
+is configured. The match is **exact** — there is no subtree prefix matching, so
+``/api/v1/healthz/../secret`` or ``/api/v1/healthz/anything`` is *not* exempt and
+still requires the token (a prefix match here would expose the whole API subtree
+to unauthenticated callers — INV-1).
+
+Crucially, the Host/Origin/CSRF gate (the anti-DNS-rebinding defense) is applied
+to **every** request, including the liveness probe. Token exemption never waives
+the Host/Origin check — only the token check — so a foreign ``Host`` is rejected
+(403) even on an otherwise token-exempt route.
+
+The framework's interactive docs (``/openapi.json``, ``/docs``, ``/redoc``)
+expose the full API surface and are therefore **not** token-exempt by default:
+they are gated like every other route. An operator who explicitly opts in via
+``DKMV_EXPOSE_DOCS_UNAUTHENTICATED`` (default OFF) can waive *only* the token
+check for those paths in local development; the Host/Origin gate still applies.
 
 The error bodies are the §8.9 envelope (via :mod:`app.api.errors`). No secret
 value is ever logged or returned.
@@ -62,13 +76,13 @@ _FORM_CONTENT_TYPES: tuple[str, ...] = (
     "text/plain",
 )
 
-# Paths reachable without the token (liveness + docs).
-_EXEMPT_PREFIXES: tuple[str, ...] = (
-    "/api/v1/healthz",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
-)
+# The **exact** liveness path whose token check is waived (no subtree match).
+_LIVENESS_PATH: str = "/api/v1/healthz"
+
+# Framework docs paths. Token-exempt only when the operator explicitly opts in
+# via ``DKMV_EXPOSE_DOCS_UNAUTHENTICATED`` (default OFF); the Host/Origin gate
+# still applies even then. Matched exactly — never as a subtree prefix.
+_DOCS_PATHS: frozenset[str] = frozenset({"/openapi.json", "/docs", "/redoc"})
 
 
 def _authority_host(value: str) -> str:
@@ -96,9 +110,17 @@ def _is_loopback(authority: str) -> bool:
     return _authority_host(authority) in _LOOPBACK_HOSTS
 
 
-def _is_exempt(path: str) -> bool:
-    """True iff the path is reachable without the token/checks."""
-    return any(path == p or path.startswith(p + "/") for p in _EXEMPT_PREFIXES)
+def _is_token_exempt(path: str, *, expose_docs: bool) -> bool:
+    """True iff *only the token check* is waived for this **exact** path.
+
+    Matching is exact — never a subtree prefix — so the liveness exemption can
+    never be widened into ``/api/v1/healthz/<anything>`` and expose the API to
+    unauthenticated callers (INV-1). The Host/Origin/CSRF gate is applied
+    separately and is *never* waived here.
+    """
+    if path == _LIVENESS_PATH:
+        return True
+    return expose_docs and path in _DOCS_PATHS
 
 
 def _extract_token(request: Request) -> str | None:
@@ -121,6 +143,9 @@ class AccessControlMiddleware:
         self._app = app
         self._settings = settings
         self._token = settings.DKMV_PLATFORM_TOKEN.get_secret_value()
+        # Dev-only opt-in (default OFF): waive *only* the token check for the
+        # framework docs paths. The Host/Origin gate still applies.
+        self._expose_docs = settings.DKMV_EXPOSE_DOCS_UNAUTHENTICATED
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -137,15 +162,15 @@ class AccessControlMiddleware:
     def _check(self, request: Request) -> JSONResponse | None:
         """Run the access-control checks; return an error response or ``None``.
 
-        Order matters: Host/Origin (403, anti-DNS-rebinding) is checked before
-        the token so a rebinding probe never even learns whether a token is
-        valid, and CSRF (403) is part of the same trust-the-origin gate.
+        The Host/Origin/CSRF gate (403, anti-DNS-rebinding) runs **first and on
+        every request** — including token-exempt routes — so a rebinding probe is
+        rejected before anything else and exemption can never waive it. Only the
+        **token** check (401) is skipped for the exact token-exempt paths.
         """
         path = request.url.path
-        if _is_exempt(path):
-            return None
 
-        # 1+3. Host/Origin validation (anti-DNS-rebinding) → 403.
+        # 1+3. Host/Origin validation (anti-DNS-rebinding) → 403. Applies to
+        # EVERY request, including exempt routes (exemption never waives this).
         host = request.headers.get("host", "")
         if not host or not _is_loopback(host):
             return forbidden("Host header is not a permitted loopback authority").to_response()
@@ -169,7 +194,12 @@ class AccessControlMiddleware:
                     "Form-encoded state-changing requests are rejected (CSRF)"
                 ).to_response()
 
-        # 2. Local token (constant-time) → 401.
+        # 2. Local token (constant-time) → 401. Waived *only* for the exact
+        # token-exempt paths (the liveness probe always; docs only when the
+        # dev-only opt-in is on). The Host/Origin gate above already ran.
+        if _is_token_exempt(path, expose_docs=self._expose_docs):
+            return None
+
         presented = _extract_token(request)
         if (
             not self._token

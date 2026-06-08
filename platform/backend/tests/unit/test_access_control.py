@@ -2,8 +2,17 @@
 
 Covers the NFR-SEC-2 stack: loopback ``Host`` validation (anti-DNS-rebinding),
 the local token requirement, ``Origin``/``Referer`` validation, and CSRF
-rejection of form-encoded state-changing requests. The liveness probe is
-asserted token-exempt.
+rejection of form-encoded state-changing requests. Adds regressions for the two
+INV-1 defects the polish pass fixed:
+
+* the exact-liveness exemption no longer matches subtrees
+  (``/api/v1/healthz/../secret`` / ``/api/v1/healthz/extra`` → 401), and
+* the Host/Origin gate applies to **every** route including token-exempt and
+  docs paths (foreign-Host → 403), and the docs surface is token-gated by
+  default (``/openapi.json`` → 401 without a token).
+
+Fixtures (settings factory, loopback-pinned authed client, runtime stub) come
+from ``tests/conftest.py``.
 """
 
 from __future__ import annotations
@@ -16,25 +25,17 @@ from app.runtime import RunService
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
-_TOKEN = "unit-token-xyz"  # noqa: S105 - test fixture, not a real secret
+from tests.conftest import TEST_TOKEN, StubRuntime, auth_headers, make_settings
 
 
-class _StubRuntime:
-    def get_capabilities(self) -> Any:  # pragma: no cover - patched per test
-        raise AssertionError("preflight not under test here")
-
-
-def _settings() -> Settings:
-    return Settings(_env_file=None, DKMV_PLATFORM_TOKEN=_TOKEN)  # type: ignore[call-arg]  # DKMVP-ESCAPE: pydantic-settings injected kwargs
-
-
-def _app() -> Any:
-    settings = _settings()
-    run_service = RunService(settings, runtime=_StubRuntime())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed stub
+def _app(settings: Settings | None = None) -> Any:
+    """App with an extra state-changing echo route so CSRF is observable."""
+    settings = settings or make_settings()
+    run_service = RunService(settings, runtime=StubRuntime())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed stub
     app = create_app(settings, run_service=run_service)
 
-    # A state-changing echo route so CSRF behavior is observable without a
-    # real POST endpoint (those land in Phase 2).
+    # A state-changing echo route so CSRF behavior is observable without a real
+    # POST endpoint (those land in Phase 2).
     router = APIRouter(prefix="/api/v1")
 
     @router.post("/_echo")
@@ -45,15 +46,15 @@ def _app() -> Any:
     return app
 
 
-def _client(host: str = "127.0.0.1") -> TestClient:
+def _client(host: str = "127.0.0.1", settings: Settings | None = None) -> TestClient:
     # raise_server_exceptions=False: tests that pass access control reach the
     # preflight stub which raises; the Exception handler maps it to a 500
     # envelope, proving access control let the request through (not 401/403).
-    return TestClient(_app(), base_url=f"http://{host}", raise_server_exceptions=False)
+    return TestClient(_app(settings), base_url=f"http://{host}", raise_server_exceptions=False)
 
 
 def _auth() -> dict[str, str]:
-    return {"Authorization": f"Bearer {_TOKEN}"}
+    return auth_headers()
 
 
 # ── Host validation (anti-DNS-rebinding) ─────────────────────────────────────
@@ -95,7 +96,7 @@ def test_wrong_token_rejected_401() -> None:
 
 
 def test_x_dkmv_token_header_accepted() -> None:
-    resp = _client().get("/api/v1/preflight", headers={"X-DKMV-Token": _TOKEN})
+    resp = _client().get("/api/v1/preflight", headers={"X-DKMV-Token": TEST_TOKEN})
     assert resp.status_code == 500  # passed auth, stub raised
 
 
