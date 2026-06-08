@@ -81,3 +81,10 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 check_untyped_defs = true
 plugins = ["pydantic.mypy"]
+
+# The DKMV engine is the locked, in-process dependency (INV-13). It ships no
+# py.typed marker, so mypy cannot resolve its stubs; ignore missing imports for
+# it specifically (we consume it; we do not type-check it here).
+[[tool.mypy.overrides]]
+module = ["dkmv.*"]
+ignore_missing_imports = true
