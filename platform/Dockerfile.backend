@@ -1,0 +1,39 @@
+# DKMV Platform backend image.
+#
+# Build context is the *repo root* (one level above platform/) so the image can
+# editable-install the locked engine (`dkmv/`) alongside the backend — the
+# backend imports `dkmv.runtime.EmbeddedRuntime` in-process (INV-13), never the
+# CLI. Python is pinned >= 3.12 per PRD §8.8.
+#
+# Build from the repo root:
+#   docker build -f platform/Dockerfile.backend -t dkmv-platform-backend .
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Copy the engine (locked, consumed in-process) and the platform backend.
+COPY dkmv/ /src/dkmv/
+COPY pyproject.toml /src/
+COPY platform/backend/ /app/
+
+# Editable-install the engine + the backend. The engine sources live at /src.
+RUN pip install --upgrade pip \
+    && pip install -e /src \
+    && pip install -e /app
+
+# The backend reaches Docker through a BROKERED socket (method-allowlisted proxy
+# / rootless / Sysbox), wired in docker-compose.yml — never a raw
+# `-v /var/run/docker.sock` mount (the Docker API is root-equivalent). The
+# broker service lands in the 0.4-executor slice.
+
+EXPOSE 8787
+
+# Bind from DKMV_PLATFORM_BIND (default 127.0.0.1:8787). Inside the container
+# the app binds 0.0.0.0 so compose can publish it to the host loopback; the
+# host-side publish in docker-compose.yml restricts it to 127.0.0.1.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8787"]

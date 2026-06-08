@@ -1,0 +1,148 @@
+/* ============================================================
+   DKMV — Design tokens & primitives
+   Ported verbatim from docs/design_docs/platform/styles.css (the locked
+   prototype). This is THE single tokens file; per INV-14 hardcoded hex is
+   allowed *only* here. Component classes from the prototype are NOT ported in
+   Phase 0 — the frontend is a scaffold (no Screens 01-07). Real screens consume
+   these tokens in Phase 1.
+   ============================================================ */
+
+:root {
+  /* Brand — coral */
+  --coral-50:  #fff3ee;
+  --coral-100: #ffe2d6;
+  --coral-300: #ff9c7e;
+  --coral-400: #ff7e5a;
+  --coral-500: #ff6b4a;
+  --coral-600: #f2542d;
+  --coral-700: #d23d18;
+
+  /* Semantic state hues (shared both themes) */
+  --st-queued:   #94a3b8; /* slate  */
+  --st-running:  #4f8cff; /* blue   */
+  --st-paused:   #f5a623; /* amber  */
+  --st-review:   #a78bfa; /* violet */
+  --st-done:     #34c98a; /* green  */
+  --st-failed:   #f2666b; /* red    */
+  --st-cancel:   #7c7a82; /* gray   */
+
+  --font-ui: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
+
+  --ease: cubic-bezier(.4, 0, .2, 1);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+}
+
+/* default neutral tint + accent (overridden by [data-theme]) */
+:root {
+  --nh: 40;        /* neutral hue   */
+  --nc: 0.012;     /* neutral chroma (dark) */
+  --ncl: 0.010;    /* neutral chroma (light) */
+  --accent:        #ff6b4a;
+  --accent-hover:  #ff8160;
+  --accent-press:  #f2542d;
+  --accent-fg:     #2a0f06;
+  --brand-a:       var(--accent-hover);
+  --brand-b:       var(--accent-press);
+}
+
+/* ---------- DARK (hero) ---------- */
+[data-mode="dark"] {
+  --bg:        oklch(0.158 var(--nc) var(--nh));
+  --bg-grad-a: oklch(0.205 calc(var(--nc) * 2.2) var(--nh));
+  --bg-grad-b: oklch(0.150 var(--nc) var(--nh));
+  --surface:   oklch(0.205 var(--nc) var(--nh));
+  --surface-2: oklch(0.250 var(--nc) var(--nh));
+  --surface-3: oklch(0.300 var(--nc) var(--nh));
+  --sidebar:   oklch(0.183 var(--nc) var(--nh));
+  --border:    oklch(0.300 var(--nc) var(--nh));
+  --border-2:  oklch(0.372 var(--nc) var(--nh));
+  --text:      oklch(0.962 0.006 var(--nh));
+  --text-2:    oklch(0.760 0.010 var(--nh));
+  --text-3:    oklch(0.600 0.012 var(--nh));
+  --accent-soft:   color-mix(in oklab, var(--accent) 16%, transparent);
+  --accent-ring:   color-mix(in oklab, var(--accent) 42%, transparent);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-md: 0 6px 20px -6px rgba(0,0,0,.55);
+  --shadow-lg: 0 24px 60px -18px rgba(0,0,0,.7);
+  --card-grad: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,0));
+  color-scheme: dark;
+}
+
+/* ---------- LIGHT ---------- */
+[data-mode="light"] {
+  --bg:        oklch(0.968 var(--ncl) var(--nh));
+  --bg-grad-a: oklch(0.965 calc(var(--ncl) * 3.2) var(--nh));
+  --bg-grad-b: oklch(0.972 var(--ncl) var(--nh));
+  --surface:   oklch(1 0 0);
+  --surface-2: oklch(0.975 var(--ncl) var(--nh));
+  --surface-3: oklch(0.940 calc(var(--ncl) * 1.4) var(--nh));
+  --sidebar:   oklch(0.985 var(--ncl) var(--nh));
+  --border:    oklch(0.912 calc(var(--ncl) * 1.4) var(--nh));
+  --border-2:  oklch(0.862 calc(var(--ncl) * 1.6) var(--nh));
+  --text:      oklch(0.235 0.012 var(--nh));
+  --text-2:    oklch(0.455 0.012 var(--nh));
+  --text-3:    oklch(0.610 0.012 var(--nh));
+  --accent-soft:   color-mix(in oklab, var(--accent) 13%, transparent);
+  --accent-ring:   color-mix(in oklab, var(--accent) 38%, transparent);
+  --shadow-sm: 0 1px 2px rgba(40,35,45,.07);
+  --shadow-md: 0 8px 24px -10px rgba(40,35,45,.16);
+  --shadow-lg: 0 26px 60px -22px rgba(40,35,45,.24);
+  --card-grad: linear-gradient(180deg, rgba(255,255,255,.6), rgba(255,255,255,0));
+  color-scheme: light;
+}
+
+/* ============================================================
+   THEME SKINS — accent + neutral tint
+   ============================================================ */
+[data-theme="ember"] {
+  --nh: 42; --nc: 0.013; --ncl: 0.012;
+  --accent: #ff6b4a; --accent-hover: #ff8160; --accent-press: #f2542d; --accent-fg: #2a0f06;
+}
+[data-theme="ember"][data-mode="light"] { --accent: #ef5630; --accent-hover: #ff6b4a; --accent-press: #d23d18; --accent-fg: #fff; }
+
+[data-theme="indigo"] {
+  --nh: 274; --nc: 0.014; --ncl: 0.011;
+  --accent: #7b7bf5; --accent-hover: #9090ff; --accent-press: #6361e8; --accent-fg: #fff;
+}
+[data-theme="indigo"][data-mode="light"] { --accent: #5b54e0; --accent-hover: #6f68f0; --accent-press: #4a43c8; --accent-fg: #fff; }
+
+[data-theme="evergreen"] {
+  --nh: 168; --nc: 0.012; --ncl: 0.010;
+  --accent: #18b88a; --accent-hover: #2dd29c; --accent-press: #0f9d76; --accent-fg: #042a1f;
+}
+[data-theme="evergreen"][data-mode="light"] { --accent: #0e9a72; --accent-hover: #14b88a; --accent-press: #0a7d5c; --accent-fg: #fff; }
+
+[data-theme="graphite"] {
+  --nh: 256; --nc: 0.005; --ncl: 0.004;
+  --accent: #5d8bf0; --accent-hover: #79a1ff; --accent-press: #4a76dc; --accent-fg: #06122e;
+}
+[data-theme="graphite"][data-mode="light"] { --accent: #3f6fd8; --accent-hover: #5586ec; --accent-press: #335cc0; --accent-fg: #fff; }
+
+[data-theme="plum"] {
+  --nh: 324; --nc: 0.014; --ncl: 0.012;
+  --accent: #d563c9; --accent-hover: #e57ed8; --accent-press: #c14fb4; --accent-fg: #2c0a28;
+}
+[data-theme="plum"][data-mode="light"] { --accent: #bd49ad; --accent-hover: #d563c9; --accent-press: #a23a94; --accent-fg: #fff; }
+
+[data-theme="rose"] {
+  --nh: 18; --nc: 0.013; --ncl: 0.011;
+  --accent: #fb6f7a; --accent-hover: #ff8791; --accent-press: #ed5663; --accent-fg: #320d12;
+}
+[data-theme="rose"][data-mode="light"] { --accent: #e84a5a; --accent-hover: #fb6f7a; --accent-press: #cf3848; --accent-fg: #fff; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font-ui);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
