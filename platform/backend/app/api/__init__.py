@@ -18,8 +18,11 @@ from app.api.repos import router as repos_router
 # ``/api/v1`` prefix is declared in exactly one place (no per-router repetition).
 api_router = APIRouter(prefix="/api/v1")
 
-# Feature routers attached to the versioned parent. Add new routers here.
-for _router in (health_router, preflight_router, repos_router):
-    api_router.include_router(_router)
+# Feature routers attached to the versioned parent. One ``include_router`` per
+# line so concurrent slices adding a router union-merge cleanly (add a new line;
+# do not edit an existing one).
+api_router.include_router(health_router)
+api_router.include_router(preflight_router)
+api_router.include_router(repos_router)
 
 __all__ = ["api_router"]

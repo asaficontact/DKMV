@@ -101,9 +101,6 @@ class WritePermission:
     #: GitHub's coarse ``permission`` string for the repo (``admin``/``write``/
     #: ``read``/``none``/…) — surfaced for the preflight row's sub-label.
     role: str
-    #: Fine-grained ability flags GitHub reports under ``permissions``
-    #: (``push``/``maintain``/``admin``/``pull``/``triage``).
-    can_push: bool = False
     #: The write capabilities a run requires that this credential lacks, as the
     #: human labels the preflight renders (e.g. ``"issues:write"``).
     missing: tuple[str, ...] = field(default_factory=tuple)

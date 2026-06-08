@@ -101,4 +101,9 @@ async def get_github_client(app: Starlette, settings: Settings) -> GitHubClient:
 
     client: GitHubClient = PatGitHubClient(store)
     setattr(app.state, _CLIENT_ATTR, client)
+    # NOTE (Phase-2 lifespan ask): this cached client owns a long-lived
+    # ``httpx.AsyncClient`` that is never ``aclose()``-d at app shutdown. The
+    # close belongs in the Phase-2 app-lifespan composition (the same place the
+    # SecretStore/Repository lifespan wiring lands) — call ``client.aclose()``
+    # there. Deliberately not adding a shutdown handler in slice 1.1.
     return client

@@ -206,14 +206,27 @@ class PatGitHubClient(GitHubClient):
 
 
 def _split_repo(repo: str) -> str:
-    """Normalize an ``owner/name`` slug; raise on a malformed value."""
-    cleaned = repo.strip().strip("/")
+    """Normalize an ``owner/name`` slug; raise on a malformed value.
+
+    Lowercases the slug to match the Phase-0 ``_canonical_repo`` normalization
+    (``app.secrets.github_token``) so later slices keying caches / DB rows by a
+    repo slug never desync the token-scope check from the cache on a case
+    mismatch (``'Owner/Repo'`` vs ``'owner/repo'``). Also strips a stray query
+    string / fragment / whitespace off the second segment (e.g.
+    ``owner/name?foo=bar`` or ``owner/name#frag``) rather than passing it through.
+    """
+    cleaned = repo.strip().strip("/").lower()
     if cleaned.endswith(".git"):
         cleaned = cleaned[: -len(".git")]
     parts = [p for p in cleaned.split("/") if p]
     if len(parts) != 2:
         raise GitHubError(f"repo must be 'owner/name', got {repo!r}")
-    return f"{parts[0]}/{parts[1]}"
+    owner = parts[0].strip()
+    # Drop any ``?query``/``#fragment`` (and surrounding whitespace) off the name.
+    name = parts[1].split("?", 1)[0].split("#", 1)[0].strip()
+    if not owner or not name:
+        raise GitHubError(f"repo must be 'owner/name', got {repo!r}")
+    return f"{owner}/{name}"
 
 
 def _lang_color_token(lang: str | None) -> str:
@@ -276,7 +289,6 @@ def _evaluate_write_permission(repo: str, payload: dict[str, Any]) -> WritePermi
         repo=repo,
         can_write=can_write,
         role=role,
-        can_push=can_push,
         missing=missing,
     )
 

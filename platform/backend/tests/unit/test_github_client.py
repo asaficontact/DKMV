@@ -221,6 +221,53 @@ async def test_check_write_permission_malformed_repo() -> None:
         await client.check_write_permission("not-a-slug")
 
 
+@pytest.mark.parametrize(
+    ("given", "expected_path"),
+    [
+        # Mixed-case slug is lowercased to match the Phase-0 canonical form so a
+        # later slice keying caches/DB rows by slug never desyncs on case.
+        ("Owner/Repo", "/repos/owner/repo"),
+        ("ASAFICONTACT/DKMV", "/repos/asaficontact/dkmv"),
+        # Surrounding whitespace / slashes / a ``.git`` suffix are normalized.
+        ("  owner/name/  ", "/repos/owner/name"),
+        ("owner/name.git", "/repos/owner/name"),
+        # A stray query string / fragment on the second segment is stripped
+        # rather than passed through into the request path.
+        ("owner/name?foo=bar", "/repos/owner/name"),
+        ("owner/name#frag", "/repos/owner/name"),
+    ],
+)
+async def test_check_write_permission_normalizes_slug(given: str, expected_path: str) -> None:
+    """The slug is lowercased + cleaned (query/fragment/whitespace) before the call."""
+    store = SecretStore(key=SecretStore.generate_key())
+    await _seed(store)
+
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        return httpx.Response(200, json=dict(_REPO_JSON, permissions={"push": True}))
+
+    client = _client(handler, store)
+    await client.check_write_permission(given)
+    assert seen["path"] == expected_path
+
+
+async def test_check_write_permission_rejects_query_only_name() -> None:
+    """A second segment that is *only* a query (empty name after strip) is rejected."""
+    store = SecretStore(key=SecretStore.generate_key())
+    await _seed(store)
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - not reached
+        return httpx.Response(200, json={})
+
+    client = _client(handler, store)
+    from app.github.client import GitHubError
+
+    with pytest.raises(GitHubError):
+        await client.check_write_permission("owner/?foo=bar")
+
+
 # ── HTTP-layer: GET /repos behind the access-control middleware ───────────────
 
 
@@ -288,7 +335,7 @@ def test_get_repos_returns_items() -> None:
 
     fake = _FakeGitHubClient(
         [_repo()],
-        WritePermission(repo="asaficontact/DKMV", can_write=True, role="write", can_push=True),
+        WritePermission(repo="asaficontact/DKMV", can_write=True, role="write"),
     )
     set_github_client(client.app, fake)
 
@@ -311,7 +358,7 @@ def test_get_repos_no_token_literal_in_response() -> None:
 
     fake = _FakeGitHubClient(
         [_repo()],
-        WritePermission(repo="asaficontact/DKMV", can_write=True, role="write", can_push=True),
+        WritePermission(repo="asaficontact/DKMV", can_write=True, role="write"),
     )
     set_github_client(client.app, fake)
     resp = client.get("/api/v1/repos", headers=auth_headers())
@@ -341,7 +388,6 @@ def test_preflight_with_readonly_token_is_blocked() -> None:
             repo="asaficontact/DKMV",
             can_write=False,
             role="read",
-            can_push=False,
             missing=("issues:write", "contents:write", "pull_requests:write"),
         ),
     )
@@ -369,7 +415,7 @@ def test_preflight_with_writable_token_passes() -> None:
     client = build_client(settings=make_settings(), runtime=FakeRuntime(report))
     fake = _FakeGitHubClient(
         [_repo()],
-        WritePermission(repo="asaficontact/DKMV", can_write=True, role="write", can_push=True),
+        WritePermission(repo="asaficontact/DKMV", can_write=True, role="write"),
     )
     set_github_client(client.app, fake)
 
