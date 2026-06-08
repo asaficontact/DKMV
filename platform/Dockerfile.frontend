@@ -13,10 +13,17 @@ ENV NODE_ENV=development
 
 WORKDIR /app
 
-# Install deps first for layer caching.
-COPY platform/frontend/package.json platform/frontend/package-lock.json* ./
-RUN npm ci || npm install
+# Install deps first for layer caching. Copy ONLY the manifest + lockfile so this
+# layer stays cached as long as dependencies are unchanged. `npm ci` is
+# deterministic (installs the committed package-lock.json exactly) and fails fast
+# if the manifest and lockfile are out of sync — no `|| npm install` fallback,
+# which would silently paper over a drifted/missing lockfile.
+COPY platform/frontend/package.json platform/frontend/package-lock.json ./
+RUN npm ci
 
+# Copy the frontend source over the cached deps. The repo-root `.dockerignore`
+# excludes `node_modules`, so this COPY no longer drags the host-built (wrong
+# arch, ~74M) node_modules into the image and clobbers the deps installed above.
 COPY platform/frontend/ ./
 
 EXPOSE 5173
