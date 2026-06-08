@@ -16,11 +16,11 @@ from app.config import Settings
 from app.runtime import RunService, build_runtime_config
 from dkmv.runtime import EmbeddedRuntime, ExecutionSourceType
 
+from tests.conftest import make_settings
+
 
 def _settings(tmp_path: Path) -> Settings:
-    return Settings(  # type: ignore[call-arg]  # DKMVP-ESCAPE: pydantic-settings injected kwargs
-        _env_file=None,
-        DKMV_PLATFORM_TOKEN="t",
+    return make_settings(
         OUTPUT_DIR=tmp_path / "outputs",
         ANTHROPIC_API_KEY="sk-ant-fixture",
         GITHUB_TOKEN="gh-fixture",

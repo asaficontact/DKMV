@@ -10,13 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.api.preflight import build_preflight_payload
-from app.config import Settings
-from app.main import create_app
-from app.runtime import RunService
 from dkmv.runtime import CapabilityReport
 from fastapi.testclient import TestClient
 
-_TOKEN = "preflight-token"  # noqa: S105 - test fixture, not a real secret
+from tests.conftest import FakeRuntime, auth_headers, build_client
 
 
 def _ready_report() -> CapabilityReport:
@@ -33,23 +30,12 @@ def _ready_report() -> CapabilityReport:
     )
 
 
-class _FakeRuntime:
-    def __init__(self, report: CapabilityReport) -> None:
-        self._report = report
-
-    def get_capabilities(self) -> CapabilityReport:
-        return self._report
-
-
 def _client(report: CapabilityReport) -> TestClient:
-    settings = Settings(_env_file=None, DKMV_PLATFORM_TOKEN=_TOKEN)  # type: ignore[call-arg]  # DKMVP-ESCAPE: pydantic-settings injected kwargs
-    run_service = RunService(settings, runtime=_FakeRuntime(report))  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed fake
-    app = create_app(settings, run_service=run_service)
-    return TestClient(app, base_url="http://127.0.0.1")
+    return build_client(runtime=FakeRuntime(report), raise_server_exceptions=True)
 
 
 def _auth() -> dict[str, str]:
-    return {"Authorization": f"Bearer {_TOKEN}"}
+    return auth_headers()
 
 
 # ── Envelope shape (AC-0.2-3) ────────────────────────────────────────────────
