@@ -1,0 +1,101 @@
+# DKMV — Docker build-context excludes.
+#
+# Build context for BOTH platform images is the REPO ROOT:
+#   - docker-compose.yml uses `context: ..` (one level above platform/).
+#   - The documented commands build from the repo root:
+#       docker build -f platform/Dockerfile.backend  -t dkmv-platform-backend  .
+#       docker build -f platform/Dockerfile.frontend -t dkmv-platform-frontend .
+# Docker honors the `.dockerignore` that sits at the build-context root, so this
+# file MUST live at the repo root (this file). It trims the ~270M context down to
+# just what the images build (the dkmv/ engine source, platform/backend + frontend
+# source, and the README files referenced by pyproject `readme =`), excluding
+# virtualenvs, node_modules, caches, local databases, and VCS metadata.
+#
+# DENYLIST approach (exclude artifacts, keep everything else) so we never
+# accidentally drop the locked dkmv/ engine source or a README the editable
+# installs / pyproject metadata require.
+
+# --- Version control & CI ---
+.git
+.gitignore
+.github/
+.pre-commit-config.yaml
+
+# --- Python virtualenvs (the big ones: platform/backend/.venv ~180M) ---
+.venv/
+venv/
+**/.venv/
+**/venv/
+
+# --- Python build / bytecode artifacts ---
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+**/*.egg-info/
+build/
+dist/
+wheels/
+
+# --- Tool caches ---
+.mypy_cache/
+**/.mypy_cache/
+.pytest_cache/
+**/.pytest_cache/
+.ruff_cache/
+**/.ruff_cache/
+.coverage
+**/.coverage
+htmlcov/
+**/htmlcov/
+
+# --- Node / Vite (platform/frontend/node_modules ~74M; rebuilt in-image via
+#     `npm ci`, so the host copy — wrong arch — must never enter the context) ---
+node_modules/
+**/node_modules/
+**/dist/
+**/.vite/
+
+# --- Local databases & SQLite WAL/SHM sidecars (never ship state into an image) ---
+*.db
+*.db-wal
+*.db-shm
+**/*.db
+**/*.db-wal
+**/*.db-shm
+
+# --- Local data, outputs, secrets ---
+outputs/
+**/outputs/
+data/
+**/data/
+.env
+**/.env
+.dkmv/
+.agent/
+
+# --- Docs & non-build assets (not needed by either image build) ---
+docs/
+assets/
+logo-concepts/
+*.md
+!README.md
+!platform/README.md
+
+# --- Editor / OS cruft ---
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# NOTE on what is intentionally KEPT (do NOT add excludes for these):
+#   dkmv/                  — locked engine source; editable-installed (`-e /src`).
+#   dkmv/builtins/**.yaml  — force-included package data in the engine wheel.
+#   pyproject.toml         — root descriptor for the engine editable install.
+#   README.md              — root pyproject `readme = "README.md"`.
+#   platform/backend/**    — backend source + alembic + pyproject.
+#   platform/frontend/{package.json,package-lock.json,src,...} — frontend source.
+#   platform/README.md     — backend pyproject `readme = "../README.md"`.
+# The `*.md` exclude above drops stray top-level markdown but the two `!README.md`
+# / `!platform/README.md` re-includes preserve exactly the ones the builds read.

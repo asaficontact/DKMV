@@ -1,0 +1,55 @@
+# DKMV Platform — local deployment (PRD §8.8: `docker compose up` runs
+# backend + frontend).
+#
+# Both services publish to the host **loopback only** (127.0.0.1) — the control
+# plane reaches the root-equivalent Docker socket and launches money-spending
+# runs, so it MUST NOT be openly reachable (NFR-SEC-2, INV-1). Loopback alone is
+# not sufficient: the backend additionally requires the local auth token +
+# Host/Origin validation + CSRF (middleware lands in slice 0.2).
+#
+# The backend reaches Docker through a BROKERED, method-allowlisted socket proxy
+# (or rootless Docker / Sysbox) — never a raw `-v /var/run/docker.sock` mount.
+# That broker service + egress allowlist are added in slices 0.4/0.5; the
+# backend below intentionally has NO docker.sock mount.
+
+services:
+  backend:
+    build:
+      # Build context is the repo root so the image can editable-install the
+      # locked engine (dkmv/) alongside the backend.
+      context: ..
+      dockerfile: platform/Dockerfile.backend
+    ports:
+      # Host loopback only.
+      - "127.0.0.1:8787:8787"
+    environment:
+      DKMV_PLATFORM_TOKEN: "${DKMV_PLATFORM_TOKEN:-}"
+      DKMV_PLATFORM_BIND: "127.0.0.1:8787"
+      DATABASE_URL: "sqlite:////data/dkmv.db"
+      OUTPUT_DIR: "/data/outputs"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      CODEX_API_KEY: "${CODEX_API_KEY:-}"
+      DKMV_IMAGE: "${DKMV_IMAGE:-dkmv-sandbox:latest}"
+      SANDBOX_RUNTIME: "${SANDBOX_RUNTIME:-runsc}"
+      MAX_CONCURRENT_RUNS: "${MAX_CONCURRENT_RUNS:-3}"
+      DAILY_SPEND_CAP: "${DAILY_SPEND_CAP:-}"
+      EGRESS_ALLOWLIST: "${EGRESS_ALLOWLIST:-api.github.com,github.com,api.anthropic.com,api.openai.com}"
+    volumes:
+      # Platform-owned DB + artifacts volume (OQ-4). NOT the docker socket.
+      - backend-data:/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: platform/Dockerfile.frontend
+    ports:
+      # Host loopback only.
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend-data:
