@@ -1,0 +1,44 @@
+{
+  "_comment": "DKMV Platform hook bindings. Pre-flight copies this to repo-root .claude/settings.json and the hook scripts to scripts/hooks/. Paths are repo-root-relative. jq must be installed.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "scripts/hooks/lock-prd.sh" },
+          { "type": "command", "command": "scripts/hooks/lock-design.sh" },
+          { "type": "command", "command": "scripts/hooks/lock-engine.sh" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "scripts/hooks/forbid-dangerous.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "scripts/hooks/post-edit-typecheck.sh" },
+          { "type": "command", "command": "scripts/hooks/post-edit-no-hardcoded-hex.sh" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "scripts/hooks/contract-test.sh" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "scripts/hooks/update-phase-progress.sh" }
+        ]
+      }
+    ]
+  }
+}

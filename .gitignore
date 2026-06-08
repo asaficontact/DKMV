@@ -30,3 +30,4 @@ htmlcov/
 # Docs
 .dkmv/
 .claude/
+.claude/worktrees/

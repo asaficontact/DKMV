@@ -1,0 +1,4 @@
+# DKMV Platform — phase progress log (auto-appended by the Stop hook + orchestrator)
+# Format: <ISO8601> <EVENT> [<branch/phase> [<detail>]]
+# Events: DISPATCH | IMPL-COMPLETE | EVAL-APPROVED | PR-OPENED | PHASE-N-COMPLETE | session_end
+2026-06-08T15:17:02Z session_end

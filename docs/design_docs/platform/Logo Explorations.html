@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clover — Logo Explorations v2</title>
+<link rel="stylesheet" href="styles/tokens.css">
+<style>
+  body { padding: 56px 64px 110px; }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); font-weight: 500; margin: 0 0 14px; }
+  h1.title { font-size: 32px; font-weight: 500; letter-spacing: -0.02em; margin: 0 0 10px; }
+  .lede { color: var(--text-2); font-size: 15px; max-width: 680px; margin: 0 0 6px; line-height: 1.55; }
+  .meta { color: var(--text-3); font-size: 13px; }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 40px 0; }
+
+  .group-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 6px; }
+  .group-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .group-head .k { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
+  .group-note { color: var(--text-2); font-size: 13px; max-width: 620px; margin: 0 0 20px; line-height: 1.55; }
+
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 8px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px 20px 18px; display: flex; flex-direction: column; align-items: center;
+    position: relative; transition: border-color .15s;
+  }
+  .card:hover { border-color: var(--border-strong); }
+  .card.pick { border-color: var(--accent); }
+  .badge { position: absolute; top: 12px; right: 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--accent); background: var(--accent-muted); padding: 3px 7px; border-radius: 999px; font-weight: 500; }
+  .stage { height: 120px; display: grid; place-items: center; width: 100%; }
+  /* favicon-scale strip to test crowding */
+  .mini { display: flex; align-items: center; gap: 14px; margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--border); width: 100%; justify-content: center; }
+  .mini .holder { display: grid; place-items: center; }
+  .mini .lab { font-family: var(--mono); font-size: 10px; color: var(--text-3); }
+  .vname { font-size: 13.5px; font-weight: 500; margin-top: 14px; align-self: flex-start; }
+  .vdesc { font-size: 11.5px; color: var(--text-3); margin-top: 4px; line-height: 1.5; align-self: flex-start; }
+  .num { font-family: var(--mono); font-size: 11px; color: var(--text-3); align-self: flex-start; }
+
+  .wordmark-row { display: flex; flex-wrap: wrap; gap: 40px; align-items: center; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 32px 36px; }
+  .wm { display: inline-flex; align-items: center; gap: 11px; }
+  .wm-text { font-family: var(--sans); font-weight: 500; letter-spacing: -0.02em; color: var(--text-1); font-size: 26px; }
+  .cap { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-top: 12px; }
+
+  .callout { background: var(--gold-bg); border: 1px solid rgba(212,196,154,.2); border-radius: 10px; padding: 16px 18px; margin-top: 24px; }
+  .callout .h { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--gold); margin-bottom: 8px; }
+  .callout p { font-size: 13px; color: var(--text-2); line-height: 1.6; margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">MIT Media Lab · Brand exploration</p>
+  <h1 class="title">Clover mark — round two</h1>
+  <p class="lede">The first geometric petal read as crowded — four fat leaves with almost no breathing room. These nine keep the confident Clover green but open up the negative space. Each is shown large, then at 24px and 16px so you can judge how it holds when it gets small (where crowding bites hardest).</p>
+  <p class="meta mono">accent <span style="color:var(--accent)">#4ADE80</span> · monochrome · pick the one that reads cleanest at 16px</p>
+
+  <hr class="rule">
+
+  <div class="group-head"><h2>A · Quatrefoil family</h2><span class="k">circle-union · architectural</span></div>
+  <p class="group-note">Four overlapping circles. The cusps between lobes form naturally — this is the most "clover silhouette" reading, and it nods to the gothic quatrefoil (scholarly, archival — fitting for Dr. Clover). Generous and calm, never crowded.</p>
+  <div class="grid" id="g-quatre"></div>
+
+  <hr class="rule">
+
+  <div class="group-head"><h2>B · Open petals</h2><span class="k">slimmer leaves · real gaps</span></div>
+  <p class="group-note">The original direction, but the leaves are narrowed and pulled apart so the center cross of negative space actually reads. Lighter on the page, especially small.</p>
+  <div class="grid" id="g-petal"></div>
+
+  <hr class="rule">
+
+  <div class="group-head"><h2>C · Line &amp; aperture</h2><span class="k">monoline · pinwheel</span></div>
+  <p class="group-note">Stroke-based and rotational takes. The monoline reads as a line-icon (Lucide-adjacent, sits naturally beside the UI icons); the aperture spins the leaves into a shutter — most abstract, most "tool".</p>
+  <div class="grid" id="g-line"></div>
+
+  <hr class="rule">
+
+  <div class="group-head"><h2>Wordmark · top three at a glance</h2><span class="k">Inter Medium · −0.02em</span></div>
+  <div class="wordmark-row" id="wordmarks"></div>
+
+  <div class="callout">
+    <div class="h">My read</div>
+    <p><b style="color:var(--text-1);font-weight:500">B2 (extra-slim petals)</b> is my pick — unmistakably a four-leaf clover, but the narrow leaves and open center cross keep it light at every size, fixing the crowding. <b style="color:var(--text-1);font-weight:500">A3 (wide-cusp quatrefoil)</b> is the rounder, scholarly alternative with a neat center dot; <b style="color:var(--text-1);font-weight:500">C1 (monoline)</b> if you want the lightest, most technical mark that sits beside the Lucide UI icons. Tell me the number and I'll lock it across every screen.</p>
+  </div>
+</div>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+
+/* ---- leaf paths (48 viewBox, center 24,24) ---- */
+const PETAL_SLIM = "M24 22.6 C20.4 20.8 15.8 16.8 15.8 11.6 C15.8 7.4 19.4 4.8 24 4.8 C28.6 4.8 32.2 7.4 32.2 11.6 C32.2 16.8 27.6 20.8 24 22.6 Z";
+const PETAL_XSLIM = "M24 22 C21.2 20.4 17.6 16.6 17.6 11.8 C17.6 7.8 20.4 5.4 24 5.4 C27.6 5.4 30.4 7.8 30.4 11.8 C30.4 16.6 26.8 20.4 24 22 Z";
+const HEART_SM = "M24 21.6 C22.6 19.4 16.6 17.4 16.6 12.6 C16.6 9.3 18.9 7.9 21 8.9 C22.3 9.5 23.3 10.7 24 12 C24.7 10.7 25.7 9.5 27 8.9 C29.1 7.9 31.4 9.3 31.4 12.6 C31.4 17.4 25.4 19.4 24 21.6 Z";
+const APERTURE = "M24 24 C24 18.4 26.2 9.6 24 6.4 C28.6 6.4 33 9.9 33 14.8 C33 19.2 29.4 24 24 24 Z";
+const STEM = "M24 22 C24 28 22.5 33 19.5 38.5";
+
+/* ---- renderers ---- */
+function svg(size) { const s = el('svg', { viewBox: '0 0 48 48', width: size, height: size }); s.style.display = 'block'; return s; }
+
+function rPetal(size, { leaf = PETAL_SLIM, fill = 'var(--accent)', rot = 0, stroke = 0, stem = false, n = 4 }) {
+  const s = svg(size), g = el('g', {});
+  for (let i = 0; i < n; i++) {
+    const p = el('path', { d: leaf, transform: `rotate(${i * (360 / n) + rot} 24 24)` });
+    if (stroke) { p.setAttribute('fill', 'none'); p.setAttribute('stroke', fill); p.setAttribute('stroke-width', stroke); p.setAttribute('stroke-linejoin', 'round'); }
+    else p.setAttribute('fill', fill);
+    g.appendChild(p);
+  }
+  if (stem) { const st = el('path', { d: STEM, fill: 'none', stroke: fill, 'stroke-width': stroke || 2.2, 'stroke-linecap': 'round' }); g.appendChild(st); }
+  s.appendChild(g); return s;
+}
+
+function rQuatre(size, { R = 10, D = 10.6, fill = 'var(--accent)', gap = false, stroke = 0 }) {
+  const s = svg(size), g = el('g', {});
+  const cs = [[24, 24 - D], [24 + D, 24], [24, 24 + D], [24 - D, 24]];
+  cs.forEach(([cx, cy]) => {
+    const c = el('circle', { cx, cy, r: R });
+    if (stroke) { c.setAttribute('fill', 'none'); c.setAttribute('stroke', fill); c.setAttribute('stroke-width', stroke); }
+    else c.setAttribute('fill', fill);
+    g.appendChild(c);
+  });
+  s.appendChild(g);
+  if (gap) {
+    // 1px cross of background colour to separate the leaves
+    const w = size * (2.4 / 48);
+    const v = el('rect', { x: 24 - 1.2, y: 7, width: 2.4, height: 34, fill: 'var(--bg)' });
+    const h = el('rect', { x: 7, y: 24 - 1.2, width: 34, height: 2.4, fill: 'var(--bg)' });
+    g.appendChild(v); g.appendChild(h);
+  }
+  return s;
+}
+
+/* negative-space squircle tile (clover knocked out) */
+function rTile(size, { bg = 'var(--accent)', cut = 'var(--bg)' }) {
+  const s = svg(size); const id = 'm' + Math.random().toString(36).slice(2);
+  const defs = el('defs', {});
+  const mask = el('mask', { id });
+  mask.appendChild(el('rect', { x: 0, y: 0, width: 48, height: 48, fill: 'white' }));
+  [[24, 13.4], [34.6, 24], [24, 34.6], [13.4, 24]].forEach(([cx, cy]) => mask.appendChild(el('circle', { cx, cy, r: 9.5, fill: 'black' })));
+  defs.appendChild(mask); s.appendChild(defs);
+  s.appendChild(el('rect', { x: 2, y: 2, width: 44, height: 44, rx: 12, fill: bg, mask: `url(#${id})` }));
+  return s;
+}
+
+/* ---- variation defs ---- */
+const QUATRE = [
+  { id: 'A1', name: 'Solid quatrefoil', desc: 'Four circles, full overlap. Calmest, most flower-like.', make: (sz) => rQuatre(sz, { R: 10.4, D: 10.2 }) },
+  { id: 'A2', name: 'Gapped quatrefoil', desc: '1px center cross separates the four leaves.', make: (sz) => rQuatre(sz, { R: 10.4, D: 10.6, gap: true }) },
+  { id: 'A3', name: 'Wide cusp', desc: 'Circles pulled apart — deeper cusps, more leaf-like.', make: (sz) => rQuatre(sz, { R: 9.4, D: 11.8 }) },
+  { id: 'A4', name: 'Outline quatrefoil', desc: 'Stroke ring version. Light, architectural.', make: (sz) => rQuatre(sz, { R: 9.6, D: 10.4, stroke: 2.2 }) },
+];
+const PETALS = [
+  { id: 'B1', name: 'Open petals', desc: 'Slimmer leaves, visible center gap. Evolution of v1.', make: (sz) => rPetal(sz, { leaf: PETAL_SLIM }) },
+  { id: 'B2', name: 'Extra-slim', desc: 'Narrowest leaves — most negative space.', pick: true, make: (sz) => rPetal(sz, { leaf: PETAL_XSLIM }) },
+  { id: 'B3', name: 'Shamrock + stem', desc: 'Notched leaflets and a stem. Most literal clover.', make: (sz) => rPetal(sz, { leaf: HEART_SM, stem: true }) },
+  { id: 'B4', name: 'Pinwheel petals', desc: 'Leaves rotated 20° — quiet motion.', make: (sz) => rPetal(sz, { leaf: PETAL_SLIM, rot: 20 }) },
+];
+const LINES = [
+  { id: 'C1', name: 'Monoline', desc: 'Stroke leaves. Reads as a line-icon beside the UI.', make: (sz) => rPetal(sz, { leaf: PETAL_SLIM, stroke: 2.2 }) },
+  { id: 'C2', name: 'Monoline pinwheel', desc: 'Stroke + 20° rotation.', make: (sz) => rPetal(sz, { leaf: PETAL_SLIM, stroke: 2.2, rot: 20 }) },
+  { id: 'C3', name: 'Aperture', desc: 'Teardrop blades, shutter geometry. Most abstract.', make: (sz) => rPetal(sz, { leaf: APERTURE, rot: 0 }) },
+  { id: 'C4', name: 'Negative-space tile', desc: 'Clover knocked out of a green app tile.', make: (sz) => sz >= 60 ? rTile(sz, {}) : rTile(sz, {}) },
+];
+
+function fill(elId, list) {
+  const root = document.getElementById(elId);
+  list.forEach(v => {
+    const card = document.createElement('div'); card.className = 'card' + (v.pick ? ' pick' : '');
+    if (v.pick) { const b = document.createElement('div'); b.className = 'badge'; b.textContent = 'pick'; card.appendChild(b); }
+    const stage = document.createElement('div'); stage.className = 'stage'; stage.appendChild(v.make(84)); card.appendChild(stage);
+    const mini = document.createElement('div'); mini.className = 'mini';
+    [24, 16].forEach(sz => {
+      const wrap = document.createElement('div'); wrap.style.display = 'flex'; wrap.style.flexDirection = 'column'; wrap.style.alignItems = 'center'; wrap.style.gap = '6px';
+      const h = document.createElement('div'); h.className = 'holder'; h.style.width = '24px'; h.style.height = '24px'; h.appendChild(v.make(sz));
+      const l = document.createElement('div'); l.className = 'lab'; l.textContent = sz + 'px';
+      wrap.appendChild(h); wrap.appendChild(l); mini.appendChild(wrap);
+    });
+    card.appendChild(mini);
+    const num = document.createElement('div'); num.className = 'num'; num.textContent = v.id; card.appendChild(num);
+    const nm = document.createElement('div'); nm.className = 'vname'; nm.textContent = v.name; card.appendChild(nm);
+    const ds = document.createElement('div'); ds.className = 'vdesc'; ds.textContent = v.desc; card.appendChild(ds);
+    root.appendChild(card);
+  });
+}
+fill('g-quatre', QUATRE);
+fill('g-petal', PETALS);
+fill('g-line', LINES);
+
+/* wordmarks for top 3 */
+const wmRoot = document.getElementById('wordmarks');
+[['B2', PETALS[1]], ['A3', QUATRE[2]], ['C1', LINES[0]]].forEach(([id, v]) => {
+  const col = document.createElement('div'); col.style.display = 'flex'; col.style.flexDirection = 'column'; col.style.alignItems = 'flex-start';
+  const wm = document.createElement('div'); wm.className = 'wm';
+  wm.appendChild(v.make(28));
+  const t = document.createElement('span'); t.className = 'wm-text'; t.textContent = 'Clover'; wm.appendChild(t);
+  col.appendChild(wm);
+  const cap = document.createElement('div'); cap.className = 'cap'; cap.textContent = id; col.appendChild(cap);
+  wmRoot.appendChild(col);
+});
+</script>
+</body>
+</html>

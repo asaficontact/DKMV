@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clover — Monoline Logo Sheet</title>
+<link rel="stylesheet" href="styles/tokens.css">
+<style>
+  body { padding: 56px 64px 96px; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); font-weight: 500; margin: 0 0 14px; }
+  h1.title { font-size: 32px; font-weight: 500; letter-spacing: -0.02em; margin: 0 0 8px; }
+  .lede { color: var(--text-2); font-size: 15px; max-width: 660px; margin: 0 0 8px; line-height: 1.55; }
+  .meta { color: var(--text-3); font-size: 13px; }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 44px 0; }
+  .sect-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 8px; }
+  .sect-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .sect-head .k { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
+  .sect-note { color: var(--text-2); font-size: 13px; max-width: 600px; margin: 0 0 24px; line-height: 1.55; }
+
+  .hero-mark { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-card);
+    display: grid; place-items: center; padding: 56px; }
+
+  .ladder { display: flex; align-items: flex-end; gap: 44px; flex-wrap: wrap;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-card); padding: 36px 40px; }
+  .rung { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .rung .px { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+  .rung .holder { display: grid; place-items: center; }
+
+  .locks { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .lock { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-card);
+    padding: 32px; display: flex; align-items: center; min-height: 132px; position: relative; }
+  .lock.light { background: #F5F4EE; }
+  .lock .cap { position: absolute; bottom: 14px; left: 32px; font-size: 11px; color: var(--text-3); letter-spacing: 0.04em; text-transform: uppercase; }
+  .lock.light .cap { color: #8A887E; }
+  .wordmark { display: inline-flex; align-items: center; gap: 11px; }
+  .wm-text { font-family: var(--sans); font-weight: 500; letter-spacing: -0.02em; color: var(--text-1); }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .fav-strip { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .fav { border: 1px solid var(--border); border-radius: 8px; display: grid; place-items: center; background: var(--surface-1); }
+  .caption { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); margin-top: 10px; }
+  .pentas { display: flex; gap: 48px; align-items: center; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-card); padding: 32px 40px; flex-wrap: wrap; }
+  .spec { font-family: var(--mono); font-size: 12px; color: var(--text-2); line-height: 1.8; }
+  .spec b { color: var(--text-1); font-weight: 500; } .spec .c { color: var(--accent); }
+  .footnote { color: var(--text-3); font-size: 12px; margin-top: 40px; font-style: italic; }
+  .footnote .g { color: var(--gold); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="eyebrow">MIT Media Lab · Brand · Locked</p>
+  <h1 class="title">Clover — the monoline mark</h1>
+  <p class="lede">Four open petals drawn as a single stroke weight. It reads as a four-leaf clover and sits naturally beside the Lucide line-icons in the product. The stroke thickens slightly as the mark shrinks so it stays legible down to the favicon.</p>
+  <p class="meta mono">construction C1 · monoline · accent <span style="color:var(--accent)">#4ADE80</span></p>
+
+  <hr class="rule">
+
+  <div class="sect-head"><h2>The mark</h2><span class="k">96px · on dark / on light</span></div>
+  <div class="grid2">
+    <div class="hero-mark" id="hero-dark"></div>
+    <div class="hero-mark" style="background:#F5F4EE" id="hero-light"></div>
+  </div>
+
+  <hr class="rule">
+
+  <div class="sect-head"><h2>Size ladder</h2><span class="k">16 → 160px · adaptive stroke</span></div>
+  <p class="sect-note">Stroke weight is specified in the mark&rsquo;s own 48-unit space and scales up at small sizes: 4u at 16px down to 2.1u at 160px. This keeps the line from disappearing as a favicon while staying elegant in the marketing hero.</p>
+  <div class="ladder" id="ladder"></div>
+
+  <hr class="rule">
+
+  <div class="sect-head"><h2>Wordmark lockups</h2><span class="k">Inter Medium · −0.02em</span></div>
+  <div class="locks" id="locks"></div>
+
+  <hr class="rule">
+
+  <div class="sect-head"><h2>Favicon &amp; app icon</h2><span class="k">16 / 32 / tile</span></div>
+  <div class="grid2">
+    <div class="lock" style="flex-direction:column;align-items:flex-start;gap:20px">
+      <div class="fav-strip" id="favstrip"></div>
+      <p class="caption">Browser tab · stroke on dark, stroke on light</p>
+    </div>
+    <div class="lock" style="flex-direction:column;align-items:flex-start;gap:20px">
+      <div class="fav-strip" id="favtiles"></div>
+      <p class="caption">App tile · stroke mark on green / on surface</p>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <div class="sect-head"><h2>Pentaclover</h2><span class="k">agent-mode / extension badge</span></div>
+  <p class="sect-note">A five-petal monoline variant marks agent-mode and the browser extension — never the primary mark.</p>
+  <div class="pentas" id="pentas"></div>
+
+  <hr class="rule">
+
+  <div class="sect-head"><h2>Construction notes</h2><span class="k">spec</span></div>
+  <div class="grid2">
+    <div class="lock" style="align-items:flex-start">
+      <div class="spec">
+        leaves &nbsp;<b>4</b> open petals, 12·3·6·9<br>
+        fill &nbsp;&nbsp;&nbsp;<b>none</b> — stroke only<br>
+        stroke &nbsp;<span class="c">#4ADE80</span> on dark · <b>#08080A</b> on light<br>
+        weight &nbsp;<b>2.1–4u</b> (size-adaptive)<br>
+        joins &nbsp;&nbsp;<b>round</b><br>
+        center &nbsp;open cross of negative space<br>
+        stem &nbsp;&nbsp;<b>omitted</b>
+      </div>
+    </div>
+    <div class="lock" style="align-items:flex-start">
+      <div class="spec" style="color:var(--text-2)">
+        <b style="color:var(--text-1)">Do</b><br>
+        — keep a single, even stroke weight<br>
+        — let it share weight with Lucide icons<br>
+        — pair with Inter Medium wordmark<br><br>
+        <b style="color:var(--error)">Don&rsquo;t</b><br>
+        — fill the petals or add a second color<br>
+        — thin the stroke below 16px legibility<br>
+        — rotate or skew the mark
+      </div>
+    </div>
+  </div>
+
+  <p class="footnote">Named for <span class="g">Dr. Clover</span>, head archaeologist of Ohara — who died trying to share suppressed knowledge with the world.</p>
+</div>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+const LEAF = "M24 22.6 C20.4 20.8 15.8 16.8 15.8 11.6 C15.8 7.4 19.4 4.8 24 4.8 C28.6 4.8 32.2 7.4 32.2 11.6 C32.2 16.8 27.6 20.8 24 22.6 Z";
+function strokeFor(size){ return size <= 16 ? 4 : size <= 22 ? 3.4 : size <= 34 ? 2.8 : size <= 72 ? 2.4 : 2.1; }
+function mark({ size = 48, color = 'var(--accent)', leaves = 4, filled = false }) {
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 48 48'); svg.setAttribute('width', size); svg.setAttribute('height', size); svg.style.display = 'block';
+  const sw = strokeFor(size);
+  for (let i = 0; i < leaves; i++) {
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', LEAF);
+    if (filled) { p.setAttribute('fill', color); }
+    else { p.setAttribute('fill', 'none'); p.setAttribute('stroke', color); p.setAttribute('stroke-width', sw); p.setAttribute('stroke-linejoin', 'round'); }
+    p.setAttribute('transform', `rotate(${i * (360 / leaves)} 24 24)`);
+    svg.appendChild(p);
+  }
+  return svg;
+}
+
+document.getElementById('hero-dark').appendChild(mark({ size: 112 }));
+document.getElementById('hero-light').appendChild(mark({ size: 112, color: '#08080A' }));
+
+const ladder = document.getElementById('ladder');
+[[16,'favicon'],[20,'nav'],[32,'hero'],[96,''],[160,'']].forEach(([sz,label])=>{
+  const rung = document.createElement('div'); rung.className='rung';
+  const holder = document.createElement('div'); holder.className='holder'; holder.style.width=Math.max(sz,32)+'px'; holder.style.height=sz+'px';
+  holder.appendChild(mark({ size: sz })); rung.appendChild(holder);
+  const px=document.createElement('div'); px.className='px'; px.textContent=sz+'px'+(label?' · '+label:''); rung.appendChild(px);
+  ladder.appendChild(rung);
+});
+
+const locks = document.getElementById('locks');
+function wordmark(markSize, fontSize, dark){
+  const w=document.createElement('div'); w.className='wordmark';
+  w.appendChild(mark({ size: markSize, color: dark ? '#08080A' : 'var(--accent)' }));
+  const t=document.createElement('span'); t.className='wm-text'; t.style.fontSize=fontSize+'px'; t.textContent='Clover';
+  if(dark) t.style.color='#08080A';
+  w.appendChild(t); return w;
+}
+[['','Primary · on dark',32,28,false],['light','On light · #08080A',32,28,true],['','Nav · 20px mark',20,16,false],['mono','Mono breadcrumb',20,16,false]].forEach(([cls,cap,ms,fs,dark])=>{
+  const l=document.createElement('div'); l.className='lock '+cls;
+  if(cls==='mono'){
+    const w=document.createElement('div'); w.className='wordmark';
+    w.appendChild(mark({ size:20 }));
+    const t=document.createElement('span'); t.className='wm-text'; t.style.fontSize='16px'; t.textContent='Clover'; w.appendChild(t);
+    const bc=document.createElement('span'); bc.style.fontFamily='var(--mono)'; bc.style.fontSize='13px'; bc.style.color='var(--text-3)'; bc.style.marginLeft='4px'; bc.textContent='/ apps / beat-watch'; w.appendChild(bc);
+    l.appendChild(w);
+  } else l.appendChild(wordmark(ms,fs,dark));
+  const c=document.createElement('div'); c.className='cap'; c.textContent=cap; l.appendChild(c);
+  locks.appendChild(l);
+});
+
+const favStrip = document.getElementById('favstrip');
+[16,32].forEach(sz=>{ const f=document.createElement('div'); f.className='fav'; f.style.width=(sz+24)+'px'; f.style.height=(sz+24)+'px'; f.appendChild(mark({size:sz})); favStrip.appendChild(f); });
+const fl=document.createElement('div'); fl.className='fav'; fl.style.width='56px'; fl.style.height='56px'; fl.style.background='#F5F4EE'; fl.appendChild(mark({size:32,color:'#08080A'})); favStrip.appendChild(fl);
+
+const favTiles = document.getElementById('favtiles');
+[['#08080A','var(--accent)',56],['var(--accent)','#08080A',56]].forEach(([bg,col,sz])=>{
+  const t=document.createElement('div'); t.className='fav'; t.style.width='72px'; t.style.height='72px'; t.style.borderRadius='16px'; t.style.background=bg;
+  t.appendChild(mark({size:38,color:col})); favTiles.appendChild(t);
+});
+
+const pentas = document.getElementById('pentas');
+[[4,'4-leaf · canonical'],[5,'5-leaf · agent mode']].forEach(([n,label])=>{
+  const col=document.createElement('div'); col.style.display='flex'; col.style.flexDirection='column'; col.style.alignItems='center'; col.style.gap='12px';
+  col.appendChild(mark({size:72,leaves:n})); const c=document.createElement('div'); c.className='caption'; c.textContent=label; col.appendChild(c); pentas.appendChild(col);
+});
+</script>
+</body>
+</html>
