@@ -302,6 +302,9 @@ class _FakeGitHubClient(GitHubClient):
     async def graphql(self, query: str, variables: dict[str, object]) -> dict[str, object]:
         raise NotImplementedError
 
+    async def replace_labels(self, repo: str, num: int, labels: object) -> list[str]:
+        raise NotImplementedError
+
 
 def _repo() -> Repo:
     return Repo(

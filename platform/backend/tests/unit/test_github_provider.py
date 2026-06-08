@@ -43,6 +43,9 @@ async def test_explicit_client_is_returned() -> None:
         async def graphql(self, query, variables):  # type: ignore[override]  # DKMVP-ESCAPE: test fake
             raise NotImplementedError
 
+        async def replace_labels(self, repo, num, labels):  # type: ignore[override]  # DKMVP-ESCAPE: test fake
+            raise NotImplementedError
+
     fake = _Fake()
     set_github_client(app, fake)  # type: ignore[arg-type]  # DKMVP-ESCAPE: SimpleNamespace app stub
     resolved = await get_github_client(app, settings)  # type: ignore[arg-type]  # DKMVP-ESCAPE: app stub

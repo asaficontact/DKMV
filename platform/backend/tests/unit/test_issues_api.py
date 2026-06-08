@@ -125,6 +125,11 @@ class FakeClient(GitHubClient):
         self.existing_labels.add(name)
         return True
 
+    async def replace_labels(  # pragma: no cover - not exercised by 1.2 tests
+        self, repo: str, num: int, labels: Any
+    ) -> list[str]:
+        return list(labels)
+
 
 # ── INV-1 access control ─────────────────────────────────────────────────────
 

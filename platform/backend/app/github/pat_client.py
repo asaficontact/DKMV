@@ -23,6 +23,7 @@ signature/delivery machinery — v1 is poll-only.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -36,6 +37,7 @@ from app.github.client import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.github.write_queue import RateLimitState
     from app.secrets.store import SecretStore
 
 #: SecretStore key under which the operator's fine-grained PAT is persisted
@@ -97,11 +99,20 @@ class PatGitHubClient(GitHubClient):
         *,
         http_client: httpx.AsyncClient | None = None,
         secret_key: str = GITHUB_PAT_SECRET_KEY,
+        rate_limit_state: RateLimitState | None = None,
     ) -> None:
         self._store = secret_store
         self._secret_key = secret_key
         self._client = http_client
         self._owns_client = http_client is None
+        #: Optional rate-limit accounting the write-side records ``X-RateLimit-*``
+        #: into (FR-06-2). The write-queue owns one and injects it here.
+        self._rate_limit_state = rate_limit_state
+
+    @property
+    def rate_limit_state(self) -> RateLimitState | None:
+        """The rate-limit accounting this client records into (FR-06-2), if any."""
+        return self._rate_limit_state
 
     # ── transport ────────────────────────────────────────────────────────────
 
@@ -266,6 +277,67 @@ class PatGitHubClient(GitHubClient):
             )
         return True
 
+    async def replace_labels(self, repo: str, num: int, labels: Sequence[str]) -> list[str]:
+        """Replace **all** labels on an issue (``PUT .../labels``) (§8.1, INV-11).
+
+        ``PUT /repos/{o}/{r}/issues/{num}/labels`` with the **full desired label
+        set** as the body — GitHub's *replace-all* semantics. This is the single
+        GitHub primitive behind ``set_agent_state``: the state machine computes the
+        desired set (non-agent labels preserved + at most one ``agent:*`` label)
+        and hands it here. The replace-all ``PUT`` makes the write **idempotent**
+        and guarantees the **single-occupancy** invariant — there is no
+        add-one/remove-one race, and **the fictional single-label PATCH endpoint is
+        never constructed** (INV-11).
+
+        A **403** with a secondary-rate-limit signal (the content-creation limit,
+        §8.1) is raised as :class:`~app.github.write_queue.SecondaryRateLimitError`
+        carrying the parsed ``Retry-After`` so the write-queue can honor it (rather
+        than letting a generic 403 surface that a caller might blindly retry). The
+        latest ``X-RateLimit-*`` headers are recorded on the optional
+        :attr:`rate_limit_state` accounting. Returns the issue's label names after
+        the write (echoing GitHub's response) so the caller can assert occupancy.
+        """
+        # Imported lazily to avoid a module import cycle (write_queue is a peer that
+        # may import client shapes); the error type is small and stable.
+        from app.github.write_queue import SecondaryRateLimitError
+
+        owner_name = _split_repo(repo)
+        token = await self._token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": _ACCEPT,
+            "X-GitHub-Api-Version": _API_VERSION,
+        }
+        body = {"labels": list(labels)}
+        try:
+            response = await self._http().put(
+                f"/repos/{owner_name}/issues/{num}/labels", headers=headers, json=body
+            )
+        except httpx.HTTPError as exc:  # transport failure — no token in message
+            raise GitHubError(f"GitHub request failed: {type(exc).__name__}") from exc
+
+        if self._rate_limit_state is not None:
+            self._rate_limit_state.observe_primary_headers(response.headers)
+
+        if response.status_code == 403 and _is_secondary_rate_limit(response):
+            # Distinct-from-primary handling (§8.1): hand the write-queue the
+            # advertised Retry-After so it waits, not an immediate hammer-retry.
+            raise SecondaryRateLimitError(
+                "GitHub content-creation secondary rate limit",
+                retry_after=_parse_retry_after(response),
+            )
+        if response.status_code in (401, 403):
+            raise GitHubAuthError("GitHub rejected the credential", status=response.status_code)
+        if response.status_code >= 400:
+            raise GitHubError(
+                f"GitHub returned {response.status_code} replacing labels on issue #{num}",
+                status=response.status_code,
+            )
+        payload = response.json()
+        if not isinstance(payload, list):
+            return list(labels)
+        return [str(item.get("name", "")) for item in payload if isinstance(item, dict)]
+
     async def aclose(self) -> None:
         """Close the owned HTTP client (no-op when one was injected)."""
         if self._owns_client and self._client is not None:
@@ -362,6 +434,48 @@ def _evaluate_write_permission(repo: str, payload: dict[str, Any]) -> WritePermi
         role=role,
         missing=missing,
     )
+
+
+def _is_secondary_rate_limit(response: httpx.Response) -> bool:
+    """True iff a 403 is GitHub's **secondary** (content-creation) limit (§8.1).
+
+    The secondary limit is **not** the primary hourly budget (``X-RateLimit-*``):
+    GitHub flags it via a ``Retry-After`` header **or** a body/``message`` mentioning
+    "secondary rate limit" (and typically ``X-RateLimit-Remaining`` is **not** 0).
+    We treat any of those signals as secondary so the write-queue waits the
+    advertised interval rather than blindly retrying (AC-7).
+    """
+    if response.headers.get("Retry-After") is not None:
+        return True
+    remaining = response.headers.get("X-RateLimit-Remaining")
+    try:
+        body = response.json()
+    except (ValueError, TypeError):
+        body = None
+    message = ""
+    if isinstance(body, dict):
+        message = str(body.get("message", "")).lower()
+    if "secondary rate limit" in message:
+        return True
+    # A 403 that is NOT a primary-budget exhaustion (remaining != "0") and carries
+    # no rate-limit message is treated as an identity/permission 403, not secondary.
+    return False if remaining is None else remaining != "0" and "rate limit" in message
+
+
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    """Parse the ``Retry-After`` interval (seconds) from a 403, if present (§8.1).
+
+    GitHub sends ``Retry-After`` as a delta in seconds for secondary limits. A
+    missing/garbage value returns ``None`` (the write-queue falls back to a small
+    default rather than busy-looping).
+    """
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _role_label(perms: dict[str, Any]) -> str:

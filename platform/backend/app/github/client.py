@@ -35,6 +35,7 @@ its push transport are deferred to the scaling phase, §8.1).
 from __future__ import annotations
 
 import abc
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -149,6 +150,23 @@ class GitHubClient(abc.ABC):
         query never silently yields an empty board. This is a **read** primitive —
         the label-write mutation (``set_agent_state`` / ``PUT .../labels``) is
         slice 1.3 and is *not* declared here.
+        """
+
+    @abc.abstractmethod
+    async def replace_labels(self, repo: str, num: int, labels: Sequence[str]) -> list[str]:
+        """Replace **all** labels on an issue via ``PUT .../labels`` (§8.1, INV-11).
+
+        The single GitHub primitive behind the ``agent:*`` state machine
+        (:func:`app.github.state_machine.set_agent_state`): the caller computes the
+        full desired label set (non-agent labels preserved + at most one
+        ``agent:*`` label) and this performs GitHub's **replace-all** ``PUT`` —
+        making the write idempotent and guaranteeing single-occupancy, with **no**
+        fictional single-label PATCH endpoint ever constructed (INV-11). A 403 carrying a
+        secondary-rate-limit signal is raised as
+        :class:`app.github.write_queue.SecondaryRateLimitError` (with ``Retry-After``)
+        so the serialized write-queue honors it; other non-2xx surface as
+        :class:`GitHubError`/:class:`GitHubAuthError`. Returns the label names on the
+        issue after the write.
         """
 
     async def aclose(self) -> None:
