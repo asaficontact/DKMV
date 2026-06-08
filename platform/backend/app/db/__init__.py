@@ -23,6 +23,7 @@ from app.db.connection import (
 from app.db.repository import (
     COST_EXCLUDED_AGENT,
     EventRecord,
+    IssueRow,
     Repository,
     RunTotals,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "CASCADE_CHILD_TABLES",
     "COST_EXCLUDED_AGENT",
     "EventRecord",
+    "IssueRow",
     "Repository",
     "RunTotals",
     "Writer",

@@ -195,6 +195,77 @@ class PatGitHubClient(GitHubClient):
         payload = response.json()
         return _evaluate_write_permission(repo, payload)
 
+    async def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        """Execute one GitHub GraphQL query (POST ``/graphql``) (§8.1).
+
+        The board read (:func:`app.github.graphql.read_board`) calls this per page.
+        A GraphQL ``errors`` array on a 200 response is promoted to a
+        :class:`GitHubError` so a malformed query / missing repo never silently
+        returns an empty board. The Authorization header carries the PAT for this
+        one call and is never logged (the message carries no token literal).
+
+        The GraphQL POST is a *read* in DKMV's usage; it does not go through the
+        label write-queue (which is for mutating REST calls in 1.3).
+        """
+        response = await self._request(
+            "POST",
+            "/graphql",
+            json={"query": query, "variables": variables},
+        )
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("errors"):
+            # Surface GraphQL-level failures (bad query, NOT_FOUND repo, etc.) as a
+            # GitHubError WITHOUT echoing any token; carry only the GraphQL message.
+            messages = "; ".join(
+                str(err.get("message", "")) for err in payload["errors"] if isinstance(err, dict)
+            )
+            raise GitHubError(f"GitHub GraphQL error: {messages}")
+        if not isinstance(payload, dict):
+            raise GitHubError("GitHub GraphQL returned a non-object response")
+        return payload
+
+    async def create_label(
+        self, repo: str, *, name: str, color: str, description: str = ""
+    ) -> bool:
+        """Create one repo label; return ``True`` if newly created (§8.1, AC-4).
+
+        ``POST /repos/{o}/{r}/labels``. GitHub returns **422** when a label of that
+        name already exists — that is the idempotent "already present" signal, so
+        we return ``False`` rather than raising, which lets ``ensure_agent_labels``
+        re-run safely on every reconnect (AC-4). The 422 is intercepted *before*
+        :meth:`_request` maps it to a generic error.
+
+        This creates a **label definition** on the repo — it does **not** assign an
+        ``agent:*`` label to an issue (that transition is ``set_agent_state`` /
+        ``PUT .../labels`` in slice 1.3; INV-11). It is a one-time connect-time
+        setup write, not an ``agent:*`` transition.
+        """
+        owner_name = _split_repo(repo)
+        token = await self._token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": _ACCEPT,
+            "X-GitHub-Api-Version": _API_VERSION,
+        }
+        body = {"name": name, "color": color, "description": description}
+        try:
+            response = await self._http().post(
+                f"/repos/{owner_name}/labels", headers=headers, json=body
+            )
+        except httpx.HTTPError as exc:  # transport failure — no token in message
+            raise GitHubError(f"GitHub request failed: {type(exc).__name__}") from exc
+        if response.status_code == 422:
+            # "already_exists" — idempotent: the label is already there.
+            return False
+        if response.status_code in (401, 403):
+            raise GitHubAuthError("GitHub rejected the credential", status=response.status_code)
+        if response.status_code >= 400:
+            raise GitHubError(
+                f"GitHub returned {response.status_code} creating label {name!r}",
+                status=response.status_code,
+            )
+        return True
+
     async def aclose(self) -> None:
         """Close the owned HTTP client (no-op when one was injected)."""
         if self._owns_client and self._client is not None:

@@ -299,6 +299,9 @@ class _FakeGitHubClient(GitHubClient):
             raise self._raise_on[1]
         return self._write
 
+    async def graphql(self, query: str, variables: dict[str, object]) -> dict[str, object]:
+        raise NotImplementedError
+
 
 def _repo() -> Repo:
     return Repo(

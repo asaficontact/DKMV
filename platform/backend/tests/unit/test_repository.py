@@ -13,7 +13,8 @@ import uuid
 from pathlib import Path
 
 import pytest
-from app.db import EventRecord, Repository, RunTotals
+from app.db import EventRecord, IssueRow, Repository, RunTotals
+from app.db.writer import Writer
 
 
 def _claim_kwargs(key: str) -> dict[str, object]:
@@ -317,6 +318,97 @@ async def test_project_and_issue_upsert(repo: Repository) -> None:
     assert proj[0] == "o/r"
     assert iss[0] == "Fix"
     assert "bug" in iss[1]
+
+
+@pytest.mark.asyncio
+async def test_upsert_issues_batch_writes_all_rows(repo: Repository) -> None:
+    """upsert_issues persists every row of a page with the same upsert semantics."""
+    await repo.upsert_issues(
+        [
+            IssueRow(repo="o/r", num=10, title="A", state="queued", labels=["agent:queued"]),
+            IssueRow(repo="o/r", num=9, title="B", state="backlog"),
+            IssueRow(repo="o/r", num=8, title="C", state="done", pr_num=42),
+        ]
+    )
+    conn = sqlite3.connect(repo._database_url.removeprefix("sqlite:///"))
+    try:
+        rows = {
+            r[0]: r
+            for r in conn.execute(
+                "SELECT num, title, state, labels_json, pr_num FROM issues WHERE repo='o/r'"
+            )
+        }
+    finally:
+        conn.close()
+    assert set(rows) == {10, 9, 8}
+    assert rows[10][1] == "A" and rows[10][2] == "queued"
+    assert "agent:queued" in rows[10][3]
+    assert rows[8][2] == "done" and rows[8][4] == 42
+
+
+@pytest.mark.asyncio
+async def test_upsert_issues_is_idempotent_on_conflict(repo: Repository) -> None:
+    """Re-upserting the same (repo, num) updates in place (ON CONFLICT), no dup row."""
+    await repo.upsert_issues([IssueRow(repo="o/r", num=7, title="first", state="backlog")])
+    await repo.upsert_issues([IssueRow(repo="o/r", num=7, title="second", state="queued")])
+    conn = sqlite3.connect(repo._database_url.removeprefix("sqlite:///"))
+    try:
+        rows = list(conn.execute("SELECT title, state FROM issues WHERE repo='o/r' AND num=7"))
+    finally:
+        conn.close()
+    assert len(rows) == 1  # upsert, not a duplicate row
+    assert rows[0] == ("second", "queued")
+
+
+@pytest.mark.asyncio
+async def test_upsert_issues_is_single_writer_transaction(
+    repo: Repository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole page is ONE writer submit → ONE BEGIN IMMEDIATE transaction (FIX-1).
+
+    Mirrors the append_events batch contract: importing N issues must hold the
+    global write lock for a single transaction, not N. We count writer.submit
+    calls across the batch upsert and assert exactly one.
+    """
+    submits = 0
+    original = Writer.submit
+
+    async def _counting_submit(self: Writer, fn: object) -> object:
+        nonlocal submits
+        submits += 1
+        return await original(self, fn)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Writer, "submit", _counting_submit)
+    await repo.upsert_issues(
+        [IssueRow(repo="o/r", num=n, title=f"i{n}", state="backlog") for n in range(5)]
+    )
+    assert submits == 1  # one transaction for the whole page, not five
+
+
+@pytest.mark.asyncio
+async def test_upsert_issues_empty_is_noop(repo: Repository) -> None:
+    """An empty page does not open a writer transaction."""
+    await repo.upsert_issues([])  # must not raise / must not write
+
+
+@pytest.mark.asyncio
+async def test_labels_ensured_flag_round_trip(repo: Repository) -> None:
+    """labels_ensured defaults false, flips true after mark (FIX-2, per repo)."""
+    assert await repo.labels_ensured("o/r") is False
+    await repo.mark_labels_ensured("o/r")
+    assert await repo.labels_ensured("o/r") is True
+    # Scoped per repo (case-insensitive key); a different repo is unaffected.
+    assert await repo.labels_ensured("o/other") is False
+
+
+@pytest.mark.asyncio
+async def test_upsert_issues_single_sql_shared_with_upsert_issue() -> None:
+    """The batch path reuses the single-row upsert SQL (identical ON CONFLICT)."""
+    src = Path("app/db/repository.py").read_text()
+    assert "_ISSUE_UPSERT_SQL" in src
+    assert "ON CONFLICT(repo, num) DO UPDATE SET" in src
+    # The batch is one executemany over the shared statement, not N execute calls.
+    assert "executemany(_ISSUE_UPSERT_SQL" in src
 
 
 @pytest.mark.asyncio
