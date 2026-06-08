@@ -16,7 +16,10 @@ Covers the five baseline guarantees:
 
 from __future__ import annotations
 
+import io
 import json
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +32,7 @@ from app.executor.egress import EgressPolicy
 from app.main import create_app
 from app.runtime import RunService
 from app.secrets.github_token import GitHubTokenMinter, TokenScopeError
-from app.secrets.redaction import Redactor
+from app.secrets.redaction import REDACTION_PLACEHOLDER, Redactor
 from app.secrets.store import SecretStore
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
@@ -97,6 +100,93 @@ async def test_security_baseline_no_secret_value_in_events(database_url: str) ->
         assert "text" in parsed
     finally:
         await repository.close()
+
+
+# ── 2b. no secret in LOGS (boot path: filter is attached by create_app) ───────
+
+
+@pytest.fixture
+def _isolated_root_logger() -> Iterator[None]:
+    """Snapshot + restore the root logger's filters/handlers around a test.
+
+    ``create_app()`` attaches a process-wide :class:`RedactingLogFilter` to the
+    root logger; this fixture removes anything the test added so the filter does
+    not leak into (or accumulate across) other tests.
+    """
+    root = logging.getLogger()
+    before_filters = list(root.filters)
+    before_handlers = list(root.handlers)
+    before_level = root.level
+    try:
+        yield
+    finally:
+        for flt in list(root.filters):
+            if flt not in before_filters:
+                root.removeFilter(flt)
+        for hdl in list(root.handlers):
+            if hdl not in before_handlers:
+                root.removeHandler(hdl)
+        root.setLevel(before_level)
+
+
+def test_security_baseline_create_app_scrubs_secrets_from_logs(
+    _isolated_root_logger: None,
+) -> None:
+    """create_app() must attach the RedactingLogFilter to the ROOT logger.
+
+    This exercises the BOOT PATH end-to-end (not the filter in isolation): we
+    build the real app, then emit a log record carrying every known secret —
+    both by *shape* (sk-ant-…, ghp_…, github_pat_…) and by the platform's OWN
+    concrete *values* (settings-seeded) — through the standard logging pipeline
+    and assert the EMITTED output is scrubbed. If create_app() did not wire the
+    filter (the prior gap), the secrets would survive and this test would fail.
+    """
+    # Platform's own concrete secret VALUES (non-standard shapes on purpose, so
+    # only the settings-seeded known-value scrub — not the pattern scrub — can
+    # catch them). Proves Redactor.from_settings(settings) was used at boot.
+    own_github = "operator-github-pat-value-12345"
+    own_anthropic = "operator-anthropic-key-value-67890"
+    own_codex = "operator-codex-key-value-abcdef"
+    own_platform = "operator-platform-token-value-xyz"
+    settings = make_settings(
+        GITHUB_TOKEN=own_github,
+        ANTHROPIC_API_KEY=own_anthropic,
+        CODEX_API_KEY=own_codex,
+        DKMV_PLATFORM_TOKEN=own_platform,
+    )
+
+    # Configure the root handler that captures log output FIRST — mirroring boot
+    # ordering, where the process's logging handlers exist (uvicorn/log config)
+    # before the app factory runs. A child module-logger ("app.test.boot_path")
+    # propagates its records up to this root handler.
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(handler)
+
+    # Build the real app — this is the step under test. create_app() must attach
+    # the settings-seeded RedactingLogFilter to the root logger + its handlers,
+    # so the records reaching the buffer below are scrubbed.
+    create_app(
+        settings,
+        run_service=RunService(settings, runtime=StubRuntime()),  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed stub
+    )
+
+    logger = logging.getLogger("app.test.boot_path")
+    secrets_by_shape = (_ANTHROPIC, _GH_CLASSIC, _GH_FINE)
+    secrets_by_value = (own_github, own_anthropic, own_codex, own_platform)
+    for secret in (*secrets_by_shape, *secrets_by_value):
+        logger.info("emitting credential: %s", secret)
+    handler.flush()
+
+    emitted = buffer.getvalue()
+    # NOT one secret — shape OR value — survives into the emitted log output.
+    for secret in (*secrets_by_shape, *secrets_by_value):
+        assert secret not in emitted, f"secret leaked into logs: {secret!r}"
+    # And redaction actually happened (sanity: the placeholder is present).
+    assert REDACTION_PLACEHOLDER in emitted
 
 
 # ── 3. Host/Origin/CSRF reject + missing-token ───────────────────────────────

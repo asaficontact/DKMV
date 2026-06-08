@@ -27,6 +27,7 @@ from app.api import api_router
 from app.api.errors import install_error_handlers
 from app.config import Settings, get_settings
 from app.runtime import RunService
+from app.secrets import Redactor, install_log_redaction
 from app.security import AccessControlMiddleware
 
 
@@ -45,6 +46,17 @@ def create_app(
             platform-owned ``output_dir`` bound to ``settings.OUTPUT_DIR``.
     """
     settings = settings or get_settings()
+
+    # INV-4 / NFR-OBS-1 ("never logged"): attach the RedactingLogFilter to the
+    # ROOT logger at boot so no structured-log line emitted by any handler can
+    # carry a secret. Seed it from settings (Redactor.from_settings) so it scrubs
+    # BOTH the known credential *shapes* (the structural patterns in
+    # app.secrets.redaction) AND the platform's OWN concrete secret VALUES (the
+    # SecretStr fields on Settings) — catching a leak even when the value's shape
+    # is non-standard. Without this wiring the redactor is dead code and the
+    # "no secret reaches logs" guarantee is unenforced at runtime.
+    install_log_redaction(Redactor.from_settings(settings))
+
     app = FastAPI(
         title="DKMV Platform",
         version="0.1.0",
@@ -52,6 +64,20 @@ def create_app(
     )
     app.state.settings = settings
     app.state.run_service = run_service or RunService(settings)
+
+    # ── PHASE 2 LIFESPAN HANDOFF (events-path known-value backstop) ───────────
+    # TODO(Phase 2 lifespan): pass Redactor.from_settings(settings) into
+    # Repository(...) when the DB lifecycle is composed into the app lifespan
+    # here. Slice 0.3 deliberately kept the Repository OUT of main.py, so the
+    # events-path redactor is currently the Repository's pattern-only default
+    # Redactor() — correct, but it does NOT scrub the platform's OWN concrete
+    # secret VALUES (only their shapes). The log path above already has the
+    # settings-seeded known-value scrub; the events path must get the SAME
+    # backstop when Repository is wired:
+    #     repository = Repository(settings.DATABASE_URL,
+    #                             redactor=Redactor.from_settings(settings))
+    # Do NOT silently rely on the pattern-only default — activate the known-value
+    # backstop on the append-only events table here in Phase 2 (INV-4 / §8.6).
 
     # INV-1: the access-control stack wraps the whole app. Added last so it is
     # the outermost middleware (it runs before routing on every request).

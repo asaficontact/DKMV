@@ -204,11 +204,24 @@ class RedactingLogFilter(logging.Filter):
 
 
 def install_log_redaction(redactor: Redactor | None = None) -> RedactingLogFilter:
-    """Attach a :class:`RedactingLogFilter` to the root logger (idempotent-ish).
+    """Attach a :class:`RedactingLogFilter` to the root logger AND its handlers.
 
-    Returns the installed filter so callers can remove it in tests. Adds the
-    filter to the root logger so every handler downstream sees scrubbed records.
+    Returns the installed filter so callers can remove it in tests.
+
+    Why both the logger *and* its handlers: a ``logging.Filter`` on a logger only
+    runs for records emitted **directly** to that logger — it is NOT applied to
+    records that *propagate up* from child loggers (CPython only runs logger-level
+    filters in ``Logger.handle``, before propagation). The DKMV platform logs via
+    module loggers (``logging.getLogger(__name__)``) that propagate to the root,
+    so a root-*logger*-only filter would silently miss them. Handler-level filters
+    DO run for every record that reaches the handler (root or propagated), so we
+    attach to each root handler as well to actually enforce INV-4 at runtime.
     """
     log_filter = RedactingLogFilter(redactor)
-    logging.getLogger().addFilter(log_filter)
+    root = logging.getLogger()
+    root.addFilter(log_filter)
+    for handler in root.handlers:
+        # Don't double-add if re-installed against the same handler set.
+        if log_filter not in handler.filters:
+            handler.addFilter(log_filter)
     return log_filter
