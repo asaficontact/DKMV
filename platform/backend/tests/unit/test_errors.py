@@ -1,11 +1,12 @@
 """AC-0.2-5: API error envelope + status-code conventions (§8.9).
 
 Asserts a validation failure → ``400 {"error":{"code":"validation_error",...}}``
-and an unknown run → ``404 {"error":{"code":"not_found", details:{resource}}}``
-through the installed exception handlers, plus the factory/envelope unit
-behavior. Pins the **single 404 contract**: every 404 (domain or framework)
-carries the same ``not_found`` code; domain helpers discriminate via
-``details.resource``.
+and an unknown run → ``404 {"error":{"code":"run_not_found", ...}}`` (and an
+unknown issue → ``issue_not_found``) through the installed exception handlers,
+plus the factory/envelope unit behavior. Pins the **semantic 404 contract**:
+domain 404s carry a specific top-level code (``run_not_found`` /
+``issue_not_found``); the generic ``not_found`` code is reserved for the
+framework fallback (unmatched route / bare ``HTTPException(404)``).
 """
 
 from __future__ import annotations
@@ -76,12 +77,12 @@ def test_validation_error_400_envelope() -> None:
 
 
 def test_run_not_found_404_envelope() -> None:
-    # Single 404 contract: domain 404 carries the generic ``not_found`` code and
-    # discriminates the specific case via ``details.resource``.
+    # AC-0.2-5 (literal): an unknown run returns the *semantic* top-level code
+    # ``run_not_found`` (not the generic ``not_found``), with a resource hint.
     resp = _client().get("/api/v1/runs/does-not-exist")
     assert resp.status_code == 404
     body = resp.json()
-    assert body["error"]["code"] == NOT_FOUND_CODE
+    assert body["error"]["code"] == "run_not_found"
     assert body["error"]["details"]["resource"] == "run"
     assert "does-not-exist" in body["error"]["message"]
 
@@ -95,8 +96,9 @@ def test_unhandled_error_500_no_leak() -> None:
     assert "unexpected" not in body["error"]["message"]
 
 
-def test_unmatched_route_404_uses_same_code_as_domain_404() -> None:
-    # Framework 404 (unmatched route) carries the *same* code as a domain 404.
+def test_unmatched_route_404_uses_generic_framework_code() -> None:
+    # Framework 404 (unmatched route) carries the *generic* ``not_found`` code —
+    # the fallback reserved for routes no domain helper produced.
     resp = _client().get("/api/v1/nope")
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == NOT_FOUND_CODE
@@ -115,18 +117,20 @@ def test_framework_404_with_structured_detail_falls_back_to_clean_message() -> N
 # ── Factory / envelope unit behavior ─────────────────────────────────────────
 
 
-def test_not_found_factories_share_one_code_with_resource_discriminator() -> None:
-    # Single 404 contract at the factory level: one code, resource in details.
+def test_not_found_factories_use_semantic_top_level_codes() -> None:
+    # Factory-level (AC-0.2-5): the generic helper keeps ``not_found`` (framework
+    # fallback), but the domain helpers carry their own semantic top-level code.
     generic = not_found().to_envelope()["error"]
     assert generic["code"] == NOT_FOUND_CODE
+    assert generic["code"] == "not_found"
     assert "details" not in generic  # no resource → no details key
 
     run = run_not_found("r1").to_envelope()["error"]
-    assert run["code"] == NOT_FOUND_CODE
+    assert run["code"] == "run_not_found"
     assert run["details"] == {"resource": "run"}
 
     issue = issue_not_found("acme/widget", 7).to_envelope()["error"]
-    assert issue["code"] == NOT_FOUND_CODE
+    assert issue["code"] == "issue_not_found"
     assert issue["details"] == {"resource": "issue"}
 
 

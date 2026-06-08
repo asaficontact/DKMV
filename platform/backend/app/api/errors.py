@@ -29,15 +29,13 @@ Code  Meaning
 500   internal (``internal_error``)
 ===== ==========================================================
 
-**The 404 contract is single and consistent.** Every 404 the API returns —
-whether raised by domain code or by the framework for an unmatched route —
-carries the *same* machine code ``not_found``. Domain helpers
-(:func:`run_not_found`, :func:`issue_not_found`) are thin convenience wrappers
-that build a ``not_found`` :class:`ApiError` with a specific human ``message``
-(and a ``details.resource`` discriminator); they do **not** introduce a distinct
-top-level code. A client therefore branches on a single 404 code and reads
-``details.resource`` for the specific case, instead of guessing between
-``run_not_found`` / ``issue_not_found`` / ``not_found``.
+**The 404 contract carries a semantic top-level code (PRD §8.9, AC-0.2-5).**
+Domain 404s expose a *specific* machine ``code`` so a client can branch on the
+case without inspecting ``details``: :func:`run_not_found` → ``run_not_found``
+and :func:`issue_not_found` → ``issue_not_found`` (each also surfaces a
+``details.resource`` discriminator for convenience). The generic ``not_found``
+code is reserved for the **framework fallback only** — an unmatched route or a
+bare ``HTTPException(404)`` that no domain helper produced.
 
 Nothing here reaches into ``dkmv/`` or logs a secret value.
 """
@@ -114,29 +112,48 @@ def forbidden(message: str = "Host/Origin/CSRF check failed") -> ApiError:
     return ApiError(403, "forbidden", message)
 
 
-# The single machine code every 404 (domain or framework) carries (PRD §8.9).
+# The generic 404 code, reserved for the framework fallback only — an unmatched
+# route or a bare ``HTTPException(404)`` that no domain helper produced (PRD §8.9).
 NOT_FOUND_CODE = "not_found"
 
 
 def not_found(message: str = "Not found", *, resource: str | None = None) -> ApiError:
-    """404 — the canonical not-found error (single ``not_found`` code, §8.9).
+    """404 — the generic not-found error (framework fallback; ``not_found``).
 
-    ``resource`` (e.g. ``"run"``/``"issue"``) is surfaced under
-    ``details.resource`` so a client can discriminate the specific case without
-    a separate top-level code.
+    Domain code should prefer the semantic helpers (:func:`run_not_found`,
+    :func:`issue_not_found`); this generic form is for cases with no specific
+    resource. ``resource`` (if given) is surfaced under ``details.resource``.
     """
     details = {"resource": resource} if resource is not None else None
     return ApiError(404, NOT_FOUND_CODE, message, details=details)
 
 
 def run_not_found(run_id: str) -> ApiError:
-    """404 — no run with this platform UUID (``not_found`` + ``resource: run``)."""
-    return not_found(f"Run {run_id} not found", resource="run")
+    """404 — no run with this platform UUID.
+
+    Carries the **semantic top-level code** ``run_not_found`` (AC-0.2-5, §8.9),
+    plus a ``details.resource: run`` discriminator for convenience.
+    """
+    return ApiError(
+        404,
+        "run_not_found",
+        f"Run {run_id} not found",
+        details={"resource": "run"},
+    )
 
 
 def issue_not_found(repo: str, num: int) -> ApiError:
-    """404 — no cached issue (``not_found`` + ``resource: issue``)."""
-    return not_found(f"Issue {repo}#{num} not found", resource="issue")
+    """404 — no cached issue for ``repo#num``.
+
+    Carries the **semantic top-level code** ``issue_not_found`` (AC-0.2-5,
+    §8.9), plus a ``details.resource: issue`` discriminator for convenience.
+    """
+    return ApiError(
+        404,
+        "issue_not_found",
+        f"Issue {repo}#{num} not found",
+        details={"resource": "issue"},
+    )
 
 
 def preflight_blocked(blockers: list[str]) -> ApiError:
@@ -182,8 +199,9 @@ async def _http_exception_handler(_request: Request, exc: Exception) -> JSONResp
 
     Routes should prefer :class:`ApiError`, but framework-raised
     ``HTTPException`` (e.g. an unmatched route → 404) is normalized here so the
-    envelope is universal. A framework 404 carries the same ``not_found`` code
-    as a domain 404 (single 404 contract — see the module docstring).
+    envelope is universal. A framework 404 carries the generic ``not_found``
+    code; domain 404s use the semantic codes ``run_not_found`` /
+    ``issue_not_found`` from the helpers above (see the module docstring).
     """
     assert isinstance(exc, StarletteHTTPException)
     code = _STATUS_TO_CODE.get(exc.status_code, "error")
