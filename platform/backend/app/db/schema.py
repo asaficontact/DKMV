@@ -41,7 +41,6 @@ from sqlalchemy import (
     Integer,
     MetaData,
     PrimaryKeyConstraint,
-    String,
     Table,
     Text,
     UniqueConstraint,
@@ -232,14 +231,14 @@ CASCADE_CHILD_TABLES: frozenset[str] = frozenset(
     {"run_stages", "events", "pause_decisions", "run_totals"}
 )
 
-# Re-export the Column metaclass symbols so ``Column`` is "used" for mypy when
-# only Table definitions are imported elsewhere (keeps the public surface tidy).
+#: The module's public surface: the table objects, the metadata, and the
+#: assertion constants the schema tests bind to. ``Column`` is used directly in
+#: the Table definitions above (a real reference — no re-export needed to keep
+#: mypy/ruff happy).
 __all__ = [
     "ALL_TABLE_NAMES",
     "CASCADE_CHILD_TABLES",
     "NAMING_CONVENTION",
-    "Column",
-    "String",
     "events",
     "issues",
     "metadata",

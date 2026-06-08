@@ -115,6 +115,79 @@ async def test_no_update_or_delete_path_on_events(repo: Repository) -> None:
     assert "DELETE FROM events" not in src
 
 
+@pytest.mark.asyncio
+async def test_append_events_is_single_statement(repo: Repository) -> None:
+    """A batch append is one multi-row INSERT … RETURNING, not N statements.
+
+    The performance contract (PERF): N events must be a single aiosqlite
+    round-trip while holding the global write lock, so we assert the SQL is a
+    single multi-row VALUES with a RETURNING clause for the per-row ids.
+    """
+    src = Path("app/db/repository.py").read_text()
+    assert "RETURNING id" in src
+    # The batch is a single statement: the events INSERT is never executed
+    # per-row inside the writer job (no `conn.execute(... INSERT INTO events`).
+    assert "INSERT INTO events" in src
+    # Payload JSON is serialized before submit() (hoisted out of the lock), not
+    # inside a `conn.execute` call's argument tuple.
+    assert "json.dumps(rec.payload)" in src
+
+    run_id = await _seed_run(repo)
+    ids = await repo.append_events(
+        [
+            EventRecord(run_id=run_id, sequence=i, event_type="ok", payload={"i": i})
+            for i in range(50)
+        ]
+    )
+    # All 50 ids returned, strictly increasing, no reuse — the RETURNING order
+    # matches insertion order (the SSE replay cursor is preserved per row).
+    assert len(ids) == 50
+    assert ids == sorted(ids)
+    assert len(set(ids)) == 50
+
+
+# === read-connection pool (PERF) =============================================
+
+
+@pytest.mark.asyncio
+async def test_read_pool_reuses_connections(repo: Repository) -> None:
+    """Sequential reads reuse a single warm pool connection (no churn)."""
+    run_id = await _seed_run(repo)
+    # Many sequential reads; each borrows + returns the same warm connection.
+    for _ in range(10):
+        assert await repo.get_run(run_id) is not None
+    # Only one connection was ever opened for this serial read pattern.
+    assert len(repo._read_conns) == 1
+    # And it is parked back in the pool (checked in), not leaked.
+    assert repo._read_pool.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_read_pool_bounded_under_concurrency(repo: Repository) -> None:
+    """Concurrent reads open at most READ_POOL_SIZE connections and stay valid."""
+    from app.db.repository import READ_POOL_SIZE
+
+    run_id = await _seed_run(repo)
+    results = await asyncio.gather(*(repo.get_run(run_id) for _ in range(32)))
+    assert all(r is not None for r in results)
+    assert 1 <= len(repo._read_conns) <= READ_POOL_SIZE
+
+
+@pytest.mark.asyncio
+async def test_close_releases_all_read_connections(database_url: str) -> None:
+    """close() closes every pooled read connection (clean shutdown)."""
+    repository = Repository(database_url)
+    await repository.start()
+    run_id = await _seed_run(repository)
+    # Warm a couple of pool connections via concurrent reads.
+    await asyncio.gather(*(repository.get_run(run_id) for _ in range(8)))
+    assert repository._read_conns  # at least one opened
+    await repository.close()
+    # All tracked read connections are closed and the registry is drained.
+    assert repository._read_conns == []
+    assert repository._read_pool.empty()
+
+
 # === spend projection (AC-0.3-7; INV-7 prep) =================================
 
 

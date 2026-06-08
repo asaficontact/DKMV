@@ -67,10 +67,15 @@ def resolve_db_path(database_url: str) -> str:
 
 
 async def apply_pragmas(conn: aiosqlite.Connection) -> None:
-    """Apply the four binding PRAGMAs (INV-6) to an open connection."""
+    """Apply the four binding PRAGMAs (INV-6) to an open connection.
+
+    No ``commit()`` is issued: PRAGMAs are not transactional, and the connection
+    is opened with ``isolation_level=None`` (autocommit), so each ``PRAGMA``
+    takes effect immediately. The previous trailing ``commit()`` was a no-op
+    round-trip on the hot read-connection-open path.
+    """
     for pragma in _PRAGMAS:
         await conn.execute(pragma)
-    await conn.commit()
 
 
 async def connect(database_url: str) -> aiosqlite.Connection:

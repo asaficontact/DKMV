@@ -29,9 +29,11 @@ Key binding behaviors implemented here:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -45,6 +47,13 @@ from app.db.writer import Writer
 #: reports $0 cost and supports no budget cap — its tokens count, its cost does
 #: not contribute to the materialized spend projection.
 COST_EXCLUDED_AGENT = "codex"
+
+#: Size of the long-lived WAL read-connection pool (PERF). Reads borrow a warm
+#: connection instead of opening a fresh worker thread + re-running the four
+#: PRAGMAs per call. The SSE-replay / dashboard-spend read path is the hot path
+#: this serves; a small fixed pool bounds the thread/fd footprint while keeping
+#: a handful of concurrent reads non-blocking under WAL.
+READ_POOL_SIZE = 4
 
 
 def _utc_now_iso() -> str:
@@ -97,6 +106,14 @@ class Repository:
         self._database_url = database_url
         self._writer = Writer(database_url)
         self._started = False
+        # Long-lived WAL read-connection pool (PERF). Connections are created
+        # lazily on first acquire (up to READ_POOL_SIZE), then reused — so the
+        # SSE-replay / spend read path doesn't churn a worker thread + 4 PRAGMAs
+        # per call. Bounded by a semaphore; idle connections wait in the queue.
+        self._read_pool: asyncio.Queue[aiosqlite.Connection] = asyncio.Queue()
+        self._read_slots = asyncio.Semaphore(READ_POOL_SIZE)
+        self._read_conns: list[aiosqlite.Connection] = []
+        self._closed = False
 
     async def start(self) -> None:
         """Launch the single serialized writer task (INV-6)."""
@@ -104,19 +121,57 @@ class Repository:
             return
         await self._writer.start()
         self._started = True
+        self._closed = False
 
     async def close(self) -> None:
-        """Stop the writer task and release its connection."""
+        """Stop the writer task and release the writer + read-pool connections."""
         if not self._started:
             return
+        self._closed = True
         await self._writer.stop()
+        # Close every read connection ever created (those parked in the pool and
+        # any still checked out — tracked in ``_read_conns``).
+        for conn in self._read_conns:
+            await conn.close()
+        self._read_conns.clear()
+        # Drain the queue so a restarted Repository starts with an empty pool.
+        while not self._read_pool.empty():
+            self._read_pool.get_nowait()
         self._started = False
 
-    # -- read connection helper ------------------------------------------------
+    # -- read connection pool --------------------------------------------------
 
-    async def _read_conn(self) -> aiosqlite.Connection:
-        """Open a fresh read connection (separate from the writer — INV-6)."""
-        return await connect(self._database_url)
+    @asynccontextmanager
+    async def _read_conn(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Borrow a warm WAL read connection from the pool (separate from the
+        writer — INV-6); return it to the pool on exit.
+
+        A bounded pool (``READ_POOL_SIZE``) of long-lived connections is reused
+        across reads so a fresh worker thread + the four PRAGMAs are paid once
+        per connection, not once per read. WAL keeps these reads non-blocking
+        with the single writer; ``foreign_keys=ON`` is set on each (via
+        :func:`connect`) and is sticky for the connection's lifetime.
+        """
+        await self._read_slots.acquire()
+        try:
+            try:
+                conn = self._read_pool.get_nowait()
+            except asyncio.QueueEmpty:
+                conn = await connect(self._database_url)
+                self._read_conns.append(conn)
+            try:
+                yield conn
+            finally:
+                # Return the connection to the pool unless we're shutting down,
+                # in which case close() owns its teardown.
+                if self._closed:
+                    if conn in self._read_conns:
+                        self._read_conns.remove(conn)
+                        await conn.close()
+                else:
+                    self._read_pool.put_nowait(conn)
+        finally:
+            self._read_slots.release()
 
     # === idempotency claim-insert (INV-5 / §8.2) =============================
 
@@ -186,12 +241,9 @@ class Repository:
 
     async def get_run(self, run_id: str) -> dict[str, Any] | None:
         """Fetch a single run row as a dict (read connection)."""
-        conn = await self._read_conn()
-        try:
+        async with self._read_conn() as conn:
             rows = list(await conn.execute_fetchall("SELECT * FROM runs WHERE id = ?", (run_id,)))
             return dict(rows[0]) if rows else None
-        finally:
-            await conn.close()
 
     async def update_run_fields(self, run_id: str, **fields: Any) -> None:
         """Patch arbitrary columns on a ``runs`` row (whitelisted by name)."""
@@ -235,34 +287,49 @@ class Repository:
         on it anywhere in the repository. The returned ids are the SSE replay
         cursors and are strictly increasing (``INTEGER PRIMARY KEY
         AUTOINCREMENT``).
+
+        Performance contract: the whole batch is a **single** statement — one
+        multi-row ``INSERT … VALUES (…),(…),… RETURNING id`` — so N events are one
+        aiosqlite round-trip, not N, while holding the single global write lock
+        (INV-6). ``RETURNING id`` yields the assigned ``events.id`` per row in
+        insertion order, preserving the per-row SSE replay cursor. The
+        ``payload`` JSON is serialized **before** ``submit()`` so that CPU work is
+        not done under the writer's ``BEGIN IMMEDIATE`` lock.
         """
         if not records:
             return []
 
-        async def _job(conn: aiosqlite.Connection) -> list[int]:
-            ids: list[int] = []
-            for rec in records:
-                cursor = await conn.execute(
-                    """
-                    INSERT INTO events (
-                        run_id, sequence, ts, event_type,
-                        task_index, cost_usd, agent, payload_json
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        rec.run_id,
-                        rec.sequence,
-                        rec.ts,
-                        rec.event_type,
-                        rec.task_index,
-                        rec.cost_usd,
-                        rec.agent,
-                        json.dumps(rec.payload),
-                    ),
+        # Serialize payload JSON OUTSIDE the write lock (PERF: keep the writer's
+        # BEGIN IMMEDIATE transaction CPU-free). Each row contributes the eight
+        # column values in the column order of the INSERT below.
+        params: list[Any] = []
+        for rec in records:
+            params.extend(
+                (
+                    rec.run_id,
+                    rec.sequence,
+                    rec.ts,
+                    rec.event_type,
+                    rec.task_index,
+                    rec.cost_usd,
+                    rec.agent,
+                    json.dumps(rec.payload),
                 )
-                ids.append(int(cursor.lastrowid or 0))
-            return ids
+            )
+        row_placeholder = "(?, ?, ?, ?, ?, ?, ?, ?)"
+        values_clause = ", ".join(row_placeholder for _ in records)
+        sql = (
+            "INSERT INTO events (\n"
+            "    run_id, sequence, ts, event_type,\n"
+            "    task_index, cost_usd, agent, payload_json\n"
+            ") VALUES "
+            f"{values_clause}\n"
+            "RETURNING id"
+        )
+
+        async def _job(conn: aiosqlite.Connection) -> list[int]:
+            rows = await conn.execute_fetchall(sql, params)
+            return [int(r["id"]) for r in rows]
 
         return await self._writer.submit(_job)
 
@@ -275,12 +342,9 @@ class Repository:
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
-        conn = await self._read_conn()
-        try:
+        async with self._read_conn() as conn:
             rows = await conn.execute_fetchall(sql, params)
             return [dict(r) for r in rows]
-        finally:
-            await conn.close()
 
     # === run_stages ===========================================================
 
@@ -327,16 +391,13 @@ class Repository:
         **never** keep-latest-overall (that would reset to ~$0 at each stage
         boundary). **Codex runs contribute $0** (FR-06-1a).
         """
-        conn = await self._read_conn()
-        try:
+        async with self._read_conn() as conn:
             run_rows = list(
                 await conn.execute_fetchall("SELECT agent FROM runs WHERE id = ?", (run_id,))
             )
             if run_rows and _is_cost_excluded(run_rows[0]["agent"]):
                 return 0.0
             return await _project_run_spend(conn, run_id)
-        finally:
-            await conn.close()
 
     async def total_spend(self) -> float:
         """Sum of :meth:`run_spend` across all runs (Codex excluded).
@@ -345,8 +406,7 @@ class Repository:
         per-``(run_id, task_index)`` last-cumulative dedup — never a flat sum of
         every event's cost over the whole events table.
         """
-        conn = await self._read_conn()
-        try:
+        async with self._read_conn() as conn:
             # Exclude Codex runs by agent on the run row; for the rest, the spend
             # is the per-(run_id, task_index) last-cumulative cost summed.
             rows = list(
@@ -374,8 +434,6 @@ class Repository:
                 )
             )
             return float(rows[0]["total"] or 0.0)
-        finally:
-            await conn.close()
 
     # === run_totals snapshot + backup (§6.5) =================================
 
@@ -412,14 +470,11 @@ class Repository:
 
     async def get_run_totals(self, run_id: str) -> dict[str, Any] | None:
         """Read a ``run_totals`` snapshot row."""
-        conn = await self._read_conn()
-        try:
+        async with self._read_conn() as conn:
             rows = list(
                 await conn.execute_fetchall("SELECT * FROM run_totals WHERE run_id = ?", (run_id,))
             )
             return dict(rows[0]) if rows else None
-        finally:
-            await conn.close()
 
     async def backup_to(self, dest_path: str) -> None:
         """Produce a consistent backup file via ``VACUUM INTO`` (§6.5).
@@ -460,8 +515,7 @@ class Repository:
 
     async def get_setting(self, key: str) -> str | None:
         """Read a ``settings`` value by key."""
-        conn = await self._read_conn()
-        try:
+        async with self._read_conn() as conn:
             rows = list(
                 await conn.execute_fetchall("SELECT value FROM settings WHERE key = ?", (key,))
             )
@@ -469,8 +523,6 @@ class Repository:
                 return None
             value = rows[0]["value"]
             return None if value is None else str(value)
-        finally:
-            await conn.close()
 
     async def upsert_project(
         self,
