@@ -1,7 +1,7 @@
-import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
-// Phase 0 scaffold: Vite boots, router stub only. Real screens land in Phase 1.
+// Phase 1: Vite serves the real screens (Connect now; Board in slice 1.5).
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -11,14 +11,12 @@ export default defineConfig({
   },
   test: {
     globals: true,
-    // Scaffold-only: no jsdom/testing-library yet — the first Phase-1 UI slice
-    // adds the browser env + setup. Keep `node` here so we don't pull speculative
-    // deps now.
-    environment: "node",
-    // The canonical shared gate is `npx vitest run` (_conventions.md). Phase 0
-    // ships no frontend tests yet, so without this the gate exits 1 with
-    // "No test files found" and hard-fails every slice before its first test
-    // lands. passWithNoTests makes an empty suite a green gate.
+    // jsdom for component render tests (Connect flow, theme).
+    environment: "jsdom",
+    setupFiles: ["./src/test/setup.ts"],
+    // Keep the empty-suite gate green for slices that ship no frontend tests.
     passWithNoTests: true,
+    // CSS imports are side-effect-only in tests; let vitest no-op them.
+    css: false,
   },
 });

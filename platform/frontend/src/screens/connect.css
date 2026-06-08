@@ -1,0 +1,475 @@
+/* ============================================================
+   Screen 01 — Connect & project picker.
+   Ported from docs/design_docs/platform/connect.jsx inline styles into classes.
+   Colors are CSS variables only (from tokens.css) — no hardcoded hex (INV-14).
+   ============================================================ */
+
+.connect-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  background: radial-gradient(1200px 600px at 50% -5%, var(--bg-grad-a), var(--bg-grad-b));
+}
+
+.connect-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 28px;
+}
+
+.connect-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.connect-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-md);
+  display: grid;
+  place-items: center;
+  background: linear-gradient(140deg, var(--accent-hover), var(--accent-press));
+  color: var(--accent-fg);
+}
+
+.connect-wordmark {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* ---------- Segmented tabs ---------- */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.segmented-opt {
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 0;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.segmented-opt.is-active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.connect-stage {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 20px 28px 60px;
+}
+
+/* ---------- Hero / disconnected ---------- */
+.connect-hero {
+  max-width: 540px;
+  text-align: center;
+}
+
+.connect-hero-badge {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 28px;
+  border-radius: var(--r-xl);
+  display: grid;
+  place-items: center;
+  color: var(--accent-fg);
+  background: linear-gradient(140deg, var(--accent-hover), var(--accent-press));
+  box-shadow: 0 18px 50px -14px color-mix(in oklab, var(--accent) 70%, transparent);
+}
+
+.connect-hero-title {
+  margin: 0 0 14px;
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.connect-hero-sub {
+  margin: 0 auto 24px;
+  max-width: 440px;
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.connect-pat {
+  text-align: left;
+  max-width: 440px;
+  margin: 0 auto 22px;
+}
+
+.connect-pat-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 700;
+  margin-bottom: 7px;
+  color: var(--text-2);
+}
+
+.connect-pat-perms {
+  margin-top: 12px;
+}
+
+.connect-pat-perms-title {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+.connect-perm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.connect-perm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.connect-perm code {
+  font-size: 12px;
+}
+
+.connect-cta {
+  font-size: 16px;
+  padding: 15px 28px;
+}
+
+.connect-error {
+  margin: 14px auto 0;
+  max-width: 440px;
+  font-size: 13px;
+  color: var(--st-failed);
+}
+
+.connect-reassure {
+  margin-top: 18px;
+  display: flex;
+  gap: 7px;
+  justify-content: center;
+  align-items: center;
+}
+
+.connect-reassure-ic {
+  color: var(--st-done);
+  display: inline-flex;
+}
+
+/* ---------- Picker ---------- */
+.connect-picker {
+  width: 100%;
+  max-width: 860px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.connect-picker.has-selection {
+  grid-template-columns: 1fr 340px;
+}
+
+.connect-repo-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.connect-repo-head {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.connect-repo-title {
+  margin: 0 0 4px;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.connect-repo-desc {
+  margin: 0 0 14px;
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+
+.connect-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.connect-search svg {
+  position: absolute;
+  left: 12px;
+  pointer-events: none;
+}
+
+.connect-search .input {
+  padding-left: 35px;
+}
+
+.connect-repo-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.connect-repo-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 13px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  margin-bottom: 2px;
+  transition: all 0.12s var(--ease);
+}
+
+.connect-repo-row:hover {
+  background: var(--surface-2);
+}
+
+.connect-repo-row.is-active {
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+}
+
+.connect-repo-avatar {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: var(--r-md);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-fg);
+  background: var(--st-review);
+}
+
+.connect-repo-row.is-active .connect-repo-avatar {
+  background: var(--accent);
+}
+
+.connect-repo-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.connect-repo-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.connect-repo-org {
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.connect-repo-sub {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.connect-repo-lang {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.connect-lang-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--r-pill);
+  flex: none;
+}
+
+.gh-label.is-private {
+  --lc: var(--st-paused);
+}
+
+.gh-label.is-public {
+  --lc: var(--st-done);
+}
+
+.connect-repo-check {
+  color: var(--accent);
+  display: inline-flex;
+  flex: none;
+}
+
+/* ---------- Confirm / preflight rail ---------- */
+.connect-confirm {
+  padding: 20px;
+  position: sticky;
+  top: 0;
+}
+
+.connect-confirm-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.connect-confirm-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin-bottom: 16px;
+}
+
+.confirm-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.confirm-row-ic {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin-top: 1px;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  color: var(--st-done);
+  background: color-mix(in oklab, var(--st-done) 16%, transparent);
+}
+
+.confirm-row-text {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.connect-preflight {
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.connect-preflight-title {
+  margin-bottom: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+.connect-preflight-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 0;
+}
+
+.connect-preflight-ic {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+}
+
+.connect-preflight-ic.is-ok {
+  color: var(--st-done);
+  background: color-mix(in oklab, var(--st-done) 16%, transparent);
+}
+
+.connect-preflight-ic.is-blocked {
+  color: var(--st-failed);
+  background: color-mix(in oklab, var(--st-failed) 16%, transparent);
+}
+
+.connect-preflight-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.connect-preflight-sub {
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.connect-open {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ---------- Syncing ---------- */
+.connect-syncing {
+  text-align: center;
+  max-width: 400px;
+}
+
+.connect-syncing-badge {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 24px;
+  border-radius: var(--r-xl);
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.connect-syncing-title {
+  margin: 0 0 10px;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.connect-syncing-sub {
+  margin: 0 0 20px;
+  color: var(--text-2);
+  font-size: 14.5px;
+}
+
+.connect-syncing-bar {
+  max-width: 260px;
+  margin: 0 auto;
+}
+
+/* ---------- Board placeholder (replaced by slice 1.5) ---------- */
+.board-placeholder {
+  padding: 40px;
+}
