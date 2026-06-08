@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
+from typing import Any
 
 
 class GitHubError(RuntimeError):
@@ -133,6 +134,21 @@ class GitHubClient(abc.ABC):
         blocks at connect rather than failing late at PR-creation time. A rejected
         credential raises :class:`GitHubAuthError`; a missing repo raises
         :class:`GitHubError` with ``status=404``.
+        """
+
+    @abc.abstractmethod
+    async def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        """Execute one GitHub **GraphQL** query and return the parsed JSON body.
+
+        The board read (slice 1.2, :func:`app.github.graphql.read_board`) drives
+        pagination by calling this primitive page-by-page. Reads are point-cheaper
+        on GraphQL than REST (R-2), and the board document fetches issues + labels
+        + linked-PR ``merged`` in one round-trip (§8.1). The return value is the
+        full ``{"data": …, "errors"?: …}`` envelope; a GraphQL ``errors`` array on
+        an otherwise-200 response is surfaced as a :class:`GitHubError` so a failed
+        query never silently yields an empty board. This is a **read** primitive —
+        the label-write mutation (``set_agent_state`` / ``PUT .../labels``) is
+        slice 1.3 and is *not* declared here.
         """
 
     async def aclose(self) -> None:
