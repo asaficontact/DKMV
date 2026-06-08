@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.api.agent_state import router as agent_state_router
 from app.api.connect import router as connect_router
 from app.api.health import router as health_router
 from app.api.issues import router as issues_router
@@ -28,5 +29,6 @@ api_router.include_router(preflight_router)
 api_router.include_router(repos_router)
 api_router.include_router(connect_router)
 api_router.include_router(issues_router)
+api_router.include_router(agent_state_router)
 
 __all__ = ["api_router"]

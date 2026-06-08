@@ -347,6 +347,32 @@ async def test_upsert_issues_batch_writes_all_rows(repo: Repository) -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_issue_hit_returns_single_row(repo: Repository) -> None:
+    """read_issue returns exactly the (repo, num) row, with its decoded columns."""
+    await repo.upsert_issues(
+        [
+            IssueRow(repo="o/r", num=10, title="A", state="queued", labels=["agent:queued"]),
+            IssueRow(repo="o/r", num=9, title="B", state="backlog"),
+            IssueRow(repo="o/other", num=10, title="elsewhere", state="backlog"),
+        ]
+    )
+    row = await repo.read_issue("o/r", 10)
+    assert row is not None
+    assert row["num"] == 10
+    assert row["title"] == "A"
+    assert row["state"] == "queued"
+    assert "agent:queued" in row["labels_json"]
+
+
+@pytest.mark.asyncio
+async def test_read_issue_miss_returns_none(repo: Repository) -> None:
+    """read_issue returns None for an absent (repo, num) — no cross-repo bleed."""
+    await repo.upsert_issues([IssueRow(repo="o/r", num=9, title="B", state="backlog")])
+    assert await repo.read_issue("o/r", 999) is None  # absent num
+    assert await repo.read_issue("o/missing", 9) is None  # absent repo
+
+
+@pytest.mark.asyncio
 async def test_upsert_issues_is_idempotent_on_conflict(repo: Repository) -> None:
     """Re-upserting the same (repo, num) updates in place (ON CONFLICT), no dup row."""
     await repo.upsert_issues([IssueRow(repo="o/r", num=7, title="first", state="backlog")])

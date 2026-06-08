@@ -30,6 +30,21 @@ from app.github.pat_client import (
     PatGitHubClient,
 )
 from app.github.provider import get_github_client, get_secret_store, set_github_client
+from app.github.state_machine import (
+    SetAgentStateResult,
+    TransitionPlan,
+    closed_transition,
+    compute_desired_labels,
+    failed_run_demotion,
+    merged_pr_transition,
+    reopened_transition,
+    set_agent_state,
+)
+from app.github.write_queue import (
+    RateLimitState,
+    SecondaryRateLimitError,
+    WriteQueue,
+)
 
 __all__ = [
     "GITHUB_API_BASE",
@@ -39,9 +54,20 @@ __all__ = [
     "GitHubClient",
     "GitHubError",
     "PatGitHubClient",
+    "RateLimitState",
     "Repo",
+    "SecondaryRateLimitError",
+    "SetAgentStateResult",
+    "TransitionPlan",
     "WritePermission",
+    "WriteQueue",
+    "closed_transition",
+    "compute_desired_labels",
+    "failed_run_demotion",
     "get_github_client",
     "get_secret_store",
+    "merged_pr_transition",
+    "reopened_transition",
+    "set_agent_state",
     "set_github_client",
 ]

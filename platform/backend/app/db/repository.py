@@ -742,6 +742,24 @@ class Repository:
             )
             return [dict(r) for r in rows]
 
+    async def read_issue(self, repo: str, num: int) -> dict[str, Any] | None:
+        """Read a single cached ``issues`` row by ``(repo, num)``, or ``None``.
+
+        A targeted point read served by the ``issues`` PK/index on ``(repo, num)``,
+        for hot paths (the Backlog↔Queued drag) that need exactly one issue's
+        current labels — avoiding the full-repo ``read_issues`` scan + Python filter.
+        A pure WAL read through the same repository seam as ``read_issues`` /
+        ``read_active_runs`` (NFR-PORT-1).
+        """
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT repo, num, title, state, labels_json, workflow_id, agent, pr_num "
+                "FROM issues WHERE repo = ? AND num = ?",
+                (repo, num),
+            )
+            row = next(iter(rows), None)
+            return dict(row) if row is not None else None
+
     async def read_active_runs(self, repo: str, statuses: Sequence[str]) -> list[dict[str, Any]]:
         """Read a repo's non-terminal ``runs`` rows for the authority rule (§8.1).
 
