@@ -159,11 +159,13 @@ def _map_github_error(exc: Exception) -> ApiError:
 
 
 async def _read_issue_row(repository: Repository, repo: str, num: int) -> dict[str, Any] | None:
-    """Return the cached ``issues`` row for ``(repo, num)``, or ``None`` if absent."""
-    for row in await repository.read_issues(repo):
-        if int(row.get("num", -1)) == num:
-            return row
-    return None
+    """Return the cached ``issues`` row for ``(repo, num)``, or ``None`` if absent.
+
+    A targeted single-issue point read (``Repository.read_issue``, served by the
+    ``issues`` PK/index on ``(repo, num)``) — the drag hot path reads exactly one
+    row, not the whole board (no full-repo ``read_issues`` scan + Python filter).
+    """
+    return await repository.read_issue(repo, num)
 
 
 def _current_labels(row: dict[str, Any] | None) -> list[str]:

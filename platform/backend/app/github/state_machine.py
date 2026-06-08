@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.github.labels import AGENT_LABEL_NAMES
-from app.github.sync import ActiveRun
+from app.github.sync import _LABEL_PRECEDENCE, ActiveRun
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.github.client import GitHubClient
@@ -201,16 +201,18 @@ class TransitionPlan:
 def _current_agent_target(labels: Sequence[str]) -> str | None:
     """The issue's current ``agent:*`` target suffix (precedence-resolved), or None.
 
-    Reuses 1.2's precedence (``in-progress > paused > review > queued``) via
-    :func:`app.github.sync._label_state`'s ordering so completeness decisions and
-    board derivation never disagree. Returns the bare suffix (``"queued"``) or
-    ``None`` when no ``agent:*`` label is present (Backlog).
+    Reuses 1.2's precedence (``in-progress > paused > review > queued``) via the
+    imported :data:`app.github.sync._LABEL_PRECEDENCE` ordering so completeness
+    decisions and board derivation never disagree. Returns the bare suffix
+    (``"queued"``) or ``None`` when no ``agent:*`` label is present (Backlog).
     """
     present = [name for name in labels if name in AGENT_LABEL_NAMES]
     if not present:
         return None
-    # Same precedence order as sync._LABEL_PRECEDENCE (extend, don't fork).
-    for label in ("agent:in-progress", "agent:paused", "agent:review", "agent:queued"):
+    # Single-source the precedence ordering from sync (extend, don't fork) so a
+    # future edit to one table can't silently diverge board derivation (sync) from
+    # completeness decisions (state_machine) — INV-11 / §8.1.
+    for label in _LABEL_PRECEDENCE:
         if label in present:
             return label.split(":", 1)[1]
     return None  # pragma: no cover - present ⊆ the precedence set
