@@ -1,8 +1,11 @@
 """AC-0.2-5: API error envelope + status-code conventions (§8.9).
 
 Asserts a validation failure → ``400 {"error":{"code":"validation_error",...}}``
-and an unknown run → ``404 {"error":{"code":"run_not_found"}}`` through the
-installed exception handlers, plus the factory/envelope unit behavior.
+and an unknown run → ``404 {"error":{"code":"not_found", details:{resource}}}``
+through the installed exception handlers, plus the factory/envelope unit
+behavior. Pins the **single 404 contract**: every 404 (domain or framework)
+carries the same ``not_found`` code; domain helpers discriminate via
+``details.resource``.
 """
 
 from __future__ import annotations
@@ -10,12 +13,15 @@ from __future__ import annotations
 from typing import Any
 
 from app.api.errors import (
+    NOT_FOUND_CODE,
     ApiError,
     install_error_handlers,
+    issue_not_found,
+    not_found,
     run_not_found,
     validation_error,
 )
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
@@ -41,6 +47,11 @@ def _envelope_app() -> FastAPI:
     def _boom() -> dict[str, str]:
         raise RuntimeError("unexpected")
 
+    @router.get("/_framework_404")
+    def _framework_404() -> dict[str, str]:
+        # Non-string detail forces the handler's message-fallback branch.
+        raise HTTPException(status_code=404, detail={"why": "structured"})
+
     app.include_router(router)
     return app
 
@@ -65,10 +76,13 @@ def test_validation_error_400_envelope() -> None:
 
 
 def test_run_not_found_404_envelope() -> None:
+    # Single 404 contract: domain 404 carries the generic ``not_found`` code and
+    # discriminates the specific case via ``details.resource``.
     resp = _client().get("/api/v1/runs/does-not-exist")
     assert resp.status_code == 404
     body = resp.json()
-    assert body["error"]["code"] == "run_not_found"
+    assert body["error"]["code"] == NOT_FOUND_CODE
+    assert body["error"]["details"]["resource"] == "run"
     assert "does-not-exist" in body["error"]["message"]
 
 
@@ -81,13 +95,39 @@ def test_unhandled_error_500_no_leak() -> None:
     assert "unexpected" not in body["error"]["message"]
 
 
-def test_unmatched_route_404_envelope() -> None:
+def test_unmatched_route_404_uses_same_code_as_domain_404() -> None:
+    # Framework 404 (unmatched route) carries the *same* code as a domain 404.
     resp = _client().get("/api/v1/nope")
     assert resp.status_code == 404
-    assert resp.json()["error"]["code"] == "not_found"
+    assert resp.json()["error"]["code"] == NOT_FOUND_CODE
+
+
+def test_framework_404_with_structured_detail_falls_back_to_clean_message() -> None:
+    # When the framework HTTPException carries a non-string detail, the handler
+    # uses the clean human-message fallback (not the code, not the raw detail).
+    resp = _client().get("/api/v1/_framework_404")
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == NOT_FOUND_CODE
+    assert body["error"]["message"] == "Not found"
 
 
 # ── Factory / envelope unit behavior ─────────────────────────────────────────
+
+
+def test_not_found_factories_share_one_code_with_resource_discriminator() -> None:
+    # Single 404 contract at the factory level: one code, resource in details.
+    generic = not_found().to_envelope()["error"]
+    assert generic["code"] == NOT_FOUND_CODE
+    assert "details" not in generic  # no resource → no details key
+
+    run = run_not_found("r1").to_envelope()["error"]
+    assert run["code"] == NOT_FOUND_CODE
+    assert run["details"] == {"resource": "run"}
+
+    issue = issue_not_found("acme/widget", 7).to_envelope()["error"]
+    assert issue["code"] == NOT_FOUND_CODE
+    assert issue["details"] == {"resource": "issue"}
 
 
 def test_envelope_includes_details_only_when_present() -> None:

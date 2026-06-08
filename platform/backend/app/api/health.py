@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/api/v1", tags=["health"])
+# No prefix here: the ``/api/v1`` version prefix is owned by the single parent
+# router in :mod:`app.api`, which this router attaches to.
+router = APIRouter(tags=["health"])
 
 
 @router.get("/healthz")

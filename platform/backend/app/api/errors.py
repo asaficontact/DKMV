@@ -23,11 +23,21 @@ Code  Meaning
 400   validation (``code: validation_error`` + field details)
 401   missing / invalid local token (``code: unauthorized``)
 403   Host/Origin/CSRF rejected (``code: forbidden``)
-404   not found (``run_not_found``, ``issue_not_found`` …)
+404   not found
 409   conflict (``duplicate_dispatch``, ``pause_already_resolved`` …)
 429   rate-limited (surfaces ``Retry-After``)
 500   internal (``internal_error``)
 ===== ==========================================================
+
+**The 404 contract is single and consistent.** Every 404 the API returns —
+whether raised by domain code or by the framework for an unmatched route —
+carries the *same* machine code ``not_found``. Domain helpers
+(:func:`run_not_found`, :func:`issue_not_found`) are thin convenience wrappers
+that build a ``not_found`` :class:`ApiError` with a specific human ``message``
+(and a ``details.resource`` discriminator); they do **not** introduce a distinct
+top-level code. A client therefore branches on a single 404 code and reads
+``details.resource`` for the specific case, instead of guessing between
+``run_not_found`` / ``issue_not_found`` / ``not_found``.
 
 Nothing here reaches into ``dkmv/`` or logs a secret value.
 """
@@ -104,14 +114,29 @@ def forbidden(message: str = "Host/Origin/CSRF check failed") -> ApiError:
     return ApiError(403, "forbidden", message)
 
 
+# The single machine code every 404 (domain or framework) carries (PRD §8.9).
+NOT_FOUND_CODE = "not_found"
+
+
+def not_found(message: str = "Not found", *, resource: str | None = None) -> ApiError:
+    """404 — the canonical not-found error (single ``not_found`` code, §8.9).
+
+    ``resource`` (e.g. ``"run"``/``"issue"``) is surfaced under
+    ``details.resource`` so a client can discriminate the specific case without
+    a separate top-level code.
+    """
+    details = {"resource": resource} if resource is not None else None
+    return ApiError(404, NOT_FOUND_CODE, message, details=details)
+
+
 def run_not_found(run_id: str) -> ApiError:
-    """404 — no run with this platform UUID (PRD §8.9)."""
-    return ApiError(404, "run_not_found", f"Run {run_id} not found")
+    """404 — no run with this platform UUID (``not_found`` + ``resource: run``)."""
+    return not_found(f"Run {run_id} not found", resource="run")
 
 
 def issue_not_found(repo: str, num: int) -> ApiError:
-    """404 — no cached issue for this repo/number (PRD §8.9)."""
-    return ApiError(404, "issue_not_found", f"Issue {repo}#{num} not found")
+    """404 — no cached issue (``not_found`` + ``resource: issue``)."""
+    return not_found(f"Issue {repo}#{num} not found", resource="issue")
 
 
 def preflight_blocked(blockers: list[str]) -> ApiError:
@@ -157,13 +182,12 @@ async def _http_exception_handler(_request: Request, exc: Exception) -> JSONResp
 
     Routes should prefer :class:`ApiError`, but framework-raised
     ``HTTPException`` (e.g. an unmatched route → 404) is normalized here so the
-    envelope is universal.
+    envelope is universal. A framework 404 carries the same ``not_found`` code
+    as a domain 404 (single 404 contract — see the module docstring).
     """
     assert isinstance(exc, StarletteHTTPException)
     code = _STATUS_TO_CODE.get(exc.status_code, "error")
-    message = (
-        exc.detail if isinstance(exc.detail, str) else _STATUS_TO_CODE.get(exc.status_code, "error")
-    )
+    message = exc.detail if isinstance(exc.detail, str) else _STATUS_TO_MESSAGE.get(code, code)
     api = ApiError(exc.status_code, code, message)
     headers = getattr(exc, "headers", None)
     if headers:
@@ -180,10 +204,22 @@ _STATUS_TO_CODE: dict[int, str] = {
     400: "validation_error",
     401: "unauthorized",
     403: "forbidden",
-    404: "not_found",
+    404: NOT_FOUND_CODE,
     409: "conflict",
     429: "rate_limited",
     500: "internal_error",
+}
+
+# Human-readable fallback message when the framework HTTPException carries no
+# string ``detail`` (keyed by the machine code above).
+_STATUS_TO_MESSAGE: dict[str, str] = {
+    "validation_error": "Request validation failed",
+    "unauthorized": "Missing or invalid local token",
+    "forbidden": "Host/Origin/CSRF check failed",
+    NOT_FOUND_CODE: "Not found",
+    "conflict": "Conflict",
+    "rate_limited": "Rate limited",
+    "internal_error": "Internal server error",
 }
 
 

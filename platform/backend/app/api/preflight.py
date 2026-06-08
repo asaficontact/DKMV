@@ -32,7 +32,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
     from app.runtime import RunService
 
-router = APIRouter(prefix="/api/v1", tags=["preflight"])
+# No prefix here: the ``/api/v1`` version prefix is owned by the single parent
+# router in :mod:`app.api`, which this router attaches to.
+router = APIRouter(tags=["preflight"])
 
 
 def _mask_key(present: bool) -> str:

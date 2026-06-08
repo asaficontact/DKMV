@@ -23,9 +23,8 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from app.api import api_router
 from app.api.errors import install_error_handlers
-from app.api.health import router as health_router
-from app.api.preflight import router as preflight_router
 from app.config import Settings, get_settings
 from app.runtime import RunService
 from app.security import AccessControlMiddleware
@@ -59,8 +58,9 @@ def create_app(
     app.add_middleware(AccessControlMiddleware, settings=settings)
 
     install_error_handlers(app)
-    app.include_router(health_router)
-    app.include_router(preflight_router)
+    # Single versioned parent router (owns the /api/v1 prefix); feature routers
+    # attach to it in app.api, not here.
+    app.include_router(api_router)
     return app
 
 
