@@ -61,7 +61,11 @@ def _issue_node(
     updated_at: str = "2026-06-08T10:00:00Z",
     closed_at: str | None = None,
     labels: list[str] | None = None,
+    merged_pr: int | None = None,
 ) -> dict[str, Any]:
+    timeline_nodes: list[dict[str, Any]] = []
+    if merged_pr is not None:
+        timeline_nodes.append({"source": {"number": merged_pr, "merged": True}})
     return {
         "number": number,
         "title": f"Issue {number}",
@@ -70,11 +74,15 @@ def _issue_node(
         "closedAt": closed_at,
         "assignees": {"nodes": []},
         "labels": {"nodes": [{"name": n, "color": "ededed"} for n in (labels or [])]},
-        "timelineItems": {"nodes": []},
+        "timelineItems": {"nodes": timeline_nodes},
     }
 
 
-def _one_page(open_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+def _one_page(
+    open_nodes: list[dict[str, Any]],
+    *,
+    closed_nodes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "data": {
             "repository": {
@@ -84,7 +92,7 @@ def _one_page(open_nodes: list[dict[str, Any]]) -> dict[str, Any]:
                 },
                 "closed": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [],
+                    "nodes": closed_nodes or [],
                 },
             }
         }
@@ -200,6 +208,70 @@ def test_board_list_without_run_uses_label(tmp_path: Path) -> None:
     issue = next(i for i in items if i["num"] == 11)
     assert issue["state"] == "in_review"
     assert issue["run_status"] is None
+
+
+def test_board_list_closed_issue_renders_done(tmp_path: Path) -> None:
+    """A CLOSED issue with no PR + no agent:* label renders in Done (AC-5 / §5.3.1).
+
+    Read-path regression: the board read must honor the persisted closed/Done
+    signal end-to-end (it previously hardcoded is_closed=False and flattened a
+    closed issue to backlog).
+    """
+    client, _url = _client(tmp_path / "t.db")
+    fake = FakeClient(
+        _one_page(
+            [],
+            closed_nodes=[
+                _issue_node(20, state="CLOSED", closed_at="2026-06-08T00:00:00Z"),
+            ],
+        )
+    )
+    set_github_client(client.app, fake)  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck client
+    client.post("/api/v1/projects/o/r/sync", headers=auth_headers())
+
+    resp = client.get("/api/v1/repos/o/r/issues", headers=auth_headers())
+    assert resp.status_code == 200
+    issue = next(i for i in resp.json()["items"] if i["num"] == 20)
+    assert issue["state"] == "done"
+    assert issue["run_status"] is None
+
+
+def test_board_list_closed_with_merged_pr_renders_done(tmp_path: Path) -> None:
+    """A closed issue with a linked merged PR renders in Done end-to-end (§5.3.1)."""
+    client, _url = _client(tmp_path / "t.db")
+    fake = FakeClient(
+        _one_page(
+            [],
+            closed_nodes=[
+                _issue_node(
+                    21,
+                    state="CLOSED",
+                    closed_at="2026-06-08T00:00:00Z",
+                    labels=["agent:review"],  # stale label must not pull it back
+                    merged_pr=99,
+                ),
+            ],
+        )
+    )
+    set_github_client(client.app, fake)  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck client
+    client.post("/api/v1/projects/o/r/sync", headers=auth_headers())
+
+    resp = client.get("/api/v1/repos/o/r/issues", headers=auth_headers())
+    issue = next(i for i in resp.json()["items"] if i["num"] == 21)
+    assert issue["state"] == "done"
+    assert issue["pr_num"] == 99
+
+
+def test_board_list_open_no_label_renders_backlog(tmp_path: Path) -> None:
+    """An OPEN issue with no agent:* label renders in Backlog (§5.3.1)."""
+    client, _url = _client(tmp_path / "t.db")
+    fake = FakeClient(_one_page([_issue_node(22)]))
+    set_github_client(client.app, fake)  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck client
+    client.post("/api/v1/projects/o/r/sync", headers=auth_headers())
+
+    resp = client.get("/api/v1/repos/o/r/issues", headers=auth_headers())
+    issue = next(i for i in resp.json()["items"] if i["num"] == 22)
+    assert issue["state"] == "backlog"
 
 
 def _seed_active_run(url: str, *, repo: str, num: int, status: str) -> None:

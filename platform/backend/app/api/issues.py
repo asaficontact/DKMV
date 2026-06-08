@@ -36,8 +36,7 @@ from app.github.labels import ensure_agent_labels
 from app.github.provider import get_github_client
 from app.github.sync import (
     build_board_list,
-    read_active_runs,
-    read_cached_issues,
+    read_board_via_repository,
     sync_issues,
 )
 
@@ -100,12 +99,6 @@ async def _repository(request: Request) -> AsyncIterator[Repository]:
         await repository.close()
 
 
-def _database_url(request: Request) -> str:
-    """The platform DB URL the read projections open WAL read connections against."""
-    settings: Settings = request.app.state.settings
-    return str(settings.DATABASE_URL)
-
-
 def _map_github_error(exc: Exception) -> ApiError:
     """Map a GitHub failure to the §8.9 error envelope."""
     if isinstance(exc, GitHubAuthError):
@@ -164,14 +157,16 @@ async def list_issues(owner: str, name: str, request: Request) -> dict[str, Any]
     Reads the cached issues and the repo's active runs, then derives each issue's
     board ``state`` with the authority rule applied (active-run DB row > label,
     §8.1) — so a stale ``agent:*`` label on an issue that has a live run does not
-    win over the run's state. Returns the ``data.jsx ISSUES`` list shape.
+    win over the run's state. The persisted ``state``/Done signal is honored so a
+    closed (or merged-PR) issue renders in **Done** (§5.3.1 row 6). Returns the
+    ``data.jsx ISSUES`` list shape.
+
+    Both inputs flow through the :class:`Repository` read seam (NFR-PORT-1), the
+    same single DB boundary the writes use, so the SQLite→Postgres swap stays an
+    additive change rather than a rewrite.
     """
     repo = f"{owner}/{name}"
-    # Reads are pure WAL-read projections over the platform DB file (no writer
-    # needed); the sync path is what populates it through the repository layer.
-    database_url = _database_url(request)
-
-    cached = await read_cached_issues(database_url, repo)
-    active = await read_active_runs(database_url, repo)
+    async with _repository(request) as repository:
+        cached, active = await read_board_via_repository(repository, repo)
     items = build_board_list(cached, active)
     return {"items": items, "next_cursor": None}

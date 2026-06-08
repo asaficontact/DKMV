@@ -28,7 +28,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from app.db.connection import connect
 from app.github.graphql import BoardIssue, BoardPage, read_board
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -253,30 +252,32 @@ async def sync_issues(
 # ── read: issues cache + active runs → board list (§5.3.1 + authority) ─────────
 
 
-async def read_active_runs(database_url: str, repo: str) -> dict[int, ActiveRun]:
-    """Map ``issue_num → ActiveRun`` for the repo's non-terminal runs (§8.1).
+class IssueReader(Protocol):
+    """The subset of the repository the board read path reads through (NFR-PORT-1).
 
-    Reads via the platform's WAL read connection (the public ``app.db`` connect
-    seam) — a pure projection, no write. The authority rule consults this so an
-    active run's DB row overrides any stale ``agent:*`` label at board-render time.
+    Mirrors :class:`IssueWriter` for the read side so ``GET /repos/{repo}/issues``
+    honors the same single DB seam as the writes. :class:`app.db.repository.Repository`
+    satisfies this structurally.
+    """
+
+    async def read_issues(self, repo: str) -> list[dict[str, Any]]: ...
+
+    async def read_active_runs(
+        self, repo: str, statuses: Sequence[str]
+    ) -> list[dict[str, Any]]: ...
+
+
+def active_runs_from_rows(rows: Sequence[Mapping[str, Any]]) -> dict[int, ActiveRun]:
+    """Fold ``(issue_num, status, pr_num)`` rows into ``issue_num → ActiveRun``.
+
     When several active runs share an issue (should not happen), the most-advanced
     by :data:`_RUN_STATUS_TO_STATE` precedence is kept (paused outranks running for
     Needs-You surfacing).
     """
-    placeholders = ", ".join("?" for _ in ACTIVE_RUN_STATUSES)
-    statuses = sorted(ACTIVE_RUN_STATUSES)
-    conn = await connect(database_url)
-    try:
-        rows = await conn.execute_fetchall(
-            f"SELECT issue_num, status, pr_num FROM runs "  # noqa: S608 — placeholders only
-            f"WHERE repo = ? AND issue_num IS NOT NULL AND status IN ({placeholders})",
-            (repo, *statuses),
-        )
-    finally:
-        await conn.close()
-
     by_issue: dict[int, ActiveRun] = {}
     for row in rows:
+        if row["issue_num"] is None:
+            continue
         num = int(row["issue_num"])
         run = ActiveRun(
             issue_num=num,
@@ -289,24 +290,26 @@ async def read_active_runs(database_url: str, repo: str) -> dict[int, ActiveRun]
     return by_issue
 
 
+async def read_board_via_repository(
+    reader: IssueReader, repo: str
+) -> tuple[list[dict[str, Any]], dict[int, ActiveRun]]:
+    """Read cached issues + active runs through the repository seam (NFR-PORT-1).
+
+    The board list's two inputs — the cached ``issues`` rows (with the persisted
+    ``state``/Done signal) and the repo's active runs for the authority rule — both
+    flow through :class:`app.db.repository.Repository` read methods, so the read
+    path honors the same single DB boundary as the writes. Returns
+    ``(cached_issues, active_runs)`` ready for :func:`build_board_list`.
+    """
+    cached = await reader.read_issues(repo)
+    run_rows = await reader.read_active_runs(repo, sorted(ACTIVE_RUN_STATUSES))
+    return cached, active_runs_from_rows(run_rows)
+
+
 def _run_rank(status: str) -> int:
     """Rank an active status for the "most advanced run" tiebreak (paused first)."""
     order = ("paused", "running", "stopping", "pending")
     return order.index(status) if status in order else len(order)
-
-
-async def read_cached_issues(database_url: str, repo: str) -> list[dict[str, Any]]:
-    """Read the repo's cached issue rows (a pure WAL read projection)."""
-    conn = await connect(database_url)
-    try:
-        rows = await conn.execute_fetchall(
-            "SELECT repo, num, title, labels_json, workflow_id, agent, pr_num "
-            "FROM issues WHERE repo = ? ORDER BY num DESC",
-            (repo,),
-        )
-    finally:
-        await conn.close()
-    return [dict(r) for r in rows]
 
 
 def build_board_list(
@@ -318,7 +321,11 @@ def build_board_list(
     For each cached issue, the board ``state`` is re-derived with the authority
     rule applied (active-run DB row > label, §8.1) so the list is **live** even
     though the cache row stored only the label-derived state at sync time. The
-    returned dicts carry the fields the board card reads (``data.jsx ISSUES``):
+    **closed/Done signal is honored**: :func:`sync_issues` persisted the §5.3.1
+    derivation into the ``state`` column, so a cached ``state == "done"`` means the
+    issue is closed (or has a merged PR) and must re-derive to **Done**, not get
+    flattened to Backlog by a hardcoded ``is_closed=False`` (AC-5 / §5.3.1 row 6).
+    The returned dicts carry the fields the board card reads (``data.jsx ISSUES``):
     number, title, labels, derived state, workflow/agent chips, and pr.
     """
     out: list[dict[str, Any]] = []
@@ -327,9 +334,13 @@ def build_board_list(
         labels = _decode_labels(row.get("labels_json"))
         run = active_runs.get(num)
         pr_num = row.get("pr_num")
+        # The persisted ``state`` carries the closed/merged Done signal from sync
+        # time (§5.3.1). Feed it back into the live derivation so a closed issue
+        # stays Done even when it has no merged-PR linkage and no agent:* label.
+        cached_done = str(row.get("state") or "") == "done"
         state = derive_state(
             labels=labels,
-            is_closed=False,
+            is_closed=cached_done,
             merged_pr_num=(int(pr_num) if pr_num is not None else None),
             active_run=run,
         )

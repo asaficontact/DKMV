@@ -21,6 +21,7 @@ from app.github.hash_cache import HashCache
 from app.github.labels import AGENT_LABEL_NAMES, ensure_agent_labels
 from app.github.sync import (
     ActiveRun,
+    active_runs_from_rows,
     build_board_list,
     derive_state,
     sync_issues,
@@ -282,6 +283,7 @@ def test_build_board_list_applies_authority_at_read_time() -> None:
         {
             "num": 7,
             "title": "stale",
+            "state": "queued",
             "labels_json": '["agent:queued"]',
             "workflow_id": None,
             "agent": None,
@@ -292,6 +294,77 @@ def test_build_board_list_applies_authority_at_read_time() -> None:
     items = build_board_list(cached, active)
     assert items[0]["state"] == "in_progress"
     assert items[0]["run_status"] == "running"
+
+
+def test_build_board_list_closed_issue_no_pr_no_label_is_done() -> None:
+    """A CLOSED issue (state=done at sync) with no PR + no agent:* label → Done (AC-5).
+
+    Regression guard for the read-path bug where build_board_list hardcoded
+    is_closed=False and dropped the persisted §5.3.1 Done signal, rendering a
+    closed issue as backlog.
+    """
+    cached = [
+        {
+            "num": 5,
+            "title": "closed",
+            "state": "done",  # what sync_issues persisted for a closed issue
+            "labels_json": "[]",  # no agent:* label
+            "workflow_id": None,
+            "agent": None,
+            "pr_num": None,  # no merged-PR linkage
+        }
+    ]
+    items = build_board_list(cached, {})
+    assert items[0]["state"] == "done"
+
+
+def test_build_board_list_closed_with_merged_pr_is_done() -> None:
+    """A closed issue with a merged PR linkage → Done (§5.3.1 row 6)."""
+    cached = [
+        {
+            "num": 6,
+            "title": "merged",
+            "state": "done",
+            "labels_json": '["agent:review"]',  # stale label must not win over Done
+            "workflow_id": None,
+            "agent": None,
+            "pr_num": 42,
+        }
+    ]
+    items = build_board_list(cached, {})
+    assert items[0]["state"] == "done"
+    assert items[0]["pr_num"] == 42
+
+
+def test_build_board_list_open_no_label_is_backlog() -> None:
+    """An OPEN issue (state=backlog) with no label still derives to Backlog."""
+    cached = [
+        {
+            "num": 8,
+            "title": "open",
+            "state": "backlog",
+            "labels_json": "[]",
+            "workflow_id": None,
+            "agent": None,
+            "pr_num": None,
+        }
+    ]
+    items = build_board_list(cached, {})
+    assert items[0]["state"] == "backlog"
+
+
+def test_active_runs_from_rows_folds_by_issue_with_precedence() -> None:
+    """Multiple active runs on one issue fold to the most-advanced (paused first)."""
+    rows = [
+        {"issue_num": 7, "status": "running", "pr_num": None},
+        {"issue_num": 7, "status": "paused", "pr_num": None},
+        {"issue_num": 9, "status": "pending", "pr_num": 3},
+        {"issue_num": None, "status": "running", "pr_num": None},  # skipped (no issue)
+    ]
+    folded = active_runs_from_rows(rows)
+    assert folded[7].status == "paused"  # paused outranks running
+    assert folded[9].pr_num == 3
+    assert None not in folded
 
 
 # ── sync_issues: import through the repository + cursor persistence ───────────

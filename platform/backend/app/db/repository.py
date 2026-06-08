@@ -656,6 +656,43 @@ class Repository:
 
         await self._writer.submit(_job)
 
+    async def read_issues(self, repo: str) -> list[dict[str, Any]]:
+        """Read a repo's cached ``issues`` rows (a pure WAL read projection).
+
+        Surfaces the board read through the repository seam (NFR-PORT-1) so the
+        ``GET /repos/{repo}/issues`` read path honors the same single DB boundary
+        the writes do. The persisted ``state`` column is included so the §5.3.1
+        **Done** signal stored at sync time survives to the board re-derivation
+        (a closed/merged issue must re-derive to Done, not flatten to Backlog).
+        """
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT repo, num, title, state, labels_json, workflow_id, agent, pr_num "
+                "FROM issues WHERE repo = ? ORDER BY num DESC",
+                (repo,),
+            )
+            return [dict(r) for r in rows]
+
+    async def read_active_runs(self, repo: str, statuses: Sequence[str]) -> list[dict[str, Any]]:
+        """Read a repo's non-terminal ``runs`` rows for the authority rule (§8.1).
+
+        Returns the minimal ``(issue_num, status, pr_num)`` projection for runs in
+        ``statuses`` (the caller's active-status set). A pure WAL read through the
+        repository seam (NFR-PORT-1); the active-run→board-state overlay itself
+        lives in :mod:`app.github.sync`.
+        """
+        status_list = list(statuses)
+        if not status_list:
+            return []
+        placeholders = ", ".join("?" for _ in status_list)
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT issue_num, status, pr_num FROM runs "  # noqa: S608 — placeholders only
+                f"WHERE repo = ? AND issue_num IS NOT NULL AND status IN ({placeholders})",
+                (repo, *status_list),
+            )
+            return [dict(r) for r in rows]
+
 
 def _is_cost_excluded(agent: Any) -> bool:
     """True if a run's agent is cost-excluded from spend (Codex; FR-06-1a)."""
