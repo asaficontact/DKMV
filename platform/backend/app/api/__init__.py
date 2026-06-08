@@ -13,13 +13,18 @@ from fastapi import APIRouter
 from app.api.connect import router as connect_router
 from app.api.health import router as health_router
 from app.api.preflight import router as preflight_router
+from app.api.repos import router as repos_router
 
 # The single versioned parent router. Feature routers below attach to it, so the
 # ``/api/v1`` prefix is declared in exactly one place (no per-router repetition).
 api_router = APIRouter(prefix="/api/v1")
 
-# Feature routers attached to the versioned parent. Add new routers here.
-for _router in (health_router, preflight_router, connect_router):
-    api_router.include_router(_router)
+# Feature routers attached to the versioned parent. One ``include_router`` per
+# line so concurrent slices adding a router union-merge cleanly (add a new line;
+# do not edit an existing one).
+api_router.include_router(health_router)
+api_router.include_router(preflight_router)
+api_router.include_router(repos_router)
+api_router.include_router(connect_router)
 
 __all__ = ["api_router"]
