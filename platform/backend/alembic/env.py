@@ -1,14 +1,16 @@
 """Alembic migration environment for the DKMV Platform backend.
 
-Phase 0 / slice 0.1 ships the *runnable scaffold* of the Alembic env. The
-initial migration that creates all nine tables (`projects, issues, runs,
-run_stages, events, pause_decisions, run_totals, settings, secrets`) with the
-binding indexes and FK CASCADE lands in slice 0.3-persistence; the `versions/`
-directory is intentionally empty here.
+The initial migration (slice 0.3-persistence) creates all nine tables
+(`projects, issues, runs, run_stages, events, pause_decisions, run_totals,
+settings, secrets`) with the binding indexes and FK ``ON DELETE CASCADE``.
+``target_metadata`` is wired to :data:`app.db.schema.metadata` so autogenerate /
+schema comparison run against the single declarative source.
 
 The database URL is taken from the platform's typed settings
 (`Settings.DATABASE_URL`) so migrations and the running app agree on one source
-of truth.
+of truth. ``render_as_batch`` is on so SQLite ``ALTER TABLE`` in later
+migrations works, and so the ``ON DELETE CASCADE`` foreign keys are emitted
+inside the ``CREATE TABLE`` (SQLite cannot add an FK via ALTER).
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from app.config import get_settings
+from app.db.schema import metadata
 from sqlalchemy import engine_from_config, pool
 
 config = context.config
@@ -24,11 +27,31 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override the .ini URL with the platform settings URL (single source of truth).
-config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
 
-# target_metadata is wired to the ORM/Table metadata in slice 0.3; None until then.
-target_metadata = None
+# The default URL baked into alembic.ini; a value differing from this means a
+# caller set it intentionally (programmatic Config), so we respect it.
+_INI_DEFAULT_URL = "sqlite:///./data/dkmv.db"
+
+
+def _database_url() -> str:
+    """Resolve the migration DB URL with a clear precedence.
+
+    1. An explicit ``sqlalchemy.url`` set programmatically on this ``Config``
+       (e.g. a test that runs ``command.upgrade`` against a temp DB) — that
+       wins so callers can target an isolated DB.
+    2. Otherwise the platform's typed settings (``Settings.DATABASE_URL``) —
+       the single source of truth shared with the running app.
+    """
+    explicit = config.get_main_option("sqlalchemy.url")
+    if explicit and explicit != _INI_DEFAULT_URL:
+        return explicit
+    return get_settings().DATABASE_URL
+
+
+config.set_main_option("sqlalchemy.url", _database_url())
+
+# Wired to the single declarative schema source (app/db/schema.py).
+target_metadata = metadata
 
 
 def run_migrations_offline() -> None:
