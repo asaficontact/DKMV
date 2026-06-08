@@ -8,11 +8,62 @@
 # Host/Origin validation + CSRF (middleware lands in slice 0.2).
 #
 # The backend reaches Docker through a BROKERED, method-allowlisted socket proxy
-# (or rootless Docker / Sysbox) — never a raw `-v /var/run/docker.sock` mount.
-# That broker service + egress allowlist are added in slices 0.4/0.5; the
-# backend below intentionally has NO docker.sock mount.
+# (tecnativa/docker-socket-proxy) — NEVER a raw `-v /var/run/docker.sock` mount
+# (the Docker API is root-equivalent and "a request to the API ≈ code execution
+# on the host"; a read-only mount does not help). The `/var/run/docker.sock`
+# bind appears on EXACTLY ONE service below — `docker-proxy` — and never on the
+# backend (INV-3 / NFR-SEC-2 / ADR-P005, §8.8). The backend points `DOCKER_HOST`
+# at the proxy (tcp://docker-proxy:2375) and is granted only the create/start/
+# stop/inspect verbs the orchestrator needs.
+#
+# Alternatives the operator may use instead of the proxy (also documented in
+# platform/README.md): rootless Docker, or Sysbox — both avoid the raw root
+# socket. The proxy is the default because it is the most portable.
 
 services:
+  # ── Brokered Docker socket (method-allowlisted, non-root) ──────────────────
+  # The ONLY service that mounts the host Docker socket. It exposes a filtered
+  # subset of the Docker API on tcp://docker-proxy:2375 (internal network only,
+  # never published to the host). Each `1` below allow-lists an API verb group;
+  # everything unset is denied by default — in particular the dangerous
+  # EXEC/SECRETS/SWARM/SYSTEM-write surfaces stay `0`.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.2.0
+    environment:
+      # Allow the create/start/stop/inspect calls the orchestrator needs.
+      CONTAINERS: "1"   # create/start/stop/inspect/remove sandbox containers
+      IMAGES: "1"       # pull/inspect the dkmv-sandbox image
+      NETWORKS: "1"     # per-run egress-allowlist networks (slice 0.5)
+      POST: "1"         # allow create/start (POST) — without this it is read-only
+      INFO: "1"         # `docker info` runtime probe (runsc availability, OQ-6)
+      VERSION: "1"      # API version negotiation
+      # Explicitly DENY the root-equivalent / dangerous surfaces.
+      EXEC: "0"
+      SECRETS: "0"
+      SWARM: "0"
+      SYSTEM: "0"
+      VOLUMES: "0"
+      AUTH: "0"
+      BUILD: "0"
+      COMMIT: "0"
+      CONFIGS: "0"
+      DISTRIBUTION: "0"
+      NODES: "0"
+      PLUGINS: "0"
+      SERVICES: "0"
+      SESSION: "0"
+      TASKS: "0"
+    volumes:
+      # THE single docker.sock mount — read-only, into the proxy ONLY. Never the
+      # backend. A read-only mount is not by itself a boundary; the method
+      # allowlist above is what brokers it.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-broker
+    # Not published to the host: only reachable by the backend over the internal
+    # `docker-broker` network.
+    restart: unless-stopped
+
   backend:
     build:
       # Build context is the repo root so the image can editable-install the
@@ -31,13 +82,29 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       CODEX_API_KEY: "${CODEX_API_KEY:-}"
       DKMV_IMAGE: "${DKMV_IMAGE:-dkmv-sandbox:latest}"
+      # gVisor (runsc) is the default sandbox runtime (INV-3 / NFR-SEC-4). The
+      # executor resolves this and warns/fails-closed on the OQ-6 weaker path.
       SANDBOX_RUNTIME: "${SANDBOX_RUNTIME:-runsc}"
+      # The backend reaches Docker ONLY through the brokered proxy — it has NO
+      # docker.sock mount of its own. `DOCKER_HOST` points at the proxy.
+      DOCKER_HOST: "tcp://docker-proxy:2375"
+      # Daemon default-runtime hint for sandbox launches (gVisor). Setting the
+      # Docker daemon `default-runtime: runsc` on the host is the operator-side
+      # way to make runsc the default for engine-launched containers until the
+      # per-container `--runtime` flag lands as a §11.3 engine ask.
+      DOCKER_DEFAULT_RUNTIME: "${SANDBOX_RUNTIME:-runsc}"
       MAX_CONCURRENT_RUNS: "${MAX_CONCURRENT_RUNS:-3}"
       DAILY_SPEND_CAP: "${DAILY_SPEND_CAP:-}"
       EGRESS_ALLOWLIST: "${EGRESS_ALLOWLIST:-api.github.com,github.com,api.anthropic.com,api.openai.com}"
     volumes:
-      # Platform-owned DB + artifacts volume (OQ-4). NOT the docker socket.
+      # Platform-owned DB + artifacts volume (OQ-4). NOT the docker socket — the
+      # backend never mounts /var/run/docker.sock (it goes through docker-proxy).
       - backend-data:/data
+    depends_on:
+      - docker-proxy
+    networks:
+      - default
+      - docker-broker
     restart: unless-stopped
 
   frontend:
@@ -49,7 +116,18 @@ services:
       - "127.0.0.1:5173:5173"
     depends_on:
       - backend
+    networks:
+      - default
     restart: unless-stopped
+
+networks:
+  # App network for backend ↔ frontend (and the host-published loopback ports).
+  default:
+  # Internal-only network the backend uses to reach the brokered docker-proxy.
+  # `internal: true` keeps it off any host/published interface — the proxy is
+  # never reachable except from the backend.
+  docker-broker:
+    internal: true
 
 volumes:
   backend-data:
