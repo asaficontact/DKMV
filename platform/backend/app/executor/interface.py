@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from dkmv.runtime._handle import RunHandle
+    from dkmv.runtime import RunHandle
 
 
 class Signal(StrEnum):

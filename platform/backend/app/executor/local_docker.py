@@ -37,7 +37,7 @@ from app.executor.interface import Executor, OnPause, RunSpec, Signal, StreamedE
 from app.executor.runtime_policy import resolve_runtime, runtime_docker_args
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from dkmv.runtime._handle import RunHandle
+    from dkmv.runtime import RunHandle
 
     from app.config import Settings
     from app.runtime.run_service import RunService
@@ -170,12 +170,29 @@ class LocalDockerExecutor(Executor):
         )
 
     async def cleanup(self, handle_or_run_id: RunHandle | str) -> None:
-        """Tear down the run's transient resources (idempotent).
+        """Tear down transient runtime resources (idempotent).
 
-        Delegates to the engine's snapshot/temp cleanup. Container teardown for a
-        *retained* container is the engine's responsibility on stop; this is the
-        platform-side hook the orchestrator calls so it never touches Docker
-        directly (the orphan-kill recovery path of Phase 3 routes through here).
+        .. warning::
+           This is currently **process-global, not per-run.** Despite accepting a
+           ``handle_or_run_id`` argument, it delegates to the engine's
+           ``EmbeddedRuntime.cleanup()``, which tears down **all** of the
+           runtime's temp/snapshot directories for this process — not just the
+           resources of the run identified by the argument. The ``handle_or_run_id``
+           parameter is therefore **advisory only** here in Phase 0 (it scopes
+           nothing today; it preserves the seam signature for a future per-run
+           teardown). True per-run container/temp isolation requires an engine
+           ``cleanup(run_id=...)`` surface that does not yet exist — that is the
+           PRD §11 engine ask (INV-13 forbids adding it under ``dkmv/`` here).
+
+           **Phase 3 recovery callers must not assume per-run isolation.** Calling
+           this to reap a single orphaned run would also wipe the temp state of
+           any *live* run in the same process — a footgun. The orphan-kill
+           recovery path must target the specific container/run via the
+           per-container teardown the §11 engine ask will provide, not this hook.
+
+        Container teardown for a *retained* container is the engine's
+        responsibility on stop; this method is the platform-side hook the
+        orchestrator calls so it never touches Docker directly.
         """
         runtime = self._run_service.runtime
         runtime.cleanup()
