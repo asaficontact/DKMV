@@ -50,6 +50,15 @@ class Settings(BaseSettings):
         default="127.0.0.1:8787",
         description="host:port the backend binds to (loopback only by default).",
     )
+    DKMV_EXPOSE_DOCS_UNAUTHENTICATED: bool = Field(
+        default=False,
+        description=(
+            "Dev-only opt-in (default OFF): waive the local-token check for the "
+            "framework docs paths (/openapi.json, /docs, /redoc). The "
+            "Host/Origin anti-DNS-rebinding gate still applies even when on. "
+            "Leave OFF in any shared/networked deployment (INV-1)."
+        ),
+    )
 
     # --- Persistence + artifacts ---
     DATABASE_URL: str = Field(

@@ -1,36 +1,25 @@
-"""Scaffold-level health + preflight stub router.
+"""Liveness probe.
 
-Phase 0 / slice 0.1 ships only the *scaffold* of the API so the app boots and
-``docker compose up`` answers on loopback (AC-0.1-5). The full preflight
-contract — ``get_capabilities()`` results in the
-``{ ready, checks:[{id,label,sub,ok}], blockers }`` shape — plus the
-access-control middleware are owned by slice 0.2 (``0.2-runservice``). The
-stub here returns the *shape* so the smoke test passes and later slices fill in
-the real engine-backed checks.
+``GET /api/v1/healthz`` is the unauthenticated liveness check used by the
+container health check and ``docker compose`` (AC-0.1-5). It is intentionally
+*exempt* from the access-control middleware (no token required) so an operator
+can confirm the process is up before configuring the token.
+
+The real preflight contract — ``EmbeddedRuntime.get_capabilities()`` rendered as
+the §8.9 ``{ ready, checks:[{id,label,sub,ok}], blockers }`` envelope — lives in
+:mod:`app.api.preflight` (slice 0.2) and *is* gated by the token.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/api/v1", tags=["health"])
+# No prefix here: the ``/api/v1`` version prefix is owned by the single parent
+# router in :mod:`app.api`, which this router attaches to.
+router = APIRouter(tags=["health"])
 
 
 @router.get("/healthz")
 def healthz() -> dict[str, str]:
-    """Liveness probe — always ``ok`` once the app is up."""
+    """Liveness probe — always ``ok`` once the app is up (token-exempt)."""
     return {"status": "ok"}
-
-
-@router.get("/preflight")
-def preflight() -> dict[str, Any]:
-    """Scaffold preflight: returns the §8.9 envelope shape with no checks yet.
-
-    Slice 0.2 replaces the body with ``EmbeddedRuntime.get_capabilities()``
-    results (FR-01-6). The scaffold returns ``ready: true`` with an empty
-    ``checks``/``blockers`` so the M0 smoke (AC-0.1-5) can confirm the app is
-    reachable on ``127.0.0.1:8787`` before the real checks land.
-    """
-    return {"ready": True, "checks": [], "blockers": []}
