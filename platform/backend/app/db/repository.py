@@ -62,6 +62,11 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _labels_ensured_key(repo: str) -> str:
+    """``settings`` key for the per-repo "agent:* labels ensured" flag (FIX-2)."""
+    return f"labels_ensured::{repo.strip().lower()}"
+
+
 @dataclass(slots=True)
 class EventRecord:
     """One engine ``RuntimeEvent`` projected into a row for the append log.
@@ -92,6 +97,26 @@ class RunTotals:
     tokens_out: int = 0
     turns: int = 0
     duration_s: float | None = None
+
+
+@dataclass(slots=True)
+class IssueRow:
+    """One ``issues`` cache row for the batch upsert (PK ``(repo, num)``).
+
+    Carries exactly the columns :meth:`Repository.upsert_issue` writes so a whole
+    sync page can be upserted in **one** writer transaction (one ``BEGIN
+    IMMEDIATE``) via :meth:`Repository.upsert_issues`, instead of one transaction
+    per issue.
+    """
+
+    repo: str
+    num: int
+    title: str = ""
+    state: str = "backlog"
+    labels: Sequence[str] | None = None
+    workflow_id: str | None = None
+    agent: str | None = None
+    pr_num: int | None = None
 
 
 class Repository:
@@ -538,6 +563,25 @@ class Repository:
             value = rows[0]["value"]
             return None if value is None else str(value)
 
+    async def labels_ensured(self, repo: str) -> bool:
+        """True if the four ``agent:*`` labels were already ensured for ``repo``.
+
+        A ``settings`` flag (``labels_ensured::<repo>``) set once per repo after a
+        successful :func:`app.github.labels.ensure_agent_labels`, so routine
+        incremental ``POST /sync`` polls skip the four GitHub ``POST /labels``
+        create calls (GitHub secondary-rate-limit budget — they only matter on
+        first connect/sync, AC-4). A pure read through the ``settings`` KV.
+        """
+        return await self.get_setting(_labels_ensured_key(repo)) == "1"
+
+    async def mark_labels_ensured(self, repo: str) -> None:
+        """Record that the ``agent:*`` labels have been ensured for ``repo``.
+
+        Set after a successful ensure so subsequent syncs short-circuit the label
+        create calls. Idempotent (a plain ``settings`` upsert).
+        """
+        await self.set_setting(_labels_ensured_key(repo), "1")
+
     async def put_secret(self, key: str, ciphertext: str, *, expires_at: str | None = None) -> None:
         """Upsert **ciphertext** into the ``secrets`` table (encrypted at rest).
 
@@ -620,39 +664,64 @@ class Repository:
         agent: str | None = None,
         pr_num: int | None = None,
     ) -> None:
-        """Insert or update an ``issues`` cache row (PK ``(repo, num)``)."""
-        labels_json = json.dumps(list(labels or []))
-        updated_at = _utc_now_iso()
+        """Insert or update a single ``issues`` cache row (PK ``(repo, num)``).
+
+        Retained for single-issue callers; the sync import path batches a whole
+        page through :meth:`upsert_issues` (one writer transaction) instead.
+        """
+        params = _issue_upsert_params(
+            repo=repo,
+            num=num,
+            title=title,
+            state=state,
+            labels=labels,
+            workflow_id=workflow_id,
+            agent=agent,
+            pr_num=pr_num,
+        )
 
         async def _job(conn: aiosqlite.Connection) -> None:
-            await conn.execute(
-                """
-                INSERT INTO issues (
-                    repo, num, title, state, labels_json,
-                    workflow_id, agent, pr_num, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(repo, num) DO UPDATE SET
-                    title = excluded.title,
-                    state = excluded.state,
-                    labels_json = excluded.labels_json,
-                    workflow_id = excluded.workflow_id,
-                    agent = excluded.agent,
-                    pr_num = excluded.pr_num,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    repo,
-                    num,
-                    title,
-                    state,
-                    labels_json,
-                    workflow_id,
-                    agent,
-                    pr_num,
-                    updated_at,
-                ),
+            await conn.execute(_ISSUE_UPSERT_SQL, params)
+
+        await self._writer.submit(_job)
+
+    async def upsert_issues(self, rows: Sequence[IssueRow]) -> None:
+        """Batch-upsert a whole sync page of ``issues`` in ONE transaction (PERF).
+
+        Mirrors the :meth:`append_events` batch pattern: a **single**
+        ``_writer.submit`` job runs every ``INSERT … ON CONFLICT(repo, num) DO
+        UPDATE`` inside one ``BEGIN IMMEDIATE`` … ``COMMIT`` (INV-6) rather than
+        one transaction per issue, so importing N issues on a user-facing
+        ``POST /sync`` is one writer round-trip, not N. The per-row upsert
+        semantics (same ON CONFLICT columns/values) are **identical** to
+        :meth:`upsert_issue` — it reuses :data:`_ISSUE_UPSERT_SQL` — so the
+        idempotent/monotonic behavior is preserved. ``labels``-JSON encoding and
+        the ``updated_at`` stamp are computed **outside** the write lock (PERF).
+        """
+        if not rows:
+            return
+
+        # Build every row's bind-params up front (JSON encode + timestamp) so the
+        # writer's BEGIN IMMEDIATE transaction stays CPU-free; same column order
+        # and ON CONFLICT semantics as the single-row upsert.
+        param_sets = [
+            _issue_upsert_params(
+                repo=row.repo,
+                num=row.num,
+                title=row.title,
+                state=row.state,
+                labels=row.labels,
+                workflow_id=row.workflow_id,
+                agent=row.agent,
+                pr_num=row.pr_num,
             )
+            for row in rows
+        ]
+
+        async def _job(conn: aiosqlite.Connection) -> None:
+            # All upserts run inside the single BEGIN IMMEDIATE the writer opened
+            # — one transaction for the whole page (never a second writer).
+            await conn.executemany(_ISSUE_UPSERT_SQL, param_sets)
 
         await self._writer.submit(_job)
 
@@ -692,6 +761,57 @@ class Repository:
                 (repo, *status_list),
             )
             return [dict(r) for r in rows]
+
+
+#: The single ``issues`` upsert statement, shared by :meth:`Repository.upsert_issue`
+#: (one row) and :meth:`Repository.upsert_issues` (batched via ``executemany``), so
+#: the ON CONFLICT(repo, num) columns/values stay byte-identical between the two
+#: paths and the batch import cannot drift from the per-issue semantics.
+_ISSUE_UPSERT_SQL = """
+INSERT INTO issues (
+    repo, num, title, state, labels_json,
+    workflow_id, agent, pr_num, updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(repo, num) DO UPDATE SET
+    title = excluded.title,
+    state = excluded.state,
+    labels_json = excluded.labels_json,
+    workflow_id = excluded.workflow_id,
+    agent = excluded.agent,
+    pr_num = excluded.pr_num,
+    updated_at = excluded.updated_at
+"""
+
+
+def _issue_upsert_params(
+    *,
+    repo: str,
+    num: int,
+    title: str,
+    state: str,
+    labels: Sequence[str] | None,
+    workflow_id: str | None,
+    agent: str | None,
+    pr_num: int | None,
+) -> tuple[Any, ...]:
+    """Bind-params for one :data:`_ISSUE_UPSERT_SQL` row (column order of the INSERT).
+
+    Encodes ``labels`` to JSON and stamps ``updated_at`` here so both the single
+    and batch paths produce the same row, and so this CPU work happens **outside**
+    the writer's ``BEGIN IMMEDIATE`` lock for the batch path (PERF).
+    """
+    return (
+        repo,
+        num,
+        title,
+        state,
+        json.dumps(list(labels or [])),
+        workflow_id,
+        agent,
+        pr_num,
+        _utc_now_iso(),
+    )
 
 
 def _is_cost_excluded(agent: Any) -> bool:

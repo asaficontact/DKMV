@@ -28,6 +28,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+from app.db.repository import IssueRow
 from app.github.graphql import BoardIssue, BoardPage, read_board
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -96,20 +97,14 @@ class IssueWriter(Protocol):
     goes **through the repository layer** (the platform's single DB seam, INV-6)
     rather than issuing its own writes. :class:`app.db.repository.Repository`
     satisfies this structurally.
+
+    The import upserts a whole board page via :meth:`upsert_issues` (plural) so
+    the page lands in **one** writer transaction (one ``BEGIN IMMEDIATE``) rather
+    than N — the user-facing ``POST /sync`` no longer runs N round-trips through
+    the single writer (PERF).
     """
 
-    async def upsert_issue(
-        self,
-        *,
-        repo: str,
-        num: int,
-        title: str = ...,
-        state: str = ...,
-        labels: Sequence[str] | None = ...,
-        workflow_id: str | None = ...,
-        agent: str | None = ...,
-        pr_num: int | None = ...,
-    ) -> None: ...
+    async def upsert_issues(self, rows: Sequence[IssueRow]) -> None: ...
 
     async def set_setting(self, key: str, value: str) -> None: ...
 
@@ -211,9 +206,12 @@ async def sync_issues(
 
     Reads the board (paginated GraphQL, Done-bounded) — incrementally from the
     persisted ``since`` cursor when ``incremental`` (the default) — and upserts
-    each issue via :meth:`Repository.upsert_issue` (never raw SQL). The new
-    high-water ``since`` is persisted via the repository ``settings`` KV so the
-    next poll re-reads only changed issues (AC-3).
+    the **whole page in one transaction** via :meth:`Repository.upsert_issues`
+    (never raw SQL): a single writer ``BEGIN IMMEDIATE`` for the page rather than
+    one per issue, so importing N issues on the user-facing ``POST /sync`` is one
+    writer round-trip, not N (PERF). The new high-water ``since`` is persisted via
+    the repository ``settings`` KV so the next poll re-reads only changed issues
+    (AC-3).
 
     The derived board ``state`` written to the cache is the **label-only**
     derivation (closed→done included); the live authority-rule overlay (active-run
@@ -223,20 +221,23 @@ async def sync_issues(
     since = await writer.get_setting(_since_key(repo)) if incremental else None
     page = await read_board(client, repo, since=since, cache=cache)
 
-    for issue in page.issues:
-        state = derive_state(
-            labels=issue.labels,
-            is_closed=issue.is_closed,
-            merged_pr_num=issue.merged_pr_num,
-        )
-        await writer.upsert_issue(
+    rows = [
+        IssueRow(
             repo=repo,
             num=issue.num,
             title=issue.title,
-            state=state,
+            state=derive_state(
+                labels=issue.labels,
+                is_closed=issue.is_closed,
+                merged_pr_num=issue.merged_pr_num,
+            ),
             labels=list(issue.labels),
             pr_num=issue.merged_pr_num,
         )
+        for issue in page.issues
+    ]
+    # One batched upsert for the whole page → a single writer transaction (PERF).
+    await writer.upsert_issues(rows)
 
     if page.since_cursor:
         await writer.set_setting(_since_key(repo), page.since_cursor)

@@ -32,7 +32,7 @@ from app.db.repository import Repository
 from app.github.client import GitHubAuthError, GitHubError
 from app.github.graphql import BoardPage
 from app.github.hash_cache import HashCache
-from app.github.labels import ensure_agent_labels
+from app.github.labels import AGENT_LABEL_NAMES, EnsureLabelsResult, ensure_agent_labels
 from app.github.provider import get_github_client
 from app.github.sync import (
     build_board_list,
@@ -114,26 +114,61 @@ def _map_github_error(exc: Exception) -> ApiError:
     )
 
 
+def _query_flag(request: Request, name: str) -> bool:
+    """Read a truthy boolean query flag (``?<name>=true|1|yes``)."""
+    raw = request.query_params.get(name)
+    return raw is not None and raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _ensure_labels_once(
+    repository: Repository,
+    client: object,
+    repo: str,
+    *,
+    force: bool,
+) -> EnsureLabelsResult:
+    """Ensure the four ``agent:*`` labels at most once per repo (FIX-2 / AC-4).
+
+    On the first sync (no ``labels_ensured::<repo>`` flag) — or when ``force`` is
+    set (the explicit re-ensure path) — call :func:`ensure_agent_labels` (the four
+    idempotent GitHub ``POST /labels`` creates) and record the flag on success, so
+    routine re-syncs skip the create calls and stop spending GitHub's
+    secondary-rate-limit budget on a no-op. AC-4 is preserved: the labels are still
+    created on first connect/sync if absent. When already ensured and not forced,
+    return an all-``existing`` result without touching GitHub.
+    """
+    if not force and await repository.labels_ensured(repo):
+        return EnsureLabelsResult(created=(), existing=tuple(sorted(AGENT_LABEL_NAMES)))
+    result = await ensure_agent_labels(client, repo)
+    await repository.mark_labels_ensured(repo)
+    return result
+
+
 @router.post("/projects/{owner}/{name}/sync")
 async def sync_project(owner: str, name: str, request: Request) -> dict[str, Any]:
     """Import a repo's issues into the cache + ensure the ``agent:*`` labels (T037).
 
     The Connect "Open project" action (FR-01-5): a state-changing ``POST`` behind
-    the access-control middleware (INV-1). It first **ensures the four ``agent:*``
-    labels exist** on the repo (created on connect if absent, idempotently — §8.1,
-    AC-4), then reads the board (paginated GraphQL, Done-bounded, incremental from
-    the persisted ``since`` cursor) and upserts each issue **through the repository
-    layer** (never raw SQL — AC-3). Returns the import count + the new ``since``
-    cursor.
+    the access-control middleware (INV-1). On the **first** sync for a repo it
+    **ensures the four ``agent:*`` labels exist** (created on connect if absent,
+    idempotently — §8.1, AC-4) and records a ``labels_ensured::<repo>`` flag;
+    subsequent incremental polls **skip** the four GitHub ``POST /labels`` create
+    calls (they spend secondary-rate-limit budget for no effect once the labels
+    exist — FIX-2). A ``?ensure_labels=true`` query forces a re-ensure. It then
+    reads the board (paginated GraphQL, Done-bounded, incremental from the
+    persisted ``since`` cursor) and upserts the page **through the repository
+    layer** in one writer transaction (never raw SQL — AC-3). Returns the import
+    count + the new ``since`` cursor.
     """
     repo = f"{owner}/{name}"
     settings = request.app.state.settings
     client = await get_github_client(request.app, settings)
     cache = _board_cache(request)
+    force_ensure = _query_flag(request, "ensure_labels")
 
     try:
         async with _repository(request) as repository:
-            labels_result = await ensure_agent_labels(client, repo)
+            labels_result = await _ensure_labels_once(repository, client, repo, force=force_ensure)
             sync_result = await sync_issues(client, repo, writer=repository, cache=cache)
     except (GitHubAuthError, GitHubError) as exc:
         raise _map_github_error(exc) from exc

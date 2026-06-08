@@ -14,8 +14,10 @@ in-process cache.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
+from app.db.repository import IssueRow
 from app.github.graphql import BoardPage, read_board
 from app.github.hash_cache import HashCache
 from app.github.labels import AGENT_LABEL_NAMES, ensure_agent_labels
@@ -106,17 +108,38 @@ class FakeClient:
 
 
 class RecordingWriter:
-    """Captures upsert_issue / settings writes (the repository write seam)."""
+    """Captures upsert_issues / settings writes (the repository write seam).
+
+    ``upsert_issues`` is the **batch** seam :func:`sync_issues` now uses — one
+    call per page. ``upsert_batches`` records each page's rows so a test can
+    assert the whole page was written in a single batch (one writer transaction);
+    ``issues`` flattens every row for the per-issue assertions.
+    """
 
     def __init__(self, since: str | None = None) -> None:
         self.issues: list[dict[str, Any]] = []
+        self.upsert_batches: list[list[IssueRow]] = []
         self.settings: dict[str, str] = {}
         if since is not None:
             self.settings.setdefault("_seed", since)
         self._seed_since = since
 
-    async def upsert_issue(self, **kwargs: Any) -> None:
-        self.issues.append(kwargs)
+    async def upsert_issues(self, rows: Sequence[IssueRow]) -> None:
+        batch = list(rows)
+        self.upsert_batches.append(batch)
+        self.issues.extend(
+            {
+                "repo": r.repo,
+                "num": r.num,
+                "title": r.title,
+                "state": r.state,
+                "labels": list(r.labels or []),
+                "workflow_id": r.workflow_id,
+                "agent": r.agent,
+                "pr_num": r.pr_num,
+            }
+            for r in batch
+        )
 
     async def set_setting(self, key: str, value: str) -> None:
         self.settings[key] = value
@@ -398,6 +421,10 @@ async def test_sync_issues_writes_through_repository_and_persists_cursor() -> No
     by_num = {i["num"]: i for i in writer.issues}
     assert by_num[10]["state"] == "queued"
     assert by_num[3]["state"] == "done"
+    # PERF (FIX-1): the whole page is written in a SINGLE batch upsert (one writer
+    # transaction), not one upsert call per issue.
+    assert len(writer.upsert_batches) == 1
+    assert {r.num for r in writer.upsert_batches[0]} == {10, 3}
     # The high-water since cursor is persisted for the next incremental poll.
     assert writer.settings["sync_since::o/r"] == "2026-06-08T12:00:00Z"
 

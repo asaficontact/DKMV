@@ -172,6 +172,47 @@ def test_sync_imports_issues_and_creates_labels(tmp_path: Path) -> None:
     assert resp2.json()["labels"]["created"] == []
 
 
+def test_resync_does_not_recreate_labels(tmp_path: Path) -> None:
+    """A second sync skips the four GitHub create-label calls (FIX-2).
+
+    Once the ``agent:*`` labels are ensured on first connect, routine incremental
+    polls must NOT re-issue ``POST /labels`` (GitHub secondary-rate-limit budget).
+    """
+    client, _url = _client(tmp_path / "t.db")
+    fake = FakeClient(_one_page([_issue_node(10)]))
+    set_github_client(client.app, fake)  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck client
+
+    r1 = client.post("/api/v1/projects/o/r/sync", headers=auth_headers())
+    assert r1.status_code == 200
+    assert len(fake.label_calls) == 4  # all four created on first sync (AC-4)
+
+    fake.label_calls.clear()
+    r2 = client.post("/api/v1/projects/o/r/sync", headers=auth_headers())
+    assert r2.status_code == 200
+    # The guard short-circuited: no create_label call on the second sync.
+    assert fake.label_calls == []
+    # Labels still reported as present (idempotent shape preserved).
+    assert set(r2.json()["labels"]["existing"]) == {
+        "agent:queued",
+        "agent:in-progress",
+        "agent:paused",
+        "agent:review",
+    }
+
+
+def test_forced_ensure_recreates_labels(tmp_path: Path) -> None:
+    """``?ensure_labels=true`` forces a re-ensure even after the flag is set (FIX-2)."""
+    client, _url = _client(tmp_path / "t.db")
+    fake = FakeClient(_one_page([_issue_node(10)]))
+    set_github_client(client.app, fake)  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck client
+
+    client.post("/api/v1/projects/o/r/sync", headers=auth_headers())
+    fake.label_calls.clear()
+    r = client.post("/api/v1/projects/o/r/sync?ensure_labels=true", headers=auth_headers())
+    assert r.status_code == 200
+    assert len(fake.label_calls) == 4  # forced path re-issues the ensure
+
+
 # ── AC-5: board list derivation + authority rule ─────────────────────────────
 
 
