@@ -33,6 +33,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
+from app.executor.egress import EgressPolicy
 from app.executor.interface import Executor, OnPause, RunSpec, Signal, StreamedEvent
 from app.executor.runtime_policy import resolve_runtime, runtime_docker_args
 
@@ -76,7 +77,16 @@ class LocalDockerExecutor(Executor):
             allow_weaker_isolation=allow_weaker_isolation,
             check_available=check_runtime_available,
         )
-        logger.info("LocalDockerExecutor sandbox runtime resolved to %r", self._runtime)
+        # Default-on, network-enforced egress allowlist (INV-3 / §8.6): GitHub +
+        # model APIs only, pinned DNS. Derived from settings.EGRESS_ALLOWLIST and
+        # applied at container start via the network-confinement Docker args; an
+        # empty allowlist falls back to the secure defaults (never allow-all).
+        self._egress: EgressPolicy = EgressPolicy.from_settings(settings)
+        logger.info(
+            "LocalDockerExecutor sandbox runtime=%r, egress allowlist=%d host(s)",
+            self._runtime,
+            len(self._egress.hosts),
+        )
 
     @property
     def runtime(self) -> str:
@@ -87,6 +97,23 @@ class LocalDockerExecutor(Executor):
     def runtime_docker_args(self) -> list[str]:
         """The Docker run args pinning the sandbox runtime (``--runtime=runsc``)."""
         return runtime_docker_args(self._runtime)
+
+    @property
+    def egress(self) -> EgressPolicy:
+        """The default-on egress allowlist applied to every sandbox (INV-3)."""
+        return self._egress
+
+    @property
+    def sandbox_docker_args(self) -> list[str]:
+        """All host-side security Docker args: runtime + egress confinement.
+
+        Combines the gVisor ``--runtime`` flag (INV-3) with the egress
+        network-confinement + pinned-DNS flags (INV-3 / §8.6) so the executor
+        applies the full sandbox-isolation posture in one place. (Threading these
+        the rest of the way into the engine's ``SandboxManager.docker_args`` is
+        the §11.3 engine ask; the platform owns the policy + the flags here.)
+        """
+        return [*self.runtime_docker_args, *self._egress.docker_egress_args()]
 
     async def start(self, spec: RunSpec, *, on_pause: OnPause | None = None) -> RunHandle:
         """Launch ``spec`` against local Docker and return the engine handle.

@@ -16,6 +16,12 @@ Public surface:
 
 from __future__ import annotations
 
+from app.executor.egress import (
+    DEFAULT_PINNED_DNS,
+    EGRESS_NETWORK_NAME,
+    EgressPolicy,
+    proxy_acl_lines,
+)
 from app.executor.interface import (
     Executor,
     OnPause,
@@ -35,9 +41,12 @@ from app.executor.runtime_policy import (
 )
 
 __all__ = [
+    "DEFAULT_PINNED_DNS",
+    "EGRESS_NETWORK_NAME",
     "GVISOR_RUNTIME",
     "RUNSC_UNAVAILABLE_WARNING",
     "WEAKER_ISOLATION_WARNING",
+    "EgressPolicy",
     "Executor",
     "LocalDockerExecutor",
     "OnPause",
@@ -45,6 +54,7 @@ __all__ = [
     "Signal",
     "StreamedEvent",
     "WeakerIsolationError",
+    "proxy_acl_lines",
     "resolve_runtime",
     "runtime_available",
     "runtime_docker_args",

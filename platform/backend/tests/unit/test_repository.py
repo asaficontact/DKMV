@@ -129,8 +129,10 @@ async def test_append_events_is_single_statement(repo: Repository) -> None:
     # per-row inside the writer job (no `conn.execute(... INSERT INTO events`).
     assert "INSERT INTO events" in src
     # Payload JSON is serialized before submit() (hoisted out of the lock), not
-    # inside a `conn.execute` call's argument tuple.
-    assert "json.dumps(rec.payload)" in src
+    # inside a `conn.execute` call's argument tuple. The serialized value is the
+    # redacted payload (redact-before-persist, INV-4 / slice 0.5).
+    assert "json.dumps(redacted_payload)" in src
+    assert "self._redactor.payload(rec.payload)" in src
 
     run_id = await _seed_run(repo)
     ids = await repo.append_events(

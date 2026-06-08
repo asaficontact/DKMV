@@ -157,9 +157,36 @@ list and defaults. Highlights:
 | `MAX_CONCURRENT_RUNS` | `3` | Dispatch concurrency cap. |
 | `DAILY_SPEND_CAP` | _(none)_ | Daily USD cap; unset disables it. |
 | `EGRESS_ALLOWLIST` | GitHub + model APIs | Default-on network allowlist (INV-3). |
+| `DKMV_SECRET_KEY` | _(none)_ | Fernet key for the encrypted `SecretStore` (INV-4); source from the OS keychain / a sealed secret in prod. Generate one with `python -c "from app.secrets import SecretStore; print(SecretStore.generate_key())"`. |
 
 Secrets live in the encrypted `SecretStore`, not plain env, in real deployments
 (PRD §8.6).
+
+### Secrets & exfiltration containment (INV-3 / INV-4, slice 0.5)
+
+The sandbox-security capstone (`backend/app/secrets/` + `backend/app/executor/egress.py`):
+
+- **Egress allowlist (network-enforced, default-on).** `EGRESS_ALLOWLIST` is
+  applied at the **network layer** — the sandbox joins an internal,
+  egress-filtered Docker network (`--network=dkmv-egress`) with DNS pinned to a
+  trusted resolver, so the agent cannot opt out (no honor-system `endsWith`
+  bypass). An empty allowlist falls back to the GitHub + model-API defaults,
+  never allow-all. See `EgressPolicy`.
+- **Encrypted `SecretStore` + file-mount injection.** Secrets are encrypted at
+  rest (Fernet) and injected into a run as a **read-only file mount under
+  `/run/secrets/`**, never as an environment variable (keeps them out of
+  `docker inspect` / crash logs, §8.6).
+- **Repo-scoped, ≤1 hr GitHub token.** `GitHubTokenMinter` mints a token scoped
+  to exactly the one target repo with a ≤1 hr TTL; `MintedToken.authorize_push`
+  refuses a second repo even under prompt injection.
+- **Redact-before-persist.** Every event payload is scrubbed for known secret
+  shapes (`sk-ant-…`, `ghp_…`, `github_pat_…`, `ANTHROPIC_API_KEY=…`) **and** the
+  platform's own credential values *before* it reaches the append-only `events`
+  table (a leak there is permanent + replayable). The same `RedactingLogFilter`
+  scrubs structured logs. This is a backstop, not the boundary — the egress
+  allowlist + repo-scoped token are the actual containment controls.
+
+Run the security baseline: `cd backend && pytest -q -k security_baseline`.
 
 ## Running
 

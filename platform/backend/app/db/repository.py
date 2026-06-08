@@ -42,6 +42,7 @@ import aiosqlite
 
 from app.db.connection import connect
 from app.db.writer import Writer
+from app.secrets.redaction import Redactor
 
 #: Agent name whose runs are excluded from spend (FR-06-1a; INV-7). Codex
 #: reports $0 cost and supports no budget cap — its tokens count, its cost does
@@ -102,9 +103,16 @@ class Repository:
     WAL's normal read-snapshot semantics.
     """
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, *, redactor: Redactor | None = None) -> None:
         self._database_url = database_url
         self._writer = Writer(database_url)
+        # Redact-before-persist guard for the append-only event log (INV-4 /
+        # §8.6). A leak into ``events`` is permanent + replayable, so every
+        # payload is scrubbed HERE, in the single write path, before it can reach
+        # the table. Defaults to a pattern-only redactor; callers pass a
+        # settings-seeded one (Redactor.from_settings) to also scrub the concrete
+        # credential values the platform holds.
+        self._redactor = redactor or Redactor()
         self._started = False
         # Long-lived WAL read-connection pool (PERF). Connections are created
         # lazily on first acquire (up to READ_POOL_SIZE), then reused — so the
@@ -299,11 +307,17 @@ class Repository:
         if not records:
             return []
 
-        # Serialize payload JSON OUTSIDE the write lock (PERF: keep the writer's
-        # BEGIN IMMEDIATE transaction CPU-free). Each row contributes the eight
-        # column values in the column order of the INSERT below.
+        # Redact-before-persist (INV-4 / §8.6): scrub every payload for known
+        # secret patterns + the platform's own credential values BEFORE it is
+        # serialized toward the append-only ``events`` table. This runs here, in
+        # the single write path, so no caller can bypass it; a leak into
+        # ``events`` would be permanent + replayable. Redaction + JSON-serialize
+        # both happen OUTSIDE the write lock (PERF: keep the writer's BEGIN
+        # IMMEDIATE transaction CPU-free). Each row contributes the eight column
+        # values in the column order of the INSERT below.
         params: list[Any] = []
         for rec in records:
+            redacted_payload = self._redactor.payload(rec.payload)
             params.extend(
                 (
                     rec.run_id,
@@ -313,7 +327,7 @@ class Repository:
                     rec.task_index,
                     rec.cost_usd,
                     rec.agent,
-                    json.dumps(rec.payload),
+                    json.dumps(redacted_payload),
                 )
             )
         row_placeholder = "(?, ?, ?, ?, ?, ?, ?, ?)"
@@ -523,6 +537,50 @@ class Repository:
                 return None
             value = rows[0]["value"]
             return None if value is None else str(value)
+
+    async def put_secret(self, key: str, ciphertext: str, *, expires_at: str | None = None) -> None:
+        """Upsert **ciphertext** into the ``secrets`` table (encrypted at rest).
+
+        The plaintext NEVER reaches this layer — the :class:`SecretStore` owns
+        encrypt/decrypt and hands us only the Fernet ciphertext (INV-4 / §8.6).
+        ``expires_at`` carries the ≤1 hr TTL for the GitHub run token.
+        """
+        created_at = _utc_now_iso()
+
+        async def _job(conn: aiosqlite.Connection) -> None:
+            await conn.execute(
+                """
+                INSERT INTO secrets (key, ciphertext, created_at, expires_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    ciphertext = excluded.ciphertext,
+                    created_at = excluded.created_at,
+                    expires_at = excluded.expires_at
+                """,
+                (key, ciphertext, created_at, expires_at),
+            )
+
+        await self._writer.submit(_job)
+
+    async def get_secret(self, key: str) -> tuple[str, str | None] | None:
+        """Read ``(ciphertext, expires_at)`` for ``key``, or ``None`` if absent.
+
+        Returns the ciphertext as-stored; the :class:`SecretStore` decrypts it.
+        Expiry is enforced by the caller (the store) so the read path stays a
+        pure projection.
+        """
+        async with self._read_conn() as conn:
+            rows = list(
+                await conn.execute_fetchall(
+                    "SELECT ciphertext, expires_at FROM secrets WHERE key = ?",
+                    (key,),
+                )
+            )
+            if not rows:
+                return None
+            row = rows[0]
+            expires = row["expires_at"]
+            return str(row["ciphertext"]), (None if expires is None else str(expires))
 
     async def upsert_project(
         self,
