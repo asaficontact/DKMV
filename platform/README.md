@@ -69,20 +69,67 @@ Pin by digest for production (PRD §8.6).
 ### 3. Brokered Docker socket + platform-owned output dir
 
 The backend reaches Docker through a **method-allowlisted, non-root socket
-proxy** (or rootless Docker / Sysbox) — **never** a raw
-`-v /var/run/docker.sock` mount (the Docker API is root-equivalent). The
-engine's `output_dir` points at a **platform-owned** volume (`OUTPUT_DIR`),
-which is where runs/artifacts land. The brokered-socket wiring lands in the
-executor + compose work of later Phase 0 slices.
+proxy** — **never** a raw `-v /var/run/docker.sock` mount (the Docker API is
+root-equivalent and "a request to the API ≈ code execution on the host"; a
+read-only mount does not help). The engine's `output_dir` points at a
+**platform-owned** volume (`OUTPUT_DIR`), where runs/artifacts land.
+
+`docker-compose.yml` ships the **`tecnativa/docker-socket-proxy`** service
+(`docker-proxy`) as the default broker:
+
+- `/var/run/docker.sock` is mounted **only** into `docker-proxy` (read-only) —
+  it appears on exactly one service and **never** on the `backend` service.
+- The proxy allow-lists only the verbs the orchestrator needs
+  (`CONTAINERS`/`IMAGES`/`NETWORKS`/`INFO`/`VERSION` + `POST`) and **denies** the
+  dangerous surfaces (`EXEC`, `SECRETS`, `SWARM`, `SYSTEM`, `VOLUMES`, `BUILD`,
+  …).
+- The backend talks to it via `DOCKER_HOST=tcp://docker-proxy:2375` over an
+  **internal-only** Compose network (`docker-broker`, `internal: true`) — the
+  proxy is never published to the host.
+
+**Alternatives** (also valid per §8.8): run **rootless Docker** or **Sysbox** on
+the host and point `DOCKER_HOST` at the rootless socket — both avoid exposing the
+root socket. Pick one; do not raw-mount the socket into the backend.
 
 ## Sandbox isolation (binding — NFR-SEC-4)
 
 Autonomous untrusted-code execution runs under **gVisor (`runsc`)** by default
 (`SANDBOX_RUNTIME=runsc`). Plain `runc` shares the host kernel and is *not* a
-security boundary for this workload. If `runsc` is unavailable the platform
-falls back only with an explicit **weaker-isolation warning** (documented in the
-executor slice, OQ-6). microVM (Firecracker/Kata) is the stronger tier for the
-cloud/multi-tenant path.
+security boundary for this workload. microVM (Firecracker/Kata) is the stronger
+tier for the cloud/multi-tenant path.
+
+The `Executor` (`backend/app/executor/`) is the single seam that owns runtime
+policy: at construction `LocalDockerExecutor` resolves the effective runtime from
+`SANDBOX_RUNTIME` via `app.executor.runtime_policy.resolve_runtime()` and pins
+the container to it with the `--runtime=<name>` Docker flag. The orchestrator
+never calls Docker directly — all container ops go through the `Executor`
+interface (`start`/`stream`/`signal`/`cleanup`; `stream` is re-attachable by
+`run_id` per ADR-P008).
+
+### Weaker-isolation opt-in + warning (OQ-6)
+
+gVisor is the default and the secure posture is **fail-closed**:
+
+- **`runsc` selected (default) and available** → used silently.
+- **`runsc` selected but the runtime is unavailable on the host** (some Docker
+  Desktop hosts lack `runsc`) → the executor logs the
+  **`SANDBOX ISOLATION WARNING: SANDBOX_RUNTIME=runsc but the runsc (gVisor)
+  runtime is unavailable…`** warning and **raises `WeakerIsolationError`** so the
+  backend will not silently downgrade to `runc`. To deliberately accept weaker
+  isolation on a trusted single-user host, construct the executor with
+  `allow_weaker_isolation=True` (it then logs the weaker-isolation warning and
+  falls back to `runc`).
+- **A non-`runsc` runtime selected explicitly** (e.g. `SANDBOX_RUNTIME=runc`) is
+  itself the documented **weaker-isolation opt-in**: the executor logs
+  **`SANDBOX ISOLATION WARNING: running sandboxes under a non-runsc runtime is a
+  weaker-isolation opt-in…`** and honors the choice. Only do this on a trusted,
+  single-user host; you lose the primary kernel-isolation boundary against
+  prompt-injected untrusted agent code (R-13/R-14).
+
+Install gVisor and enable it as a Docker runtime so `runsc` is available; on the
+host, setting the daemon's `default-runtime: runsc` (and/or the
+`DOCKER_DEFAULT_RUNTIME` env wired in `docker-compose.yml`) makes gVisor the
+default for engine-launched sandbox containers.
 
 ## App network / auth (binding — NFR-SEC-2)
 
