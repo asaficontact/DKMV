@@ -17,14 +17,30 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Copy the engine (locked, consumed in-process) and the platform backend.
+# The engine's pyproject.toml declares `readme = "README.md"`, which lives at
+# the repo-root alongside pyproject.toml — copy it too, or hatchling's metadata
+# generation fails with `OSError: Readme file does not exist`.
 COPY dkmv/ /src/dkmv/
 COPY pyproject.toml /src/
+COPY README.md /src/
 COPY platform/backend/ /app/
+# The backend's pyproject.toml declares `readme = "../README.md"` (i.e.
+# platform/README.md); place it where `/app/pyproject.toml` resolves `..`.
+COPY platform/README.md /README.md
 
-# Editable-install the engine + the backend. The engine sources live at /src.
-RUN pip install --upgrade pip \
-    && pip install -e /src \
-    && pip install -e /app
+# Editable-install the engine + the backend.
+#
+# Pin the build toolchain explicitly and disable PEP 517 build isolation for the
+# engine so its UNPINNED `requires = ["hatchling"]` build backend cannot resolve
+# an arbitrary (possibly PEP-660-incompatible) hatchling inside an ephemeral
+# overlay. With a modern pip (>=23.1) defaulting to PEP 660 editable installs,
+# we pre-install a known-good hatchling/editables here and reuse it via
+# --no-build-isolation. This is a PLATFORM-SIDE fix only — the locked engine
+# (dkmv/) and its pyproject.toml are never modified (INV-13).
+RUN pip install --no-cache-dir "pip==24.3.1" \
+    && pip install --no-cache-dir "hatchling==1.27.0" "editables>=0.5" \
+    && pip install --no-cache-dir --no-build-isolation -e /src \
+    && pip install --no-cache-dir --no-build-isolation -e /app
 
 # The backend reaches Docker through a BROKERED socket (method-allowlisted proxy
 # / rootless / Sysbox), wired in docker-compose.yml — never a raw

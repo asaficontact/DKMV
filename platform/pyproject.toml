@@ -1,0 +1,47 @@
+# DKMV Platform — repo-root project descriptor (PRD §8.8 layout).
+#
+# This file exists at the `platform/` root because PRD §8.8 lists `pyproject.toml`
+# among the platform-root artifacts (alongside `docker-compose.yml`,
+# `Dockerfile.*`, and `alembic/`). It is a thin, installable wrapper over the
+# backend package: it builds the same `app` package that lives under
+# `backend/`, so `pip install -e platform/` is a valid alternative entrypoint.
+#
+# The CANONICAL, in-directory dev/test/CI flow remains the backend project:
+#
+#     cd platform/backend
+#     pip install -e . && pip install -e ../../   # backend + locked dkmv engine
+#     ruff check . && mypy app && pytest -q
+#     alembic upgrade head
+#
+# `platform/backend/pyproject.toml` is the source of truth for the tool config
+# (ruff / mypy / pytest / coverage) and the dependency set; the commands above
+# read it because they run from `backend/`. Keep dependencies in sync there.
+# This mirrors the `platform/alembic/` pointer to `platform/backend/alembic/`.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dkmv-platform"
+version = "0.1.0"
+description = "DKMV Platform — self-hostable FastAPI control plane wrapping the locked DKMV engine"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+# The runtime dependency set is declared (and kept current) in
+# `backend/pyproject.toml`; this root project pulls in the backend so a
+# `pip install -e platform/` resolves the same tree.
+dependencies = [
+    "dkmv-platform-backend",
+]
+
+[tool.hatch.build.targets.wheel]
+# Build the backend `app` package from its on-disk location so this root
+# project and `backend/pyproject.toml` ship the same importable module.
+packages = ["backend/app"]
+
+[tool.uv.sources]
+# Resolve the sibling projects editable from this root.
+dkmv-platform-backend = { path = "backend", editable = true }
+dkmv = { path = "..", editable = true }

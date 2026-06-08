@@ -126,6 +126,25 @@ class Settings(BaseSettings):
         ),
     )
 
+    @field_validator(
+        "HOST_MEMORY_BUDGET",
+        "DAILY_SPEND_CAP",
+        mode="before",
+    )
+    @classmethod
+    def _empty_str_to_none(cls, value: object) -> object:
+        """Coerce empty/whitespace-only env values to ``None`` for optional keys.
+
+        ``docker compose`` passes unset optional keys as empty strings via the
+        ``"${VAR:-}"`` default pattern (see ``docker-compose.yml``). Without this
+        an empty ``DAILY_SPEND_CAP`` fails ``float`` parsing and the container
+        crash-loops, so ``docker compose up`` never answers preflight (AC-0.1-5).
+        Empty means "unset" for these optional fields.
+        """
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
     @field_validator("DKMV_PLATFORM_BIND")
     @classmethod
     def _validate_bind(cls, value: str) -> str:

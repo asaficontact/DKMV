@@ -125,5 +125,24 @@ def test_invalid_bind_rejected() -> None:
         _settings(DKMV_PLATFORM_BIND="127.0.0.1:notaport")
 
 
+def test_empty_optional_env_coerced_to_none() -> None:
+    """Empty-string env (compose `"${VAR:-}"`) on optional keys becomes None.
+
+    docker compose always passes DAILY_SPEND_CAP as "" when unset; without the
+    before-validator this fails float parsing and the container crash-loops, so
+    `docker compose up` never answers preflight (AC-0.1-5).
+    """
+    s = _settings(DAILY_SPEND_CAP="", HOST_MEMORY_BUDGET="   ")
+    assert s.DAILY_SPEND_CAP is None
+    assert s.HOST_MEMORY_BUDGET is None
+
+
+def test_optional_numeric_env_still_parsed_when_set() -> None:
+    """A real value on an optional numeric key still parses normally."""
+    s = _settings(DAILY_SPEND_CAP="25.50", HOST_MEMORY_BUDGET="32g")
+    assert s.DAILY_SPEND_CAP == 25.50
+    assert s.HOST_MEMORY_BUDGET == "32g"
+
+
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()

@@ -154,6 +154,14 @@ platform/
   backend/   app/ (FastAPI: api/ orchestrator/ github/ executor/ db/ sse/ secrets/ security/)
   frontend/  (React + Vite + TypeScript; design tokens ported from the prototype)
   docker-compose.yml   Dockerfile.backend   Dockerfile.frontend
-  README.md   alembic/
+  README.md   alembic/   pyproject.toml
   backend/pyproject.toml
 ```
+
+`pyproject.toml` at the `platform/` root is a thin, installable wrapper over the
+backend package (it builds the same `app` module under `backend/`), present to
+match the PRD §8.8 repo layout. The **canonical** dev/test/CI flow stays in
+`backend/`: `cd platform/backend && ruff check . && mypy app && pytest -q` and
+`alembic upgrade head` all read `backend/pyproject.toml` (the source of truth for
+tool config + dependencies), mirroring how `alembic/` points at
+`backend/alembic/`.
