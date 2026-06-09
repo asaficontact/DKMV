@@ -46,6 +46,22 @@ RUN pip install --no-cache-dir "pip==24.3.1" \
 # / rootless / Sysbox), wired in docker-compose.yml — never a raw
 # `-v /var/run/docker.sock` mount (the Docker API is root-equivalent). The
 # broker service lands in the 0.4-executor slice.
+#
+# ── Supply-chain: SBOM generate + scan + digest pin (§8.6, ADR-P005, AC-13) ──
+# Both the platform backend image (built here) AND the `dkmv-sandbox` image the
+# engine launches runs in are subject to an SBOM generate + vulnerability scan
+# (Trivy / Docker Scout) before release, and are consumed BY DIGEST, never by a
+# mutable `:latest` tag. The scan + digest-pin step is `platform/scripts/sbom-scan.sh`:
+#   bash platform/scripts/sbom-scan.sh dkmv-sandbox:build   # SBOM + scan
+#   eval "$(bash platform/scripts/sbom-scan.sh --print-digest-env)"  # -> DKMV_IMAGE=dkmv-sandbox@sha256:<digest>
+# CI wires the script as a gate (fail on HIGH/CRITICAL). docker-compose.yml pins
+# the sandbox image to `dkmv-sandbox@sha256:<digest>` (never `:latest`). See
+# platform/README.md + platform/docs/setup.md for the full build → scan → pin flow.
+#
+# Pinning the BASE image by digest as well (defense-in-depth): replace the
+# `python:3.12-slim` tag above with `python:3.12-slim@sha256:<digest>` resolved by
+# the same scan script in a hardened build (documented in setup.md; left as the
+# tag here so a fresh checkout still builds without a pre-resolved digest).
 
 EXPOSE 8787
 

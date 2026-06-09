@@ -55,16 +55,33 @@ python -c "import dkmv.runtime; from dkmv.runtime import EmbeddedRuntime"
 python -c "import sys; assert sys.version_info[:2] >= (3, 12)"
 ```
 
-### 2. Build the sandbox image
+### 2. Build the sandbox image → SBOM scan → pin by digest (binding — §8.6, AC-13)
 
 The preflight check only *checks* for this image; nothing auto-builds it, so
 build it once from the engine's image context. From the **repo root**:
 
 ```bash
-docker build -t dkmv-sandbox:latest dkmv/images/
+docker build -t dkmv-sandbox:build dkmv/images/
 ```
 
-Pin by digest for production (PRD §8.6).
+Then **generate + scan an SBOM** and **pin the image by digest** (never the
+mutable `:latest` tag — the sandbox runs autonomous, attacker-influenceable
+agents, so a re-pushed tag could silently swap the image under a run):
+
+```bash
+# SBOM (CycloneDX) + vulnerability scan (Trivy or Docker Scout); fails on HIGH/CRITICAL.
+bash platform/scripts/sbom-scan.sh dkmv-sandbox:build
+
+# Resolve + record the immutable content digest into your deploy .env:
+eval "$(bash platform/scripts/sbom-scan.sh --print-digest-env dkmv-sandbox:build)"
+echo "DKMV_IMAGE=$DKMV_IMAGE" >> platform/.env     # -> dkmv-sandbox@sha256:<digest>
+```
+
+`docker-compose.yml` consumes `DKMV_IMAGE` **by digest** (`dkmv-sandbox@sha256:…`)
+and never falls back to `:latest`; CI wires `sbom-scan.sh` as a release gate. In
+an environment without a real built image, the script emits the documented
+all-zero **placeholder** digest so the pin-by-digest contract still holds — replace
+it with the real digest before a production deploy.
 
 ### 3. Brokered Docker socket + platform-owned output dir
 
@@ -152,12 +169,23 @@ list and defaults. Highlights:
 | `DKMV_PLATFORM_BIND` | `127.0.0.1:8787` | Loopback bind (INV-1). |
 | `DATABASE_URL` | `sqlite:///./data/dkmv.db` | SQLite (WAL); Postgres later. |
 | `OUTPUT_DIR` | `./data/outputs` | Platform-owned runs/artifacts volume. |
-| `DKMV_IMAGE` | `dkmv-sandbox:latest` | Sandbox image (pin by digest in prod). |
+| `DKMV_IMAGE` | `dkmv-sandbox@sha256:…` | Sandbox image — **pin by digest** in the release/compose path, never `:latest` (§8.6, AC-13). The in-app dev default is the `:latest` tag; the digest is resolved by `scripts/sbom-scan.sh`. |
 | `SANDBOX_RUNTIME` | `runsc` | gVisor by default (INV-3). |
-| `MAX_CONCURRENT_RUNS` | `3` | Dispatch concurrency cap. |
-| `DAILY_SPEND_CAP` | _(none)_ | Daily USD cap; unset disables it. |
+| `MAX_CONCURRENT_RUNS` | `3` | Dispatch concurrency cap — the `asyncio.Semaphore` ceiling (5.1 / NFR-SCALE-1). |
+| `HOST_MEMORY_BUDGET` | _(none)_ | Total host memory for aggregate admission, e.g. `32g`; a run is denied + re-queued if `Σ container memory` would exceed it (5.1 / §8.2). Unset disables the memory dimension. |
+| `DAILY_SPEND_CAP` | _(none)_ | Daily USD cap; a run is denied + re-queued once today's **Codex-excluded** segment-sum spend exceeds it (5.1 / INV-8). Unset disables it. |
+| `PER_STATE_CAPS` | _(empty)_ | Optional per-tick dispatch throttle per `agent:*` state, e.g. `agent:queued:2` (5.1). |
 | `EGRESS_ALLOWLIST` | GitHub + model APIs | Default-on network allowlist (INV-3). |
+| `DKMV_PROJECT_ROOT` | _(none)_ | Optional local working copy of the connected project (the dir holding `.dkmv/` — the `components.json` registry). Lets the Workflows viewer + launch path resolve registered custom components; unset → built-ins only. |
 | `DKMV_SECRET_KEY` | _(none)_ | Fernet key for the encrypted `SecretStore` (INV-4); source from the OS keychain / a sealed secret in prod. Generate one with `python -c "from app.secrets import SecretStore; print(SecretStore.generate_key())"`. |
+
+**Capability-aware run timeouts (5.2 / ADR-P009).** For **Codex** (no budget / no
+turn cap — timeout is the *only* runtime guardrail), the default `timeout_minutes`
+is **strictly tighter** than the Claude default (`CODEX_DEFAULT_TIMEOUT_MINUTES=20`
+vs `CLAUDE_DEFAULT_TIMEOUT_MINUTES=40`, in `app/config.py`). The API **rejects**
+`max_budget_usd` / `max_turns` for a resolved Codex agent with `400
+unsupported_for_agent`; the launch UI states *"Codex runs are time-bounded, not
+cost-bounded."*
 
 Secrets live in the encrypted `SecretStore`, not plain env, in real deployments
 (PRD §8.6).
@@ -207,6 +235,56 @@ cd platform
 docker compose up
 # backend on http://127.0.0.1:8787, frontend on http://127.0.0.1:5173
 ```
+
+## Backup & restore (binding — §6.5, AC-14)
+
+The single SQLite file is the **source of truth for spend + audit**, so back it up
+and verify the backup is restorable. The backup is a consistent `VACUUM INTO`
+snapshot (fully checkpointed + defragmented), taken on the single writer so it
+never races a write. The helper lives in `backend/app/db/backup.py`.
+
+**Take + verify a snapshot** (the platform may stay running — `VACUUM INTO` is
+consistent):
+
+```python
+from app.db.backup import snapshot, verify_backup, backup_summary
+await snapshot(repository, "/data/backups/dkmv-2026-06-09.db")   # VACUUM INTO
+await verify_backup("/data/backups/dkmv-2026-06-09.db")          # integrity + schema
+print(await backup_summary("/data/backups/dkmv-2026-06-09.db"))  # row counts + spend rollup
+```
+
+`verify_backup` runs SQLite's own `PRAGMA integrity_check` + `foreign_key_check`
+and confirms the spend/audit schema — a snapshot that does not pass is **not** a
+backup.
+
+**Restore procedure (offline).** The platform MUST be stopped during a restore (a
+live process holds WAL connections to the file being swapped):
+
+```bash
+# 1. Stop the stack.
+cd platform && docker compose down            # or stop the local uvicorn
+
+# 2. Verify + install the snapshot as the live DB (the prior DB is moved aside,
+#    the snapshot is re-verified after install). restore() refuses a corrupt
+#    snapshot (fail-closed) so a bad backup can never replace a good DB.
+python -c "import asyncio; from app.db.backup import restore; \
+  asyncio.run(restore('/data/backups/dkmv-2026-06-09.db', '/data/dkmv.db'))"
+
+# 3. Start the stack — it comes up on the restored DB.
+cd platform && docker compose up
+```
+
+The prior live DB is preserved as `<live>.pre-restore`, so the restore is
+reversible. The round-trip is covered by `backend/tests/test_backup.py` (snapshot →
+restore → row counts + the Codex-excluded spend rollup MATCH).
+
+## Acceptance matrix (v1 ship sign-off — §13)
+
+The PRD §13 end-to-end acceptance suite lives in `backend/tests/e2e/` (one module
+per AT) and is run by `cd platform/backend && pytest -q tests/e2e`. The
+live-vs-Docker-gated breakdown + the sign-off are recorded in
+[`docs/acceptance_matrix.md`](docs/acceptance_matrix.md). Full dev-env setup +
+deploy details are in [`docs/setup.md`](docs/setup.md).
 
 ## Quality gates
 
