@@ -51,6 +51,22 @@ def pause_already_resolved(decision_id: str | None = None) -> ApiError:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class AnswerResult:
+    """The outcome of a winning ``POST /runs/{id}/answer`` resolution.
+
+    ``resolved`` is always ``True`` here (a lost guard raises
+    ``409 pause_already_resolved`` before this is built). ``decision_id`` surfaces
+    the **precise** ``pause_decisions.id`` that was flipped (computed in
+    :func:`answer_run_pause` from the pending row, §8.5) so the route's §8.6 audit
+    line records the real decision id — a multi-pause run no longer collapses every
+    resolution to the run id (slice 5.3 / AC-12 / FIX-3). The HTTP body shape stays
+    the §8.9 ``{"resolved": true}`` map (the route projects ``resolved`` out)."""
+
+    decision_id: str
+    resolved: bool = True
+
+
 @dataclass(slots=True)
 class AnswerRequest:
     """The resolved decision body (the §8.5 ``PauseResponse`` payload).
@@ -115,14 +131,17 @@ async def answer_run_pause(
     decisions: DecisionRegistry,
     run_id: str,
     request: AnswerRequest,
-) -> dict[str, bool]:
+) -> AnswerResult:
     """Resolve a run's open pause from ``POST /runs/{id}/answer`` (human path).
 
     Finds the run's pending decision, then resolves it exactly-once via
     :func:`resolve_pending_pause` (``resolved_by='human'``). A run with no open
     pending pause (already resolved / never paused) → ``409 pause_already_resolved``
     so a duplicate submit is rejected rather than silently no-op'ing. On the win,
-    the awaiting bridge resumes the engine; returns ``{"resolved": True}`` (§8.9).
+    the awaiting bridge resumes the engine; returns an :class:`AnswerResult` carrying
+    ``resolved=True`` + the **precise** flipped ``pause_decisions.id`` (so the route's
+    §8.6 audit line records the real decision id — FIX-3, not the run id). The route
+    projects ``{"resolved": True}`` out of it for the §8.9 HTTP body.
     """
     pending = await repository.read_pending_pause(run_id)
     if pending is None:
@@ -139,4 +158,4 @@ async def answer_run_pause(
     if not won:
         # A racing timeout sweep / second tab won the guard first.
         raise pause_already_resolved(decision_id)
-    return {"resolved": True}
+    return AnswerResult(decision_id=decision_id, resolved=True)

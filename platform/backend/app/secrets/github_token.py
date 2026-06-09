@@ -20,8 +20,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from app.secrets.store import GITHUB_TOKEN_TTL, SecretStore
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.security.audit import AuditLog
 
 
 class TokenScopeError(PermissionError):
@@ -61,14 +65,29 @@ class MintedToken:
         """True iff ``repo`` is exactly this token's single authorized repo."""
         return _normalize_repo(repo) == _normalize_repo(self.repo)
 
-    def authorize_push(self, repo: str, *, now: datetime | None = None) -> None:
+    def authorize_push(
+        self,
+        repo: str,
+        *,
+        now: datetime | None = None,
+        audit: AuditLog | None = None,
+        run_id: str | None = None,
+    ) -> None:
         """Assert this token may push to ``repo``; raise otherwise (INV-4).
 
         Enforces both the **repo scope** (cannot push to a *second* repo) and the
         **≤1 hr TTL**. This is the in-process gate the platform applies before
         handing the token to a git operation; the network-layer egress allowlist
         + GitHub's own per-PAT repo scoping are the defense-in-depth backstops.
+
+        ``audit`` (optional, slice 5.3 / AC-12 / §8.6) records the token-USE attempt
+        — the repo + allowed/denied decision, **never the token value** — to the
+        durable audit trail. A denied use (scope/TTL) is recorded as ``allowed=False``
+        before the raise; ``audit=None`` is a graceful no-op.
         """
+        allowed = not self.is_expired(now=now) and self.is_scoped_to(repo)
+        if audit is not None:
+            audit.record_token_use(run_id=run_id or "", repo=repo, allowed=allowed)
         if self.is_expired(now=now):
             raise TokenExpiredError(f"github run token for {self.repo!r} has expired")
         if not self.is_scoped_to(repo):
@@ -110,13 +129,23 @@ class GitHubTokenMinter:
         # Clamp the TTL to the ≤1 hr ceiling — a misconfig must never widen it.
         self._ttl = min(ttl, GITHUB_TOKEN_TTL)
 
-    async def mint(self, repo: str, *, run_id: str) -> MintedToken:
+    async def mint(
+        self,
+        repo: str,
+        *,
+        run_id: str,
+        audit: AuditLog | None = None,
+    ) -> MintedToken:
         """Mint a token scoped to ``repo`` for ``run_id``; persist its ciphertext.
 
         The returned :class:`MintedToken` carries the single-repo scope + the
         ≤1 hr ``expires_at``. The ciphertext is stored under a per-run key with a
         matching DB-side ``expires_at`` so a leaked-at-rest blob is also useless
         after the TTL.
+
+        ``audit`` (optional, slice 5.3 / AC-12 / §8.6) records the token-MINT fact —
+        the run, repo, and TTL ``expires_at``, **never the token value** — to the
+        durable audit trail; ``audit=None`` is a graceful no-op.
         """
         if not _normalize_repo(repo):
             raise ValueError("repo must be a non-empty 'owner/name'")
@@ -133,4 +162,10 @@ class GitHubTokenMinter:
             self._base_token,
             ttl=self._ttl,
         )
+        if audit is not None:
+            audit.record_token_mint(
+                run_id=run_id,
+                repo=_normalize_repo(repo),
+                expires_at=expires_at,
+            )
         return token

@@ -14,6 +14,9 @@ export default defineConfig({
     // jsdom for component render tests (Connect flow, theme).
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
+    // Co-located component tests in src/** PLUS the cross-screen a11y suite under
+    // tests/ (slice 5.3 / AC-10 — the axe + keyboard-drag render test).
+    include: ["src/**/*.{test,spec}.{ts,tsx}", "tests/**/*.{test,spec}.{ts,tsx}"],
     // Keep the empty-suite gate green for slices that ship no frontend tests.
     passWithNoTests: true,
     // CSS imports are side-effect-only in tests; let vitest no-op them.

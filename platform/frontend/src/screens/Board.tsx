@@ -28,7 +28,13 @@ import {
   listBoardIssues,
   setAgentState,
 } from "../api/board";
-import { COLUMNS, groupByColumn, isCostExcludedAgent } from "../components/board-model";
+import { type DraggableColumn, useRovingTabIndex } from "../a11y";
+import {
+  type BoardColumn,
+  COLUMNS,
+  groupByColumn,
+  isCostExcludedAgent,
+} from "../components/board-model";
 import AggregateStrip from "../components/AggregateStrip";
 import FilterBar, { applyFilters, EMPTY_FILTERS, type BoardFilters } from "../components/FilterBar";
 import IssueCard from "../components/IssueCard";
@@ -99,13 +105,11 @@ export default function Board({ repoSlug }: BoardProps) {
 
   const filterOptions = useMemo(() => deriveFilterOptions(issues), [issues]);
 
-  // Drag Backlog↔Queued → POST agent-state, then optimistically restate (FR-02-3).
-  const onDropTo = useCallback(
-    async (column: BoardState) => {
-      const issue = dragged.current;
-      dragged.current = null;
-      if (!issue) return;
-      if (column !== "backlog" && column !== "queued") return; // run-driven columns reject drops
+  // The single Backlog↔Queued move path (FR-02-3 / INV-11 `set_agent_state`),
+  // shared by the pointer drop AND the keyboard-drag (AC-10) so there is exactly
+  // one place that posts the agent-state change + does the optimistic restate.
+  const moveIssue = useCallback(
+    async (issue: BoardIssue, column: DraggableColumn) => {
       if (issue.state === column) return;
       const target = column === "queued" ? "queued" : "none";
       // Optimistic move so the card snaps immediately; reconcile on the next poll.
@@ -122,6 +126,27 @@ export default function Board({ repoSlug }: BoardProps) {
       }
     },
     [repoSlug],
+  );
+
+  // Drag Backlog↔Queued → POST agent-state, then optimistically restate (FR-02-3).
+  const onDropTo = useCallback(
+    (column: BoardState) => {
+      const issue = dragged.current;
+      dragged.current = null;
+      if (!issue) return;
+      if (column !== "backlog" && column !== "queued") return; // run-driven columns reject drops
+      void moveIssue(issue, column);
+    },
+    [moveIssue],
+  );
+
+  // Keyboard-operable Backlog↔Queued move (AC-10) — the card's key handler calls
+  // this with the target column; it routes through the SAME `moveIssue` path.
+  const onMoveColumn = useCallback(
+    (issue: BoardIssue, target: DraggableColumn) => {
+      void moveIssue(issue, target);
+    },
+    [moveIssue],
   );
 
   // Open the issue-detail / launch screen (Screen 03 — slice 2.2). The actual
@@ -164,56 +189,99 @@ export default function Board({ repoSlug }: BoardProps) {
 
         {phase === "ready" && issues.length > 0 && (
           <div className="board-columns" role="list">
-            {COLUMNS.map((col) => {
-              const cards = buckets.get(col.id) ?? [];
-              const liveCost = col.id === "in_progress" ? sumLiveCost(cards) : null;
-              return (
-                <section
-                  key={col.id}
-                  className={`board-column col-${col.id}`}
-                  role="listitem"
-                  aria-label={col.title}
-                  onDragOver={
-                    col.draggable
-                      ? (e) => {
-                          e.preventDefault();
-                          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-                        }
-                      : undefined
-                  }
-                  onDrop={col.draggable ? () => void onDropTo(col.id) : undefined}
-                  data-droppable={col.draggable ? "true" : "false"}
-                >
-                  <header className="column-head">
-                    <span className="column-title">{col.title}</span>
-                    <span className="column-count mono">{cards.length}</span>
-                    {liveCost != null && (
-                      <span className="cap column-cost mono">${liveCost.toFixed(2)}</span>
-                    )}
-                  </header>
-                  <div className="column-cards">
-                    {cards.map((issue) => (
-                      <IssueCard
-                        key={issue.num}
-                        issue={issue}
-                        githubUrl={`https://github.com/${repoSlug}/issues/${issue.num}`}
-                        onOpenIssue={openIssue}
-                        onDragStart={(i) => {
-                          dragged.current = i;
-                        }}
-                        onDragEnd={() => {
-                          dragged.current = null;
-                        }}
-                      />
-                    ))}
-                    {cards.length === 0 && <p className="cap column-hint">{col.hint}</p>}
-                  </div>
-                </section>
-              );
-            })}
+            {COLUMNS.map((col) => (
+              <BoardColumnView
+                key={col.id}
+                col={col}
+                cards={buckets.get(col.id) ?? []}
+                repoSlug={repoSlug}
+                onOpenIssue={openIssue}
+                onMoveColumn={onMoveColumn}
+                onDropTo={onDropTo}
+                onDragPickup={(i) => {
+                  dragged.current = i;
+                }}
+                onDragRelease={() => {
+                  dragged.current = null;
+                }}
+              />
+            ))}
           </div>
         )}
     </AppLayout>
+  );
+}
+
+interface BoardColumnViewProps {
+  col: BoardColumn;
+  cards: BoardIssue[];
+  repoSlug: string;
+  onOpenIssue: (issue: BoardIssue) => void;
+  onMoveColumn: (issue: BoardIssue, target: DraggableColumn) => void;
+  onDropTo: (column: BoardState) => void;
+  onDragPickup: (issue: BoardIssue) => void;
+  onDragRelease: () => void;
+}
+
+/**
+ * One board column + its cards. Extracted from {@link Board} so each column can own
+ * a {@link useRovingTabIndex} group (a hook can't run inside a `.map`): the cards
+ * form a roving-tabindex list so Arrow keys move focus between them and exactly one
+ * card is in the tab order (AC-10). Draggable columns also wire the pointer
+ * drag/drop; the keyboard move routes through the SAME `onMoveColumn` callback.
+ */
+function BoardColumnView({
+  col,
+  cards,
+  repoSlug,
+  onOpenIssue,
+  onMoveColumn,
+  onDropTo,
+  onDragPickup,
+  onDragRelease,
+}: BoardColumnViewProps) {
+  const liveCost = col.id === "in_progress" ? sumLiveCost(cards) : null;
+  const roving = useRovingTabIndex(cards.length);
+  return (
+    <section
+      className={`board-column col-${col.id}`}
+      role="listitem"
+      aria-label={col.title}
+      onDragOver={
+        col.draggable
+          ? (e) => {
+              e.preventDefault();
+              if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+            }
+          : undefined
+      }
+      onDrop={col.draggable ? () => onDropTo(col.id) : undefined}
+      data-droppable={col.draggable ? "true" : "false"}
+    >
+      <header className="column-head">
+        <span className="column-title">{col.title}</span>
+        <span className="column-count mono">{cards.length}</span>
+        {liveCost != null && (
+          <span className="cap column-cost mono">${liveCost.toFixed(2)}</span>
+        )}
+      </header>
+      <div className="column-cards" ref={roving.containerRef} onKeyDown={roving.onKeyDown}>
+        {cards.map((issue, i) => (
+          <IssueCard
+            key={issue.num}
+            issue={issue}
+            githubUrl={`https://github.com/${repoSlug}/issues/${issue.num}`}
+            onOpenIssue={onOpenIssue}
+            onMoveColumn={col.draggable ? onMoveColumn : undefined}
+            tabIndex={roving.tabIndexFor(i)}
+            onFocusCard={() => roving.setActive(i)}
+            onDragStart={onDragPickup}
+            onDragEnd={onDragRelease}
+          />
+        ))}
+        {cards.length === 0 && <p className="cap column-hint">{col.hint}</p>}
+      </div>
+    </section>
   );
 }
 

@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import (
+    get_audit,
     get_board_cache,
     get_concurrency_slots,
     get_decision_registry,
@@ -264,6 +265,10 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
     except (GitHubAuthError, GitHubError) as exc:
         raise _map_github_error(exc) from exc
 
+    # §8.6 audit (slice 5.3 / AC-12): record the run-launch evidence line (run UUID +
+    # repo + issue + agent), secret-free + best-effort, on the durable audit trail.
+    _audit_run_launch(request, result.run_id, body)
+
     # INV-2: install the HttpOnly SameSite=Strict SSE cookie on this authenticated
     # POST /runs response so the browser holds it BEFORE opening the EventSource for
     # the new run — the SSE handler then 200s with the cookie (and still 401s
@@ -277,6 +282,27 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
         secure=_cookie_secure(settings),
     )
     return response
+
+
+def _audit_run_launch(request: Request, run_id: str, body: CreateRunRequest) -> None:
+    """Record the run-launch §8.6 audit evidence line (slice 5.3 / AC-12).
+
+    Best-effort + secret-free: the run UUID + repo + issue + resolved agent + workflow
+    id, recorded on the lifespan-owned audit sink resolved through the centralized
+    :func:`app.api.deps.get_audit` seam (a leak-safe security trail, redact-before-
+    persist — INV-4) — never the bare ``getattr(app.state, "audit", …)`` literal.
+    A missing sink is a graceful no-op so a bare / no-lifespan client never trips.
+    """
+    audit = get_audit(request)
+    if audit is None:
+        return
+    audit.record_run_launch(
+        run_id=run_id,
+        repo=body.repo,
+        issue=body.issue_num,
+        agent=body.agent,
+        workflow_id=body.workflow_id,
+    )
 
 
 def _cookie_secure(settings: Any) -> bool:

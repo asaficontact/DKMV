@@ -7,6 +7,10 @@
  * from a clean store.
  */
 import "@testing-library/jest-dom/vitest";
+// Register the vitest-axe accessibility matcher (`toHaveNoViolations`) for the
+// slice-5.3 axe render test (AC-10). The extend-expect entry augments the global
+// `expect` and the `Vi.Assertion` type.
+import "vitest-axe/extend-expect";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
 

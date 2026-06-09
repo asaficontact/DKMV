@@ -15,6 +15,7 @@
  */
 import type { ReactNode } from "react";
 
+import SkipLink, { MAIN_CONTENT_ID } from "../a11y/SkipLink";
 import type { BoardAggregate } from "../api/board";
 import Sidebar, { type NavId } from "./Sidebar";
 import TopBar from "./TopBar";
@@ -59,6 +60,9 @@ export default function AppLayout({
 }: AppLayoutProps) {
   return (
     <div className="app-shell">
+      {/* WCAG 2.4.1 bypass-blocks: the first focusable element jumps a keyboard
+          user past the chrome to the screen body (AC-10). */}
+      <SkipLink />
       <Sidebar repoSlug={repoSlug} aggregate={aggregate} activeNav={activeNav} />
       <div className="app-main">
         <TopBar
@@ -67,7 +71,11 @@ export default function AppLayout({
           onRefresh={onRefresh ?? (() => {})}
           refreshing={refreshing}
         />
-        {children}
+        {/* The skip-link target landmark: programmatically focusable
+            (tabIndex=-1) so the link can move focus here (AC-10). */}
+        <main id={MAIN_CONTENT_ID} tabIndex={-1} className="app-main-content">
+          {children}
+        </main>
       </div>
     </div>
   );

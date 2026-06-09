@@ -20,7 +20,12 @@ point; this package owns that callback and the resolve path:
 
 from __future__ import annotations
 
-from app.hitl.answer import AnswerRequest, answer_run_pause, resolve_pending_pause
+from app.hitl.answer import (
+    AnswerRequest,
+    AnswerResult,
+    answer_run_pause,
+    resolve_pending_pause,
+)
 from app.hitl.pause_bridge import (
     DEFAULT_PAUSE_TIMEOUT_MINUTES,
     PauseBridgeDeps,
@@ -40,6 +45,7 @@ from app.hitl.timeout import SweepResult, sweep_expired_pauses
 __all__ = [
     "DEFAULT_PAUSE_TIMEOUT_MINUTES",
     "AnswerRequest",
+    "AnswerResult",
     "ConcurrencySlots",
     "DecisionRegistry",
     "PauseBridgeDeps",

@@ -40,12 +40,13 @@ from app.db import Repository
 from app.github.provider import aclose_github_client, build_pat_github_client
 from app.github.write_queue import DEFAULT_DRAIN_GRACE_SECONDS, WriteQueue
 from app.hitl import ConcurrencySlots, DecisionRegistry
+from app.observability import install_structured_logging
 from app.orchestrator.recovery import DockerOrphanReaper, RecoveryDeps, recover_orphans
 from app.orchestrator.retry_deps import RETRY_SCHEDULER_ATTR, build_retry_scheduler
 from app.orchestrator.tick import EngineRunKiller, OrchestratorHandle, start_orchestrator
 from app.runtime import RunService
 from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
-from app.security import AccessControlMiddleware
+from app.security import AccessControlMiddleware, AuditLog
 from app.sse import StreamRegistry
 from app.sse.run_stream import RUN_STREAM_TASKS_ATTR
 
@@ -285,8 +286,37 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await repository.start()
     app.state.repository = repository
 
+    # The durable §8.6 audit log (slice 5.3 / AC-12). Composed ONCE here, co-located
+    # with the single SQLite file (the spend + audit source of truth, §6.5), and
+    # seeded with ``Redactor.from_settings`` so every audit line is scrubbed of the
+    # platform's OWN concrete secret VALUES (not just shapes) before persistence
+    # (INV-4 — a leak into the audit trail is as permanent as one into ``events``).
+    # Published on ``app.state.audit`` so the run-launch / token-mint-use / egress-
+    # denial / decision-resolution call sites record their evidence line through one
+    # shared sink. A test may pre-inject ``app.state.audit`` (e.g. a MemoryAuditSink)
+    # — that injection is authoritative; the file sink is the production default.
+    if getattr(app.state, "audit", None) is None:
+        app.state.audit = AuditLog.from_database_url(
+            settings.DATABASE_URL,
+            redactor=Redactor.from_settings(settings),
+        )
+
     secret_store = _build_secret_store(repository, settings)
     app.state.secret_store = secret_store
+
+    # Bind the SecretStore + audit sink onto the (app-creation-time) RunService now
+    # that both exist (slice 5.3 / AC-12). This makes ``RunService.start`` record the
+    # real ``token_grant`` §8.6 audit kind IN PRODUCTION: when the platform provisions
+    # a run's GitHub credential into its RuntimeConfig it logs the genuine "granted run
+    # X access to repo Y" decision (run_id + repo + scope, NO raw token — INV-4).
+    # NOTE: v1 uses a fine-grained operator PAT (ADR-P004); true per-run token *minting*
+    # (GitHub-App installation tokens) and the in-container push *use* telemetry are
+    # deferred post-v1 — the ``token_mint``/``token_use`` kinds + the GitHubTokenMinter
+    # /authorize_push machinery are retained as that deferred seam, not faked here.
+    app.state.run_service.bind_run_token_minting(
+        secret_store=secret_store,
+        audit=getattr(app.state, "audit", None),
+    )
 
     # Build the GitHub client once unless a test/connect already injected one.
     if getattr(app.state, "github_client", None) is None:
@@ -411,15 +441,22 @@ def create_app(
     """
     settings = settings or get_settings()
 
-    # INV-4 / NFR-OBS-1 ("never logged"): attach the RedactingLogFilter to the
-    # ROOT logger at boot so no structured-log line emitted by any handler can
-    # carry a secret. Seed it from settings (Redactor.from_settings) so it scrubs
-    # BOTH the known credential *shapes* (the structural patterns in
-    # app.secrets.redaction) AND the platform's OWN concrete secret VALUES (the
-    # SecretStr fields on Settings) — catching a leak even when the value's shape
-    # is non-standard. Without this wiring the redactor is dead code and the
-    # "no secret reaches logs" guarantee is unenforced at runtime.
-    install_log_redaction(Redactor.from_settings(settings))
+    # NFR-OBS-1 / INV-4 (slice 5.3): configure the ROOT logger for STRUCTURED,
+    # OTel-compatible logs at boot — a JSON line per record carrying the active
+    # ``run_id``/``issue``/``session`` correlation block (the schema the deferred
+    # GenAI tracer, N8, upgrades onto additively) — AND install the
+    # redact-before-persist filter on it. The redactor is seeded from settings
+    # (``Redactor.from_settings``) so it scrubs BOTH the known credential *shapes*
+    # AND the platform's OWN concrete secret VALUES, catching a leak even when the
+    # value's shape is non-standard; ``install_structured_logging`` attaches the
+    # RedactingLogFilter to the structured handler so no log line — message OR
+    # assembled JSON — can carry a secret (the "no secret reaches logs" guarantee).
+    redactor = Redactor.from_settings(settings)
+    install_structured_logging(redactor)
+    # Belt-and-braces: also attach the message-level redaction filter directly to
+    # the root logger (idempotent) so a record handled before the structured
+    # handler — or by a handler a test adds — is still scrubbed (INV-4).
+    install_log_redaction(redactor)
 
     app = FastAPI(
         title="DKMV Platform",
