@@ -14,9 +14,11 @@ from app.api.agent_state import router as agent_state_router
 from app.api.board import router as board_router
 from app.api.connect import router as connect_router
 from app.api.health import router as health_router
+from app.api.issue_detail import router as issue_detail_router
 from app.api.issues import router as issues_router
 from app.api.preflight import router as preflight_router
 from app.api.repos import router as repos_router
+from app.api.runs import router as runs_router
 from app.api.workflows import router as workflows_router
 
 # The single versioned parent router. Feature routers below attach to it, so the
@@ -33,6 +35,8 @@ api_router.include_router(connect_router)
 api_router.include_router(issues_router)
 api_router.include_router(agent_state_router)
 api_router.include_router(board_router)
+api_router.include_router(issue_detail_router)
+api_router.include_router(runs_router)
 api_router.include_router(workflows_router)
 
 __all__ = ["api_router"]
