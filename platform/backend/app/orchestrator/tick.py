@@ -58,6 +58,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.github.graphql import BoardPage
     from app.github.hash_cache import HashCache
     from app.github.write_queue import WriteQueue
+    from app.hitl.registry import DecisionRegistry
+    from app.orchestrator.retry import RetryScheduler
     from app.runs.launch import LaunchResult
     from app.runtime import RunService
 
@@ -117,6 +119,18 @@ class TickDeps:
     cache: HashCache[BoardPage] | None = None
     gauges: TickGauges = field(default_factory=TickGauges)
     now: Clock = field(default=utc_now)
+    #: The lifespan-composed HITL :class:`DecisionRegistry` (slice 2.5). Threaded
+    #: into :class:`ReconcileDeps` so the production reconcile pass runs the
+    #: pause-timeout auto-resolve sweep through the SAME exactly-once guard the
+    #: human answer path uses (T104 / AC-17 — INV-9). ``None`` only in a bare test
+    #: that drives ``run_tick`` without the registry; production always wires it.
+    decisions: DecisionRegistry | None = None
+    #: The lifespan-composed :class:`RetryScheduler` (slice 3.4 — the SAME singleton
+    #: ``POST /runs/{id}/retry`` enqueues onto). Threaded into :class:`ReconcileDeps`
+    #: so the production reconcile pass drives the stall→retry schedule + fires due
+    #: backoffs through the idempotent re-dispatch (AC-14/15). ``None`` only in a
+    #: bare test; production always wires it so the retry queue actually drains.
+    retry_scheduler: RetryScheduler | None = None
 
 
 #: A dispatch callable: given a built candidate, launch it through the existing
@@ -185,6 +199,13 @@ async def run_tick(deps: TickDeps) -> TickOutcome:
             settings=deps.settings,
             cache=deps.cache,
             now=deps.now,
+            # Wire the pause-timeout sweep + retry machinery into the LIVE tick
+            # (slice 3.4): the lifespan-composed registry + scheduler drive the
+            # exactly-once pause auto-resolve (AC-17 / INV-9) and the stall→retry +
+            # due-backoff re-dispatch (AC-14/15). Without these the reconcile pass
+            # defaults them to None and the machinery is dead code in production.
+            decisions=deps.decisions,
+            retry_scheduler=deps.retry_scheduler,
         ),
         deps.repo,
     )
@@ -467,6 +488,8 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
     ``attach_stream`` is bound to the slice-2.3 run-stream wiring so a tick-launched
     run streams + persists events exactly like a ``POST /runs`` one.
     """
+    from app.api.deps import DECISION_REGISTRY_ATTR
+    from app.orchestrator.retry_deps import RETRY_SCHEDULER_ATTR, build_retry_scheduler
     from app.runs.service import DEFAULT_MEMORY
     from app.sse.run_stream import attach_run_stream
 
@@ -478,6 +501,18 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
     settings: Settings = state.settings
     cache: HashCache[BoardPage] | None = getattr(state, "github_hash_cache", None)
     registry = state.stream_registry
+
+    # The lifespan-composed HITL registry + retry scheduler (the SAME singletons the
+    # serving handlers resolve). The tick threads them into ReconcileDeps so the LIVE
+    # reconcile pass drives the pause-timeout sweep (AC-17) + the stall→retry / due-
+    # backoff re-dispatch (AC-14/15). The retry scheduler is resolved through the
+    # cached app.state attr (composing it on first use via build_retry_scheduler) so
+    # the tick and ``POST /runs/{id}/retry`` share ONE instance over ONE queue — a
+    # manual enqueue is actually drained by the tick.
+    decisions: DecisionRegistry | None = getattr(state, DECISION_REGISTRY_ATTR, None)
+    retry_scheduler: RetryScheduler | None = getattr(state, RETRY_SCHEDULER_ATTR, None)
+    if retry_scheduler is None:
+        retry_scheduler = build_retry_scheduler(app)
     stream_tasks = getattr(state, "run_stream_tasks", None)
     if stream_tasks is None:
         stream_tasks = set()
@@ -513,6 +548,8 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
         dispatch=build_dispatch(_dispatch_context),
         repo=repo,
         cache=cache,
+        decisions=decisions,
+        retry_scheduler=retry_scheduler,
     )
 
 

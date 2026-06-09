@@ -38,6 +38,7 @@ from app.db import Repository
 from app.github.provider import aclose_github_client, build_pat_github_client
 from app.github.write_queue import DEFAULT_DRAIN_GRACE_SECONDS, WriteQueue
 from app.hitl import ConcurrencySlots, DecisionRegistry
+from app.orchestrator.retry_deps import RETRY_SCHEDULER_ATTR, build_retry_scheduler
 from app.orchestrator.tick import OrchestratorHandle, start_orchestrator
 from app.runtime import RunService
 from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
@@ -162,6 +163,20 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.concurrency_slots = ConcurrencySlots(
             capacity=settings.MAX_CONCURRENT_RUNS,
         )
+
+    # The process-wide retry scheduler (slice 3.4 / §8.2 — AC-14/15/16). Composed
+    # ONCE here from the lifespan-owned singletons (single-writer Repository,
+    # GitHub client, the existing ``launch_run`` re-dispatch boundary — ADR-P001)
+    # and cached on ``app.state.retry_scheduler`` so the orchestrator tick (firing
+    # due backoffs + scheduling stall→retry — reconcile.drive_retries), ``POST
+    # /runs/{id}/retry`` (enqueuing a manual retry), and ``GET /retry-queue``
+    # (projecting) all share the SAME instance over ONE persisted queue. Without
+    # composing it here the tick would default ``retry_scheduler=None`` and the
+    # retry machinery would be dead code in production (a manual retry would enqueue
+    # but never drain). ``build_retry_scheduler`` is idempotent — it sets the
+    # cached attr; the API resolver returns this same singleton.
+    if getattr(app.state, RETRY_SCHEDULER_ATTR, None) is None:
+        build_retry_scheduler(app)
 
     # The set of live per-run pump/supervisor tasks (slice 2.3 / FIX-1). Each
     # launched run spawns one EventPump + one completion supervisor here; the set
