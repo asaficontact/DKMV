@@ -292,6 +292,7 @@ def test_list_path_is_one_bulk_spend_query_not_per_run(tmp_path: Path) -> None:
     ``run_spend`` (the per-run query) is never called — i.e. the page is O(1)
     spend queries, not O(N).
     """
+    from app.db.queries_history import list_runs_filtered
     from app.runs.service import build_run_summaries
 
     url = _migrate(tmp_path / "t.db")
@@ -304,7 +305,7 @@ def test_list_path_is_one_bulk_spend_query_not_per_run(tmp_path: Path) -> None:
         repository = Repository(url)
         await repository.start()
         try:
-            rows = await repository.list_runs(limit=100)
+            rows = await list_runs_filtered(repository, limit=100)
 
             spend_calls = 0
             bulk_calls = 0

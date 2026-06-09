@@ -1,20 +1,19 @@
-"""Run endpoints — ``POST /runs``, ``GET /runs``, ``GET /runs/{id}`` (§8.4/§8.9).
+"""Run launch endpoint — ``POST /runs`` + the launch/stream/answer wiring (§8.4).
 
-The launch contract + the run reads (PRD §8.4, §8.9, §8.10, §8.11), all behind the
-app-wide :class:`~app.security.AccessControlMiddleware` (INV-1 — loopback ``Host`` +
-local token + ``Origin``/CSRF; ``POST /runs`` is a state-changing POST and inherits
-the CSRF gate). The launch logic itself lives in :mod:`app.runs.launch` (validation,
-``auto → workflow.agent`` resolution, the INV-5 claim-lock, the engine start); the
-read projections live in :mod:`app.runs.service`.
+The launch contract (PRD §8.4, §8.10, §8.11), behind the app-wide
+:class:`~app.security.AccessControlMiddleware` (INV-1 — loopback ``Host`` + local
+token + ``Origin``/CSRF; ``POST /runs`` is a state-changing POST and inherits the
+CSRF gate). The launch logic itself lives in :mod:`app.runs.launch` (validation,
+``auto → workflow.agent`` resolution, the INV-5 claim-lock, the engine start).
 
 * ``POST /runs`` → validate (§8.10) → claim-lock (INV-5) → ``EmbeddedRuntime.start``
   → ``201 { run_id }`` (the **platform UUID** — §8.4); ``409 duplicate_dispatch`` on
   a duplicate claim; ``400 unsupported_for_agent`` for a Codex budget/turns body
   (INV-8).
-* ``GET /runs`` → the §8.9 list baseline (the live-view spine; history filters/sort
-  are Phase 3).
-* ``GET /runs/{id}`` → the §8.9 detail baseline (``stages``/``config``/``sandbox``/
-  ``artifacts``/``pr``/``error``); Codex ``cost_usd`` is ``null``/"—".
+
+The run **read** endpoints (``GET /runs`` + ``GET /runs/{id}``) live in
+:mod:`app.api.history` (slice 3.1 owns the history read API — filters + cursor
+pagination + the full §8.9 detail); they are not duplicated here.
 
 The repository / write-queue / GitHub client / run-service are resolved from the
 slice-2.0 ``app.state`` seam (:mod:`app.api.deps`) — never a per-request build.
@@ -39,13 +38,13 @@ from app.api.deps import (
     get_stream_registry,
     get_write_queue,
 )
-from app.api.errors import ApiError, run_not_found
+from app.api.errors import ApiError
 from app.db.repository import Repository
 from app.github.client import GitHubAuthError, GitHubError
 from app.github.provider import get_github_client
 from app.hitl import PauseBridgeDeps, build_pause_bridge
 from app.runs.launch import LaunchRequest, launch_run
-from app.runs.service import build_run_detail, build_run_summaries
+from app.runs.service import DEFAULT_MEMORY
 from app.runtime import RunService
 from app.sse.auth import set_sse_cookie
 from app.sse.run_stream import RUN_STREAM_TASKS_ATTR, attach_run_stream
@@ -56,10 +55,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
 # router in :mod:`app.api`, which this router attaches to.
 router = APIRouter(tags=["runs"])
-
-#: Cap on a ``GET /runs`` page (cursor pagination contract, §8.9). The history
-#: page with full filters/sort is Phase 3; Phase 2 ships a bounded list spine.
-_MAX_LIMIT = 100
 
 
 class CreateRunRequest(BaseModel):
@@ -260,7 +255,7 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
                 cache=cache,
                 connected_repo=_connected_repo(request, body.repo),
                 project_root=None,
-                default_memory=_default_memory(settings),
+                default_memory=DEFAULT_MEMORY,
                 current_labels=current_labels,
                 build_on_pause=_build_on_pause,
                 attach_stream=_attach_stream,
@@ -293,11 +288,6 @@ def _cookie_secure(settings: Any) -> bool:
     return bool(getattr(settings, "DKMV_COOKIE_SECURE", False))
 
 
-def _default_memory(settings: Any) -> str:
-    """The default container memory limit (FR-04-5 default '8g')."""
-    return "8g"
-
-
 async def _issue_labels(repository: Any, repo: str, num: int) -> list[str]:
     """Read the issue's current labels from the cache (for the replace-all PUT).
 
@@ -320,70 +310,8 @@ async def _issue_labels(repository: Any, repo: str, num: int) -> list[str]:
     return [str(v) for v in value] if isinstance(value, list) else []
 
 
-@router.get("/runs")
-async def list_runs(request: Request) -> dict[str, Any]:
-    """Return the §8.9 run-list baseline (the live-view spine).
-
-    Cursor-paginated (``?limit&cursor``); ``?repo=`` scopes to one project. The
-    sortable/filterable history with the FR-06-4 columns is Phase 3 — Phase 2 ships
-    the baseline list spine. Codex ``cost_usd`` is ``null``/"—".
-    """
-    limit = _parse_limit(request)
-    offset = _parse_offset(request)
-    repo = request.query_params.get("repo")
-
-    async with get_repository(request) as repository:
-        rows = await repository.list_runs(repo=repo, limit=limit + 1, offset=offset)
-        has_more = len(rows) > limit
-        page = rows[:limit]
-        # One bulk spend query for the whole page (not one run_spend per row —
-        # the N+1 the per-row path otherwise serializes through the read pool).
-        items = await build_run_summaries(repository, page)
-
-    next_cursor = str(offset + limit) if has_more else None
-    return {"items": items, "next_cursor": next_cursor}
-
-
-@router.get("/runs/{run_id}")
-async def get_run(run_id: str, request: Request) -> dict[str, Any]:
-    """Return the §8.9 ``GET /runs/{id}`` detail baseline for the live view.
-
-    Carries ``stages``, the FR-04-5 ``config`` snapshot, ``sandbox``, ``artifacts``,
-    and the linked ``pr``/``error``; Codex ``cost_usd`` is ``null``/"—" (INV-8). A
-    ``404 run_not_found`` for an unknown platform UUID. All run endpoints address
-    the platform UUID (§8.4).
-    """
-    settings = request.app.state.settings
-    async with get_repository(request) as repository:
-        row = await repository.get_run(run_id)
-        if row is None:
-            raise run_not_found(run_id)
-        return await build_run_detail(
-            repository,
-            row,
-            sandbox_image=settings.DKMV_IMAGE,
-            default_memory=_default_memory(settings),
-        )
-
-
-def _parse_limit(request: Request) -> int:
-    """Parse ``?limit`` (1..100; default 100) for the run list (§8.9)."""
-    raw = request.query_params.get("limit")
-    if raw is None:
-        return _MAX_LIMIT
-    try:
-        value = int(raw)
-    except ValueError:
-        return _MAX_LIMIT
-    return max(1, min(value, _MAX_LIMIT))
-
-
-def _parse_offset(request: Request) -> int:
-    """Parse the opaque ``?cursor`` (an integer offset) for the run list (§8.9)."""
-    raw = request.query_params.get("cursor")
-    if raw is None:
-        return 0
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return 0
+# The run **read** endpoints (``GET /runs`` + ``GET /runs/{id}``) moved to
+# :mod:`app.api.history` in slice 3.1, which owns the history read API (filters +
+# cursor pagination + the full §8.9 detail). This module keeps ``POST /runs`` and
+# the launch/stream/answer wiring; the read routes are registered exactly once,
+# from ``history.py`` (no duplicate ``GET /runs`` path).
