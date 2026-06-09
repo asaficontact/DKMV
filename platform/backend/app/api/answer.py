@@ -25,9 +25,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
+from app.api.deps import get_decision_registry
 from app.api.errors import run_not_found
 from app.db.repository import Repository
-from app.hitl import DecisionRegistry
 from app.hitl.answer import AnswerRequest, answer_run_pause
 
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
@@ -67,18 +67,6 @@ def _lifespan_repository(request: Request) -> Repository:
     return repository
 
 
-def _decision_registry(request: Request) -> DecisionRegistry:
-    """Resolve the process-wide :class:`DecisionRegistry` from ``app.state``.
-
-    The same registry the pause bridge registered its awaited future on — firing it
-    here (after winning the DB guard) is what resumes the engine. Composed once by
-    the lifespan; asserted present.
-    """
-    registry = getattr(request.app.state, "decision_registry", None)
-    assert isinstance(registry, DecisionRegistry)
-    return registry
-
-
 @router.post("/runs/{run_id}/answer")
 async def answer_pause(run_id: str, body: AnswerPauseBody, request: Request) -> dict[str, bool]:
     """Resolve a run's open pause exactly-once and resume the engine (§8.5/§8.9).
@@ -94,7 +82,7 @@ async def answer_pause(run_id: str, body: AnswerPauseBody, request: Request) -> 
     repository = _lifespan_repository(request)
     if await repository.get_run(run_id) is None:
         raise run_not_found(run_id)
-    decisions = _decision_registry(request)
+    decisions = get_decision_registry(request)
     return await answer_run_pause(
         repository=repository,
         decisions=decisions,

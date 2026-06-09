@@ -31,17 +31,23 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_board_cache, get_repository, get_write_queue
+from app.api.deps import (
+    get_board_cache,
+    get_concurrency_slots,
+    get_decision_registry,
+    get_repository,
+    get_stream_registry,
+    get_write_queue,
+)
 from app.api.errors import ApiError, run_not_found
 from app.db.repository import Repository
 from app.github.client import GitHubAuthError, GitHubError
 from app.github.provider import get_github_client
-from app.hitl import ConcurrencySlots, DecisionRegistry, PauseBridgeDeps, build_pause_bridge
+from app.hitl import PauseBridgeDeps, build_pause_bridge
 from app.runs.launch import LaunchRequest, launch_run
 from app.runs.service import build_run_detail, build_run_summaries
 from app.runtime import RunService
 from app.sse.auth import set_sse_cookie
-from app.sse.observer_bridge import StreamRegistry
 from app.sse.run_stream import RUN_STREAM_TASKS_ATTR, attach_run_stream
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -120,21 +126,6 @@ async def _stream_repository(request: Request) -> Repository:
         return fallback
 
 
-def _stream_registry(request: Request) -> StreamRegistry:
-    """Resolve (composing on first use) the process-wide :class:`StreamRegistry`.
-
-    The app-lifespan composes ONE registry on ``app.state.stream_registry`` so the
-    launch path's pump publishes into the same hub the SSE endpoint subscribes to;
-    a no-lifespan test gets one lazily here.
-    """
-    existing = getattr(request.app.state, "stream_registry", None)
-    if isinstance(existing, StreamRegistry):
-        return existing
-    registry = StreamRegistry()
-    request.app.state.stream_registry = registry
-    return registry
-
-
 def _stream_tasks(request: Request) -> set[asyncio.Task[Any]]:
     """The process-wide set of live per-run pump/supervisor tasks (``app.state``).
 
@@ -147,39 +138,6 @@ def _stream_tasks(request: Request) -> set[asyncio.Task[Any]]:
     tasks: set[asyncio.Task[Any]] = set()
     setattr(request.app.state, RUN_STREAM_TASKS_ATTR, tasks)
     return tasks
-
-
-def _decision_registry(request: Request) -> DecisionRegistry:
-    """Resolve the process-wide HITL :class:`DecisionRegistry` (composing if absent).
-
-    The pause bridge built per run registers its awaited future here; the answer
-    endpoint / timeout sweep fire it after winning the exactly-once DB guard. The
-    lifespan composes ONE on ``app.state.decision_registry`` so the bridge's awaited
-    future and the answer route's resolve share one rendezvous; a no-lifespan test
-    gets one lazily.
-    """
-    existing = getattr(request.app.state, "decision_registry", None)
-    if isinstance(existing, DecisionRegistry):
-        return existing
-    registry = DecisionRegistry()
-    request.app.state.decision_registry = registry
-    return registry
-
-
-def _concurrency_slots(request: Request) -> ConcurrencySlots:
-    """Resolve the process-wide :class:`ConcurrencySlots` accounting (T086).
-
-    The slot-release-on-pause / reacquire-on-resume primitive the pause bridge
-    drives. Phase 2 does not enforce a cap (Phase 5 does); the lifespan composes ONE
-    on ``app.state.concurrency_slots`` so all runs share the same accounting; a
-    no-lifespan test gets one lazily.
-    """
-    existing = getattr(request.app.state, "concurrency_slots", None)
-    if isinstance(existing, ConcurrencySlots):
-        return existing
-    slots = ConcurrencySlots()
-    request.app.state.concurrency_slots = slots
-    return slots
 
 
 def _run_service(request: Request) -> RunService:
@@ -228,10 +186,10 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
     # The per-run pump/supervisor + the HITL pause bridge outlive this request, so
     # they hold the lifespan-owned (long-lived) Repository — not the per-request one.
     stream_repository = await _stream_repository(request)
-    registry = _stream_registry(request)
+    registry = get_stream_registry(request)
     tasks = _stream_tasks(request)
-    decisions = _decision_registry(request)
-    slots = _concurrency_slots(request)
+    decisions = get_decision_registry(request)
+    slots = get_concurrency_slots(request)
     # Resolved inside the launch try-block (below) before ``launch_run`` runs, so
     # it is bound before the per-run ``_build_on_pause`` closure could ever be
     # invoked (the bridge is only called by the engine at a pause point, long after

@@ -32,11 +32,11 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
-from app.api.deps import get_repository
+from app.api.deps import get_repository, get_stream_registry
 from app.api.errors import ApiError, run_not_found
 from app.db.repository import Repository
 from app.sse.auth import SseAuthError, authenticate_sse
-from app.sse.observer_bridge import StreamRegistry, Subscriber
+from app.sse.observer_bridge import Subscriber
 from app.sse.pump import StreamFrame
 from app.sse.replay import iter_backlog, parse_last_event_id, replay_then_tail
 
@@ -57,22 +57,6 @@ _STREAM_HEADERS: dict[str, str] = {
     "X-Accel-Buffering": "no",
     "Connection": "keep-alive",
 }
-
-
-def _registry(request: Request) -> StreamRegistry:
-    """Resolve the process-wide :class:`StreamRegistry` from ``app.state``.
-
-    Composed once by the launch path / lifespan so the pump's publish target and
-    the SSE subscribers share one hub per run. Falls back to creating + caching an
-    empty registry (a test that streams a finished run from the durable backlog
-    only needs the replay path, not a live hub).
-    """
-    existing = getattr(request.app.state, "stream_registry", None)
-    if isinstance(existing, StreamRegistry):
-        return existing
-    registry = StreamRegistry()
-    request.app.state.stream_registry = registry
-    return registry
 
 
 def _frame_to_sse(frame: StreamFrame) -> ServerSentEvent:
@@ -123,7 +107,7 @@ async def stream_run_events(run_id: str, request: Request) -> EventSourceRespons
         request.headers.get("last-event-id") or request.query_params.get("lastEventId")
     )
 
-    registry = _registry(request)
+    registry = get_stream_registry(request)
     hub = registry.get(run_id)
 
     # Subscribe-before-read (INV-2 replay): attach to the live hub FIRST so any

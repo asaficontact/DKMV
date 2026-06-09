@@ -8,11 +8,12 @@
  * {@link EventFeed} (Friendly/Raw + search, live auto-scroll), the
  * {@link RunRail} (config/sandbox/artifacts/PR), and a **Stop** (danger) control.
  *
- * **Decision card slot (slice boundary).** When the run is `paused` this renders a
- * `<section data-slot="decision-card">` placeholder with a minimal "Decision
- * required" message. It does **NOT** import `PauseCard` — slice 2.5 builds
- * `PauseCard` standalone; mounting it into this slot is a documented POST-MERGE
- * integration step. The slot is the seam; the card lands later.
+ * **Decision card slot (wired — slice 2.6).** When the run is `paused` this renders
+ * the {@link PauseCard} inside `<section data-slot="decision-card">`, sourced from
+ * the `GET /runs/{id}` `decision` rehydration block (slice 2.3). Approve/Ship/Abort
+ * POST to `/runs/{id}/answer` via `answerRun`; on a successful answer the SSE
+ * `decision` event + status change flow in and the slot clears. (2.4 owned the slot,
+ * 2.5 built `PauseCard` standalone; this is the documented post-merge wiring.)
  *
  * **Data.** `GET /runs/{id}` (slice 2.1 baseline — meters, stages, config, the
  * `decision` rehydration block) + the live SSE stream ({@link subscribeRunEvents};
@@ -26,12 +27,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import "./live-run.css";
-import { type RunDetailResponse, getRun, stopRun } from "../api/runs";
+import { type RunDetailResponse, answerRun, getRun, stopRun } from "../api/runs";
 import { type RuntimeEvent, subscribeRunEvents } from "../api/sse";
 import AppLayout from "../chrome/AppLayout";
 import EventFeed from "../components/EventFeed";
 import { BranchIcon, StopIcon } from "../components/icons";
 import MetersRow from "../components/MetersRow";
+import PauseCard from "../components/PauseCard";
 import RunRail from "../components/RunRail";
 import StageTracker from "../components/StageTracker";
 import StateBadge from "../components/StateBadge";
@@ -193,15 +195,33 @@ export default function LiveRun({ runId, repoSlug, onGoBoard }: LiveRunProps) {
             />
             <StageTracker stages={run.stages} />
 
-            {/* DECISION-CARD SLOT (slice boundary). 2.5 builds PauseCard and mounts
-                it here as a POST-MERGE step. This is a marked placeholder ONLY — it
-                does NOT import PauseCard. */}
+            {/* DECISION-CARD SLOT (slice boundary). 2.4 owns this slot; 2.5 built
+                PauseCard standalone; this is the POST-MERGE wiring (2.6) that mounts
+                the card into the slot. The card is sourced from the GET /runs/{id}
+                `decision` rehydration block (slice 2.3) so a reconnect mid-pause
+                rehydrates from state, not the live push. Approve/Ship/Abort POST to
+                /runs/{id}/answer via `answerRun` (INV-1/INV-2 — CSRF-safe, no token
+                in URL); on success we re-fetch the detail (the SSE `decision` event +
+                status change also flow in) and the slot clears once the run resumes.
+                A paused run whose decision hasn't rehydrated yet (the brief window
+                before the `decision` block is populated) shows the minimal prompt. */}
             {run.status === "paused" && (
               <section className="decision-card-slot" data-slot="decision-card">
-                <span className="badge decision-slot-badge">PAUSED</span>
-                <span className="decision-slot-text">
-                  Decision required — this run needs your decision to continue.
-                </span>
+                {run.decision ? (
+                  <PauseCard
+                    runId={run.id}
+                    request={run.decision.request}
+                    onSubmit={answerRun}
+                    onAnswered={() => void load()}
+                  />
+                ) : (
+                  <>
+                    <span className="badge decision-slot-badge">PAUSED</span>
+                    <span className="decision-slot-text">
+                      Decision required — this run needs your decision to continue.
+                    </span>
+                  </>
+                )}
               </section>
             )}
 
