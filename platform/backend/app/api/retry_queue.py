@@ -18,9 +18,12 @@ here touches ``dkmv/``.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, Request
+
+from app.orchestrator.retry_deps import get_retry_scheduler
 
 router = APIRouter(tags=["retry-queue"])
 
@@ -29,13 +32,14 @@ router = APIRouter(tags=["retry-queue"])
 async def get_retry_queue(request: Request) -> dict[str, Any]:
     """Return the ``RetryEntry`` rows in the retry queue (FR-06-3 / §8.9).
 
-    Each row is ``{ id, issue, attempt, dueIn, lastError }`` (PRD §6.1). The
-    retry scheduler that fills the queue is slice 3.4; until then this returns the
-    empty cursor envelope ``{ items: [], next_cursor: null }`` (the shape ships
-    here so 3.2 renders against the real contract and 3.4 only changes the data).
+    Each row is ``{ id, issue, attempt, dueIn, lastError }`` (PRD §6.1), sourced
+    from the slice-3.4 retry scheduler's **persisted** backoff/queue state (the
+    runs in backoff + the runs parked after the ≤3 automatic attempts). ``dueIn`` is
+    the seconds until the backoff ``due_at`` (re-evaluated each request, counting
+    down). Returned in the §8.9 cursor envelope ``{ items, next_cursor }``; the
+    whole queue fits one page on a solo machine so ``next_cursor`` is ``null``.
     """
-    # Slice 3.4 replaces this with a read of the retry scheduler's persisted
-    # backoff/queue state; the shape (RetryEntry rows + cursor envelope) is fixed
-    # here so the 3.2 card and the 3.4 scheduler agree without a contract change.
-    items: list[dict[str, Any]] = []
+    scheduler = get_retry_scheduler(request)
+    entries = await scheduler.read_retry_queue()
+    items: list[dict[str, Any]] = [asdict(entry) for entry in entries]
     return {"items": items, "next_cursor": None}
