@@ -20,7 +20,6 @@ import pytest
 from app.config import Settings
 from app.db.repository import Repository
 from app.hitl import DecisionRegistry
-from app.hitl.pause_bridge import compute_timeout_at
 from app.orchestrator import reconcile
 from app.orchestrator.reconcile import ReconcileDeps, StallSignal
 from app.orchestrator.retry import RetryScheduler
@@ -36,6 +35,18 @@ def _clock(seconds: float) -> Any:
         return _BASE + timedelta(seconds=seconds)
 
     return _now
+
+
+def _timeout_at(seconds: float) -> str:
+    """Seed a pause ``timeout_at`` relative to the test's FROZEN ``_BASE`` clock.
+
+    The reconcile tick evaluates ``timeout_at <= now()`` against the *frozen*
+    ``_clock`` (``_BASE + offset``), so the seeded deadline MUST be anchored to the
+    same frozen base — never ``compute_timeout_at`` / ``datetime.now`` (the real
+    wall clock), which makes the test date-coupled (an advanced real date pushes
+    the seeded deadline past the frozen ``now`` and the pause is no longer expired).
+    """
+    return (_BASE + timedelta(seconds=seconds)).isoformat()
 
 
 class _NoopKiller:
@@ -105,7 +116,9 @@ async def test_reconcile_auto_resolves_expired_pause_once(repo: Repository) -> N
         run_id=run_id,
         request_json='{"task_name":"Plan","questions":[],"context":{}}',
         task_name="Plan",
-        timeout_at=compute_timeout_at(minutes=60),
+        # Frozen-clock deadline at _BASE+1h (13:00Z) — genuinely PAST the reconcile
+        # tick's now() of _BASE+2h (14:00Z), independent of the real wall-clock date.
+        timeout_at=_timeout_at(60 * 60),
     )
     decisions = DecisionRegistry()
 
@@ -131,7 +144,8 @@ async def test_reconcile_without_registry_skips_pause_sweep(repo: Repository) ->
         run_id=run_id,
         request_json="{}",
         task_name="Plan",
-        timeout_at=compute_timeout_at(minutes=60),
+        # Frozen-clock deadline at _BASE+1h — past the tick's now(), date-independent.
+        timeout_at=_timeout_at(60 * 60),
     )
     deps = _deps(repo, decisions=None, now_seconds=2 * 60 * 60)
     result = await reconcile.reconcile_once(deps, _REPO)
