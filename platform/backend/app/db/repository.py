@@ -193,6 +193,22 @@ class Repository:
     # -- read connection pool --------------------------------------------------
 
     @asynccontextmanager
+    async def read_connection(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Public read seam: borrow a warm WAL read connection from the pool.
+
+        The history/analytics read module (:mod:`app.db.queries_history`) composes
+        its filtered-list / cursor-pagination / stats-aggregate SQL against a
+        borrowed read connection so all that read SQL stays out of the API layer
+        while still flowing through the **same** bounded read-pool the rest of the
+        repository uses (INV-6: reads on their own WAL connections, never the
+        single writer). A thin public wrapper over :meth:`_read_conn` — Phase-3's
+        ``GET /runs`` history filters + ``GET /stats`` aggregates read through this
+        one seam, so the SQLite→Postgres swap (NFR-PORT-1) stays additive.
+        """
+        async with self._read_conn() as conn:
+            yield conn
+
+    @asynccontextmanager
     async def _read_conn(self) -> AsyncIterator[aiosqlite.Connection]:
         """Borrow a warm WAL read connection from the pool (separate from the
         writer — INV-6); return it to the pool on exit.
