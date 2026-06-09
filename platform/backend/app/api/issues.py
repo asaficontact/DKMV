@@ -21,17 +21,14 @@ backend in v1; the App backend slots behind the same interface, ADR-P004).
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastapi import APIRouter, Request
 
+from app.api.deps import get_board_cache, get_repository
 from app.api.errors import ApiError
 from app.db.repository import Repository
 from app.github.client import GitHubAuthError, GitHubError
-from app.github.graphql import BoardPage
-from app.github.hash_cache import HashCache
 from app.github.labels import AGENT_LABEL_NAMES, EnsureLabelsResult, ensure_agent_labels
 from app.github.provider import get_github_client
 from app.github.sync import (
@@ -40,62 +37,9 @@ from app.github.sync import (
     sync_issues,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from app.config import Settings
-
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
 # router in :mod:`app.api`, which this router attaches to.
 router = APIRouter(tags=["github"])
-
-#: ``app.state`` attribute names so concurrent slices agree on the seam.
-_CACHE_ATTR = "github_hash_cache"
-_REPO_ATTR = "repository"
-
-
-def _board_cache(request: Request) -> HashCache[BoardPage]:
-    """Return (building+caching once) the shared GraphQL board hash-cache (§8.1).
-
-    GraphQL has no ETag, so we self-hash ``(query, variables)`` to coalesce
-    identical reads; the cache is process-wide (one event loop) and shared with
-    slice 1.3's rate-limit work.
-    """
-    existing = getattr(request.app.state, _CACHE_ATTR, None)
-    if existing is not None:
-        assert isinstance(existing, HashCache)
-        return existing
-    cache: HashCache[BoardPage] = HashCache()
-    setattr(request.app.state, _CACHE_ATTR, cache)
-    return cache
-
-
-@asynccontextmanager
-async def _repository(request: Request) -> AsyncIterator[Repository]:
-    """Yield the platform :class:`Repository` for this request (INV-6 writer).
-
-    The app-lifespan (slice 2.0) composes ONE long-lived, app-loop-bound
-    :class:`Repository` on ``app.state.repository`` (the single writer task per
-    process, INV-6), so the serving path **reuses** it. Resolution:
-
-    * if ``app.state.repository`` is present (the lifespan wiring, or a test that
-      injected one), use it as-is and do **not** close it — its owner (the
-      lifespan) manages its lifecycle;
-    * **test fallback only** (a ``TestClient`` that did not enter the lifespan):
-      build + ``start()`` a Repository scoped to this request and ``close()`` it
-      on exit, so the writer task is created and torn down on the serving loop
-      (a cached cross-request writer would be bound to a stale loop).
-    """
-    injected = getattr(request.app.state, _REPO_ATTR, None)
-    if injected is not None:
-        assert isinstance(injected, Repository)
-        yield injected
-        return
-    settings: Settings = request.app.state.settings
-    repository = Repository(settings.DATABASE_URL)
-    await repository.start()
-    try:
-        yield repository
-    finally:
-        await repository.close()
 
 
 def _map_github_error(exc: Exception) -> ApiError:
@@ -162,11 +106,11 @@ async def sync_project(owner: str, name: str, request: Request) -> dict[str, Any
     repo = f"{owner}/{name}"
     settings = request.app.state.settings
     client = await get_github_client(request.app, settings)
-    cache = _board_cache(request)
+    cache = get_board_cache(request)
     force_ensure = _query_flag(request, "ensure_labels")
 
     try:
-        async with _repository(request) as repository:
+        async with get_repository(request) as repository:
             labels_result = await _ensure_labels_once(repository, client, repo, force=force_ensure)
             sync_result = await sync_issues(client, repo, writer=repository, cache=cache)
     except (GitHubAuthError, GitHubError) as exc:
@@ -200,7 +144,7 @@ async def list_issues(owner: str, name: str, request: Request) -> dict[str, Any]
     additive change rather than a rewrite.
     """
     repo = f"{owner}/{name}"
-    async with _repository(request) as repository:
+    async with get_repository(request) as repository:
         cached, active = await read_board_via_repository(repository, repo)
     items = build_board_list(cached, active)
     return {"items": items, "next_cursor": None}

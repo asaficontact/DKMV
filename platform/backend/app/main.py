@@ -28,11 +28,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import api_router
+from app.api.deps import resolve_secret_key
 from app.api.errors import install_error_handlers
 from app.config import Settings, get_settings
 from app.db import Repository
 from app.github.provider import aclose_github_client, build_pat_github_client
-from app.github.write_queue import WriteQueue
+from app.github.write_queue import DEFAULT_DRAIN_GRACE_SECONDS, WriteQueue
 from app.runtime import RunService
 from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
 from app.security import AccessControlMiddleware
@@ -40,36 +41,17 @@ from app.security import AccessControlMiddleware
 _log = logging.getLogger(__name__)
 
 
-def _resolve_secret_key(settings: Settings) -> str:
-    """Resolve the Fernet host key for the lifespan-owned :class:`SecretStore`.
-
-    Prefers ``DKMV_SECRET_KEY`` (prod: OS keychain / sealed secret, §8.6). When
-    unset (dev / tests) a fresh key is generated and cached on ``settings`` so
-    the same process reuses it — encryption is **never** silently disabled, and a
-    new key per call would make stored ciphertext undecryptable on read-back.
-    """
-    import os
-
-    env_key = os.environ.get("DKMV_SECRET_KEY")
-    if env_key:
-        return env_key
-    cached: str | None = getattr(settings, "_dkmv_dev_secret_key", None)
-    if cached is None:
-        cached = SecretStore.generate_key()
-        object.__setattr__(settings, "_dkmv_dev_secret_key", cached)
-    return cached
-
-
 def _build_secret_store(repository: Repository, settings: Settings) -> SecretStore:
     """Build the single lifespan-owned :class:`SecretStore` over the repository.
 
     Persists ciphertext through the shared :class:`Repository` (the encrypted
     ``secrets`` table) so the PAT survives restarts; falls back to an env key or
-    a generated dev key (:func:`_resolve_secret_key`) so encryption is always on
-    (INV-4). One store per process replaces the slice-1.4 lazy per-request build.
+    a generated dev key (:func:`app.api.deps.resolve_secret_key`) so encryption is
+    always on (INV-4). One store per process replaces the slice-1.4 lazy
+    per-request build.
     """
     try:
-        return SecretStore(repository, key=_resolve_secret_key(settings))
+        return SecretStore(repository, key=resolve_secret_key(settings))
     except SecretStoreError:  # pragma: no cover - defensive; key is always resolvable
         return SecretStore(repository, key=SecretStore.generate_key())
 
@@ -119,7 +101,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         write_queue = getattr(app.state, "github_write_queue", None)
         if isinstance(write_queue, WriteQueue):
-            await write_queue.stop()
+            # Graceful, BOUNDED drain (INV-11): flush any in-flight / queued
+            # ``agent:*`` label PUT so the GitHub label and the DB row stay
+            # consistent, but cancel any remainder after the grace window so a
+            # token-bucket-paced backlog cannot wedge shutdown forever.
+            await write_queue.stop(grace=DEFAULT_DRAIN_GRACE_SECONDS)
         await aclose_github_client(app)
         await repository.close()
 

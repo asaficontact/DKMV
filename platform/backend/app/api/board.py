@@ -24,25 +24,16 @@ token + ``Origin``/CSRF); it declares **no** auth opt-out. It is a read-only
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastapi import APIRouter, Request
 
-from app.db.repository import Repository
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from app.config import Settings
+from app.api.deps import get_repository
 
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
 # router in :mod:`app.api`, which this router attaches to.
 router = APIRouter(tags=["github"])
-
-#: ``app.state`` attribute name — same seam as :mod:`app.api.issues` /
-#: :mod:`app.api.agent_state` so the read shares one Repository when injected.
-_REPO_ATTR = "repository"
 
 
 def start_of_utc_day(now: datetime | None = None) -> str:
@@ -59,29 +50,6 @@ def start_of_utc_day(now: datetime | None = None) -> str:
     return start.isoformat()
 
 
-@asynccontextmanager
-async def _repository(request: Request) -> AsyncIterator[Repository]:
-    """Yield the platform :class:`Repository` for this request (INV-6 writer).
-
-    Mirrors :func:`app.api.issues._repository`: reuse the lifespan-owned
-    ``app.state.repository`` (slice 2.0 — the single per-process writer task) and
-    do not close it; **as a test fallback only** (no lifespan) build + ``start()``
-    one scoped to this request on the serving loop and ``close()`` it on exit.
-    """
-    injected = getattr(request.app.state, _REPO_ATTR, None)
-    if injected is not None:
-        assert isinstance(injected, Repository)
-        yield injected
-        return
-    settings: Settings = request.app.state.settings
-    repository = Repository(settings.DATABASE_URL)
-    await repository.start()
-    try:
-        yield repository
-    finally:
-        await repository.close()
-
-
 @router.get("/repos/{owner}/{name}/board/aggregate")
 async def board_aggregate(owner: str, name: str, request: Request) -> dict[str, Any]:
     """Return the poll-driven board aggregate counters for a repo (FR-02-4, AC-17).
@@ -93,7 +61,7 @@ async def board_aggregate(owner: str, name: str, request: Request) -> dict[str, 
     """
     repo = f"{owner}/{name}"
     since_iso = start_of_utc_day()
-    async with _repository(request) as repository:
+    async with get_repository(request) as repository:
         agg = await repository.board_aggregate(repo, since_iso=since_iso)
     return {
         "repo": repo,
