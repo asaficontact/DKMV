@@ -435,6 +435,42 @@ class Repository:
 
         await self._writer.submit(_job)
 
+    async def read_run_stages(self, run_id: str) -> list[dict[str, Any]]:
+        """Read a run's ``run_stages`` rows ordered by stage index (§8.9 read).
+
+        The mutable stage read model the live-run stepper renders (slice 2.1's
+        ``GET /runs/{id}`` baseline, slice 2.4's StageTracker). A pure WAL read
+        through the same repository seam as the other reads (NFR-PORT-1); empty
+        until the event pump (slice 2.3) populates the stages.
+        """
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT run_id, idx, name, status, cost_usd, turns, duration_s "
+                "FROM run_stages WHERE run_id = ? ORDER BY idx",
+                (run_id,),
+            )
+            return [dict(r) for r in rows]
+
+    async def list_runs(
+        self, *, repo: str | None = None, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Read ``runs`` rows newest-first for the ``GET /runs`` list (§8.9 read).
+
+        The live-view run-list spine (Phase 2 baseline); the sortable/filterable
+        history with the FR-06-4 columns is Phase 3. Optionally scoped to one
+        ``repo``. A pure WAL read through the repository seam (NFR-PORT-1).
+        """
+        sql = "SELECT * FROM runs"
+        params: list[Any] = []
+        if repo is not None:
+            sql += " WHERE repo = ?"
+            params.append(repo)
+        sql += " ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend((limit, offset))
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(sql, params)  # noqa: S608 — params bound, no interpolation
+            return [dict(r) for r in rows]
+
     # === spend projection (INV-7 prep / §6.5) ================================
 
     async def run_spend(self, run_id: str) -> float:
