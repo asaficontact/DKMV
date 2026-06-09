@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import (
+    get_audit,
     get_board_cache,
     get_concurrency_slots,
     get_decision_registry,
@@ -287,11 +288,12 @@ def _audit_run_launch(request: Request, run_id: str, body: CreateRunRequest) -> 
     """Record the run-launch §8.6 audit evidence line (slice 5.3 / AC-12).
 
     Best-effort + secret-free: the run UUID + repo + issue + resolved agent + workflow
-    id, recorded on the durable ``app.state.audit`` sink (a leak-safe security trail,
-    redact-before-persist — INV-4). A missing sink is a graceful no-op so a bare /
-    no-lifespan client never trips on it.
+    id, recorded on the lifespan-owned audit sink resolved through the centralized
+    :func:`app.api.deps.get_audit` seam (a leak-safe security trail, redact-before-
+    persist — INV-4) — never the bare ``getattr(app.state, "audit", …)`` literal.
+    A missing sink is a graceful no-op so a bare / no-lifespan client never trips.
     """
-    audit = getattr(request.app.state, "audit", None)
+    audit = get_audit(request)
     if audit is None:
         return
     audit.record_run_launch(

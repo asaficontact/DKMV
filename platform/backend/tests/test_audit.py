@@ -22,6 +22,7 @@ from app.security import (
     FileAuditSink,
     MemoryAuditSink,
 )
+from app.security.audit import AuditRecord
 
 # A non-real secret literal (assembled from fragments so the INV-4 grep over
 # ``app/`` never flags this test file as a secret being written to a log).
@@ -188,3 +189,113 @@ def test_token_minter_records_mint_and_use(tmp_path: Path) -> None:
             await repository.close()
 
     asyncio.run(_run())
+
+
+def test_run_service_start_records_token_mint_and_use_in_production(tmp_path: Path) -> None:
+    """FIX-2 / AC-12: the PRODUCTION run-launch path (``RunService.start``) records the
+    ``token_mint`` + ``token_use`` audit kinds — not just a test calling the helper.
+
+    Binds a minter + audit sink onto a real :class:`RunService` (the lifespan
+    injection) and starts a run against a fake engine runtime; the token-mint and
+    push-authorization (token-use) evidence lines must appear, with NO raw token
+    value (INV-4)."""
+    import asyncio
+    from typing import Any
+
+    from app.db import Repository
+    from app.runtime import RunService
+    from app.secrets.store import SecretStore
+
+    from tests.conftest import _migrate, make_settings
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.started = False
+
+        async def start(self, *, component: str, source: Any, **kwargs: Any) -> str:
+            self.started = True
+            return "handle"
+
+    async def _run() -> None:
+        url = _migrate(tmp_path / "rs.db")
+        repository = Repository(url)
+        await repository.start()
+        try:
+            settings = make_settings(
+                OUTPUT_DIR=tmp_path / "out",
+                GITHUB_TOKEN=_FAKE_PAT,
+            )
+            store = SecretStore(repository, key=SecretStore.generate_key())
+            audit, sink = _audit_with_redactor()
+            runtime = _FakeRuntime()
+            service = RunService(settings, runtime=runtime)  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed fake engine
+            # The lifespan injection that turns the dormant hooks live in production.
+            service.bind_run_token_minting(secret_store=store, audit=audit)
+            await service.start(
+                component="dev",
+                repo="acme/app",
+                branch="dkmv/issue-1",
+                feature_name="widget",
+                run_id="run-prod-1",
+            )
+            assert runtime.started
+            kinds = {r.kind for r in sink.records}
+            assert AuditEventKind.TOKEN_MINT in kinds
+            assert AuditEventKind.TOKEN_USE in kinds
+            mint = next(r for r in sink.records if r.kind is AuditEventKind.TOKEN_MINT)
+            assert mint.run_id == "run-prod-1"
+            assert mint.details["repo"] == "acme/app"
+            use = next(r for r in sink.records if r.kind is AuditEventKind.TOKEN_USE)
+            assert use.details["allowed"] is True
+            # No record carries the raw token value (INV-4).
+            blob = json.dumps([r.to_json() for r in sink.records])
+            assert _FAKE_PAT not in blob
+        finally:
+            await repository.close()
+
+    asyncio.run(_run())
+
+
+def test_run_service_start_without_github_token_skips_minting(tmp_path: Path) -> None:
+    """No operator GITHUB_TOKEN → no minter bound → start is a graceful no-op (no records)."""
+    import asyncio
+    from typing import Any
+
+    from app.db import Repository
+    from app.runtime import RunService
+    from app.secrets.store import SecretStore
+
+    from tests.conftest import _migrate, make_settings
+
+    class _FakeRuntime:
+        async def start(self, *, component: str, source: Any, **kwargs: Any) -> str:
+            return "handle"
+
+    async def _run() -> None:
+        url = _migrate(tmp_path / "rs2.db")
+        repository = Repository(url)
+        await repository.start()
+        try:
+            settings = make_settings(OUTPUT_DIR=tmp_path / "out", GITHUB_TOKEN="")
+            store = SecretStore(repository, key=SecretStore.generate_key())
+            audit, sink = _audit_with_redactor()
+            service = RunService(settings, runtime=_FakeRuntime())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed fake engine
+            service.bind_run_token_minting(secret_store=store, audit=audit)
+            await service.start(component="dev", repo="acme/app", run_id="run-x")
+            assert sink.records == []
+        finally:
+            await repository.close()
+
+    asyncio.run(_run())
+
+
+def test_file_audit_sink_created_with_restrictive_mode(tmp_path: Path) -> None:
+    """FIX-4: the durable audit file is created 0o600 (owner-only), not the process umask."""
+    import stat
+
+    sink = FileAuditSink(tmp_path / "nested" / "audit.log")
+    sink.write(AuditRecord(kind=AuditEventKind.RUN_LAUNCH, timestamp="2026-01-01T00:00:00+00:00"))
+    mode = stat.S_IMODE((tmp_path / "nested" / "audit.log").stat().st_mode)
+    # No group/world bits — owner read/write only.
+    assert mode & 0o077 == 0
+    assert mode & 0o600 == 0o600

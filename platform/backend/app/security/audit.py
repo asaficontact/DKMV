@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -123,11 +124,16 @@ class FileAuditSink:
     def write(self, record: AuditRecord) -> None:
         line = json.dumps(record.to_json(), default=str, ensure_ascii=False)
         try:
-            with self._path.open("a", encoding="utf-8") as handle:
+            # Open/create the durable evidence file with an explicit restrictive
+            # mode (0o600 — owner read/write only) rather than the inherited process
+            # umask, so the audit trail (a security-sensitive record of token mints,
+            # egress denials, and HITL approvals) is not group/world-readable on a
+            # multi-user host. ``os.open`` + ``O_APPEND|O_CREAT`` applies the mode
+            # only on creation; an existing file keeps its (already-restrictive) mode.
+            fd = os.open(self._path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
                 handle.flush()
-                import os
-
                 os.fsync(handle.fileno())
         except OSError:  # pragma: no cover - defensive: never break a control on audit IO
             _log.warning("audit write failed for kind=%s", record.kind.value, exc_info=True)

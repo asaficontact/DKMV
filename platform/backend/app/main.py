@@ -304,6 +304,17 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     secret_store = _build_secret_store(repository, settings)
     app.state.secret_store = secret_store
 
+    # Bind the run-token minter + audit sink onto the (app-creation-time) RunService
+    # now that the encrypted SecretStore and the audit log exist (slice 5.3 / AC-12).
+    # This is what makes the ``token_mint`` + ``token_use`` §8.6 audit kinds actually
+    # recorded IN PRODUCTION: the launch path's ``RunService.start`` mints a repo-
+    # scoped, ≤1 hr token (INV-4) and authorizes the push, passing this audit sink —
+    # previously those two kinds were exercised only by tests (dormant hooks).
+    app.state.run_service.bind_run_token_minting(
+        secret_store=secret_store,
+        audit=getattr(app.state, "audit", None),
+    )
+
     # Build the GitHub client once unless a test/connect already injected one.
     if getattr(app.state, "github_client", None) is None:
         app.state.github_client = await build_pat_github_client(secret_store, settings)

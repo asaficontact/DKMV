@@ -192,6 +192,36 @@ def test_answer_endpoint_200_then_409(tmp_path: Path) -> None:
     assert "merge34" in (row["answer_json"] or "")
 
 
+def test_answer_audit_records_precise_decision_id(tmp_path: Path) -> None:
+    """FIX-3 / AC-12: the §8.6 decision-resolution audit records the PRECISE
+    ``pause_decisions.id`` (not the run id), threaded onto ``AnswerResult``."""
+    from app.security import AuditEventKind, AuditLog, MemoryAuditSink
+
+    url = _migrate(tmp_path / "t.db")
+    run_id = _run(_seed_pending_at(url))
+    # The decision row's real id (what the audit must record).
+    decision_row = _run(_read_decision_at(url, run_id))
+    assert decision_row is not None
+    decision_id = str(decision_row["id"])
+    assert decision_id != run_id  # a UUID-distinct id, not the run id
+
+    client = build_client(settings=make_settings(DATABASE_URL=url))
+    # Swap the lifespan's file sink for an in-memory one the route resolves via
+    # ``get_audit`` per-request (one canonical reader seam — FIX-1).
+    sink = MemoryAuditSink()
+    client.app.state.audit = AuditLog(sink)  # type: ignore[attr-defined]  # DKMVP-ESCAPE: test re-publishes the audit singleton
+
+    body = {"answers": {"phases": "merge34"}, "skip_remaining": False}
+    resp = client.post(f"/api/v1/runs/{run_id}/answer", json=body, headers=auth_headers())
+    assert resp.status_code == 200
+    assert resp.json() == {"resolved": True}
+
+    rec = next(r for r in sink.records if r.kind is AuditEventKind.DECISION_RESOLUTION)
+    assert rec.run_id == run_id
+    assert rec.details["decision_id"] == decision_id
+    assert rec.details["resolved_by"] == "human"
+
+
 def test_answer_unknown_run_404(tmp_path: Path) -> None:
     url = _migrate(tmp_path / "t.db")
     client = build_client(settings=make_settings(DATABASE_URL=url))

@@ -25,7 +25,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_decision_registry
+from app.api.deps import get_audit, get_decision_registry
 from app.api.errors import run_not_found
 from app.db.repository import Repository
 from app.hitl.answer import AnswerRequest, answer_run_pause
@@ -92,14 +92,18 @@ async def answer_pause(run_id: str, body: AnswerPauseBody, request: Request) -> 
     # §8.6 audit (slice 5.3 / AC-12): record the HITL decision resolution — incl. the
     # NFR-SEC-5 PR-push approval gate — to the durable audit trail. Only the WINNING
     # human resolution reaches here (the exactly-once guard raised 409 otherwise), so
-    # this is a single evidence line per resolved decision. Secret-free + best-effort
-    # (the audit facade swallows sink errors); skipped when no audit sink is composed.
-    audit = getattr(request.app.state, "audit", None)
+    # this is a single evidence line per resolved decision. The PRECISE flipped
+    # ``pause_decisions.id`` (``result.decision_id`` — FIX-3) is recorded, so a
+    # multi-pause run no longer collapses every resolution to the run id. Resolved
+    # through the centralized ``get_audit`` seam (never the bare ``getattr`` literal);
+    # secret-free + best-effort (the audit facade swallows sink errors); skipped when
+    # no audit sink is composed.
+    audit = get_audit(request)
     if audit is not None:
         audit.record_decision_resolution(
             run_id=run_id,
-            decision_id=run_id,
+            decision_id=result.decision_id,
             resolved_by="human",
             skip_remaining=body.skip_remaining,
         )
-    return result
+    return {"resolved": result.resolved}

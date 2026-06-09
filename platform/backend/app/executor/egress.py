@@ -163,6 +163,18 @@ def audit_egress_denials(
     only — never a credential). ``audit=None`` is a graceful no-op (the denial still
     happens at the network layer; only its audit line is skipped). Returns the denied
     hosts so the caller can also log/raise as it already does.
+
+    PRODUCTION-WIRING NOTE (slice 5.3 / FIX-2): a *live* egress denial is observable
+    only at the **network/container layer** — the ``dkmv-egress`` internal network +
+    the filtering-proxy sidecar enforce the allowlist (see
+    :meth:`EgressPolicy.docker_egress_args` / :func:`proxy_acl_lines`); there is no
+    in-process Python call site where a real outbound denial *surfaces* (Python only
+    renders the proxy ACL). So this helper is intentionally left **ready but not
+    production-wired here** — the production wiring (reading the proxy's deny log /
+    the e2e exfil-attempt assertion) lands in **5.4's AT-Isolation** release test,
+    which has the running container + proxy to observe a real denial. It is NOT faked
+    from a Python decision: a synthetic ``is_allowed``-based call would record an
+    audit line for a denial that never actually happened at the network layer.
     """
     denied = policy.denied(hosts)
     if audit is not None:

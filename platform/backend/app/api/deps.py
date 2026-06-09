@@ -48,6 +48,7 @@ from app.sse.observer_bridge import StreamRegistry
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.config import Settings
+    from app.security.audit import AuditLog
 
 #: ``app.state`` attribute names. Centralized here so every slice agrees on the
 #: seam (the names are unchanged from the per-router constants they replace).
@@ -62,6 +63,14 @@ BOARD_CACHE_ATTR = "github_hash_cache"
 DECISION_REGISTRY_ATTR = "decision_registry"
 CONCURRENCY_SLOTS_ATTR = "concurrency_slots"
 STREAM_REGISTRY_ATTR = "stream_registry"
+#: ``app.state`` attribute name for the lifespan-published durable §8.6 audit log
+#: (slice 5.3 / AC-12). ``app.main._lifespan`` is the PUBLISHER (composes the
+#: redactor-wrapped :class:`AuditLog` once, co-located with the SQLite file). Read
+#: here so ``runs.py`` (run-launch) and ``answer.py`` (decision-resolution) resolve
+#: the SAME sink through one seam — never a private per-module string-literal
+#: ``getattr(app.state, "audit", None)`` (the bare-literal magic this consolidates).
+#: A missing sink is a graceful ``None`` (a no-lifespan bare client never trips).
+AUDIT_ATTR = "audit"
 #: ``app.state`` attribute name for the lifespan-published LOCAL project root (slice
 #: 4.2). Published once by ``app.main._resolve_project_root`` (the PUBLISHER — resolves
 #: + existence-validates ``DKMV_PROJECT_ROOT``, degrading to ``None`` on a missing
@@ -253,6 +262,28 @@ def get_stream_registry(request: Request) -> StreamRegistry:
     registry = StreamRegistry()
     setattr(request.app.state, STREAM_REGISTRY_ATTR, registry)
     return registry
+
+
+def get_audit(request: Request) -> AuditLog | None:
+    """Return the lifespan-published durable §8.6 audit log (slice 5.3 / AC-12).
+
+    The route reader seam for the run-launch evidence line (``runs.py``) and the
+    HITL decision-resolution evidence line (``answer.py``). The lifespan composes
+    exactly ONE redactor-wrapped :class:`AuditLog` on ``app.state.audit`` (INV-4 —
+    redact-before-persist), so handlers **reuse** it rather than touching the bare
+    ``getattr(app.state, "audit", None)`` literal each site used to inline. Mirrors
+    every other ``get_*`` resolver, except it returns ``None`` (not a test-fallback
+    build) when no sink is composed: the audit trail is a *publisher-only* singleton
+    (``main`` owns it), and a no-lifespan bare client must degrade to a graceful
+    no-op rather than silently spin up an un-drained file sink. A strict **read** —
+    no mutation, no engine call (INV-13)."""
+    audit = getattr(request.app.state, AUDIT_ATTR, None)
+    if audit is None:
+        return None
+    from app.security.audit import AuditLog
+
+    assert isinstance(audit, AuditLog)
+    return audit
 
 
 def get_board_cache(request: Request) -> HashCache[BoardPage]:
