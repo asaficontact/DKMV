@@ -30,7 +30,7 @@ from fastapi import APIRouter, Request
 from app.api.deps import get_repository
 from app.api.errors import run_not_found
 from app.db.queries_history import list_runs_filtered
-from app.runs.service import build_run_detail, build_run_summaries
+from app.runs.service import DEFAULT_MEMORY, build_run_detail, build_run_summaries
 
 #: No prefix here: the ``/api/v1`` version prefix is owned by the single parent
 #: router in :mod:`app.api`.
@@ -98,13 +98,8 @@ async def get_run(run_id: str, request: Request) -> dict[str, Any]:
             repository,
             row,
             sandbox_image=settings.DKMV_IMAGE,
-            default_memory=_default_memory(settings),
+            default_memory=DEFAULT_MEMORY,
         )
-
-
-def _default_memory(settings: Any) -> str:
-    """The default container memory limit (FR-04-5 default '8g')."""
-    return "8g"
 
 
 def _parse_limit(request: Request) -> int:

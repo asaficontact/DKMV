@@ -19,12 +19,18 @@ What this module computes:
 
 **Codex exclusion (FR-06-1a / INV-8 — binding).** Codex reports ``$0`` from the
 engine and supports no budget cap, so its runs are **excluded from
-``total_spend_usd`` and the daily ``spend_series``** (via the run's ``agent``
-column, matching :meth:`Repository.total_spend`), while its **tokens and
-agent-hours count normally**. The spend numbers are the **segment-sum**
+``total_spend_usd`` and the daily ``spend_series``**, while its **tokens and
+agent-hours count normally**.
+
+**One canonical segment-sum (INV-7).** The spend numbers are the segment-sum
 projection (per ``(run_id, task_index)`` last-cumulative ``cost_usd``, never a
-naive ``SUM`` over events — INV-7), read from the same event log the live meter
-and the board strip read.
+naive ``SUM`` over events). This module does **not** re-implement that CTE: the
+daily Codex-excluded series comes from :meth:`Repository.daily_spend_series`
+(a sibling of :meth:`Repository.total_spend` / :meth:`Repository.run_spends`,
+sharing the **same** ``last_per_task`` CTE shape), and ``total_spend_usd`` is the
+sum of that series — so the one segment-sum definition lives in the repository
+spend methods and ``/stats`` reads through it, reconciling exactly with the live
+meter and the board strip.
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ from typing import Any
 
 import aiosqlite
 
-from app.db.repository import COST_EXCLUDED_AGENT, Repository
+from app.db.repository import Repository
 
 #: The two run statuses (§6.3) that move the success ratio. The PRD pins success
 #: rate to ``completed/(completed+failed)`` (FR-06-1), so the denominator is
@@ -134,13 +140,18 @@ async def compute_stats(repository: Repository) -> StatsResult:
     * ``total_runs`` — every ``runs`` row.
     * ``completed`` / ``failed`` — the success-rate halves (``completed +
       failed`` denominator, FR-06-1).
-    * ``total_spend_usd`` — the **segment-sum** spend (per ``(run_id, task_index)``
-      last-cumulative ``cost_usd``, INV-7) over **non-Codex** runs (FR-06-1a).
     * ``tokens`` — ``Σ(tokens_in + tokens_out)`` over **every** run (Codex
       included — its tokens are real, FR-06-1a).
     * ``agent_hours`` — ``Σ duration_s / 3600`` over every run (Codex included).
-    * ``spend_series`` — daily Codex-excluded segment-sum spend keyed by the
-      ``started_at`` date, oldest-first.
+    * ``spend_series`` — daily Codex-excluded **segment-sum** spend (per
+      ``(run_id, task_index)`` last-cumulative ``cost_usd``, INV-7) keyed by the
+      ``started_at`` date, oldest-first, via :meth:`Repository.daily_spend_series`
+      (the **one** canonical segment-sum definition — never a CTE re-implemented
+      here).
+    * ``total_spend_usd`` — the same Codex-excluded segment-sum spend, **derived
+      as the sum of ``spend_series``** so the events table is scanned once for the
+      spend total + series, not twice (FIX-4 / PERF), and the run total always
+      reconciles exactly with the bars it summarizes.
     """
     async with repository.read_connection() as conn:
         total_runs = await _scalar_int(conn, "SELECT COUNT(*) AS n FROM runs")
@@ -152,8 +163,12 @@ async def compute_stats(repository: Repository) -> StatsResult:
         agent_seconds = await _scalar_float(
             conn, "SELECT COALESCE(SUM(duration_s), 0.0) AS n FROM runs"
         )
-        total_spend = await _total_spend_excluding_codex(conn)
-        spend_series = await _spend_series_excluding_codex(conn)
+    # The Codex-excluded segment-sum series IS the one canonical projection
+    # (Repository.daily_spend_series — same last_per_task CTE as total_spend /
+    # run_spends). The /stats total is the sum of those daily buckets, so the
+    # events segment-sum is read exactly once for both the total and the series.
+    spend_series = await repository.daily_spend_series()
+    total_spend = sum(float(point["usd"]) for point in spend_series)
     return StatsResult(
         total_runs=total_runs,
         completed=completed,
@@ -178,74 +193,3 @@ async def _scalar_float(conn: aiosqlite.Connection, sql: str) -> float:
 async def _count_status(conn: aiosqlite.Connection, status: str) -> int:
     rows = await conn.execute_fetchall("SELECT COUNT(*) AS n FROM runs WHERE status = ?", (status,))
     return int(next(iter(rows))["n"]) if rows else 0
-
-
-async def _total_spend_excluding_codex(conn: aiosqlite.Connection) -> float:
-    """Σ segment-sum spend across all non-Codex runs (INV-7 / FR-06-1a).
-
-    Per ``(run_id, task_index)`` last-cumulative ``cost_usd`` summed per run, then
-    summed across runs, with **Codex excluded** by the run's ``agent`` column —
-    identical to :meth:`Repository.total_spend`, recomputed here so the stats
-    read shares one event-log source with the live meter (never a naive ``SUM``
-    over events).
-    """
-    rows = await conn.execute_fetchall(
-        """
-        WITH last_per_task AS (
-            SELECT e.run_id AS run_id, e.cost_usd AS cost_usd
-            FROM events e
-            JOIN (
-                SELECT run_id, task_index, MAX(id) AS max_id
-                FROM events
-                WHERE cost_usd IS NOT NULL
-                GROUP BY run_id, task_index
-            ) m ON e.run_id = m.run_id AND e.id = m.max_id
-        )
-        SELECT COALESCE(SUM(lpt.cost_usd), 0.0) AS total
-        FROM last_per_task lpt
-        JOIN runs r ON r.id = lpt.run_id
-        WHERE COALESCE(LOWER(r.agent), '') != ?
-        """,
-        (COST_EXCLUDED_AGENT,),
-    )
-    return float(next(iter(rows))["total"] or 0.0) if rows else 0.0
-
-
-async def _spend_series_excluding_codex(conn: aiosqlite.Connection) -> list[dict[str, Any]]:
-    """Daily Codex-excluded segment-sum spend ``[{date, usd}]`` oldest-first.
-
-    Buckets each run's segment-sum spend by the **date** half of its UTC
-    ``started_at`` (``YYYY-MM-DD``); **Codex runs are excluded** (FR-06-1a) so a
-    $0-cost Codex run never adds a phantom bar. The per-run segment sum is the
-    same last-cumulative-per-task projection used everywhere (INV-7).
-    """
-    rows = await conn.execute_fetchall(
-        """
-        WITH last_per_task AS (
-            SELECT e.run_id AS run_id, e.cost_usd AS cost_usd
-            FROM events e
-            JOIN (
-                SELECT run_id, task_index, MAX(id) AS max_id
-                FROM events
-                WHERE cost_usd IS NOT NULL
-                GROUP BY run_id, task_index
-            ) m ON e.run_id = m.run_id AND e.id = m.max_id
-        ),
-        per_run AS (
-            SELECT lpt.run_id AS run_id, SUM(lpt.cost_usd) AS spend
-            FROM last_per_task lpt
-            JOIN runs r ON r.id = lpt.run_id
-            WHERE COALESCE(LOWER(r.agent), '') != ?
-              AND r.started_at IS NOT NULL
-            GROUP BY lpt.run_id
-        )
-        SELECT substr(r.started_at, 1, 10) AS day,
-               COALESCE(SUM(pr.spend), 0.0) AS usd
-        FROM per_run pr
-        JOIN runs r ON r.id = pr.run_id
-        GROUP BY day
-        ORDER BY day
-        """,
-        (COST_EXCLUDED_AGENT,),
-    )
-    return [{"date": str(r["day"]), "usd": float(r["usd"] or 0.0)} for r in rows]

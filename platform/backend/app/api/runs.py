@@ -44,6 +44,7 @@ from app.github.client import GitHubAuthError, GitHubError
 from app.github.provider import get_github_client
 from app.hitl import PauseBridgeDeps, build_pause_bridge
 from app.runs.launch import LaunchRequest, launch_run
+from app.runs.service import DEFAULT_MEMORY
 from app.runtime import RunService
 from app.sse.auth import set_sse_cookie
 from app.sse.run_stream import RUN_STREAM_TASKS_ATTR, attach_run_stream
@@ -254,7 +255,7 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
                 cache=cache,
                 connected_repo=_connected_repo(request, body.repo),
                 project_root=None,
-                default_memory=_default_memory(settings),
+                default_memory=DEFAULT_MEMORY,
                 current_labels=current_labels,
                 build_on_pause=_build_on_pause,
                 attach_stream=_attach_stream,
@@ -285,11 +286,6 @@ def _cookie_secure(settings: Any) -> bool:
     deployment opts in via ``DKMV_COOKIE_SECURE``.
     """
     return bool(getattr(settings, "DKMV_COOKIE_SECURE", False))
-
-
-def _default_memory(settings: Any) -> str:
-    """The default container memory limit (FR-04-5 default '8g')."""
-    return "8g"
 
 
 async def _issue_labels(repository: Any, repo: str, num: int) -> list[str]:

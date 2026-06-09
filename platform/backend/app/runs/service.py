@@ -18,8 +18,8 @@ What it returns (PRD §8.9):
   The ``decision`` block is the PauseCard rehydration source (slice 2.3, §8.3):
   the run's open ``pause_decisions`` row when paused, else ``null``.
 
-* :func:`build_run_summary` → one ``GET /runs`` list row (the live-view spine;
-  history filters/sort are Phase 3).
+* :func:`build_run_summaries` → a whole ``GET /runs`` list page in one bulk
+  spend query (the live-view spine; history filters/sort are Phase 3).
 
 **Codex cost handling (INV-8 / FR-06-1a).** A Codex run reports ``$0`` from the
 engine, so its ``cost_usd`` is rendered ``null`` (the UI shows "—") and it is
@@ -51,6 +51,12 @@ RUN_CONFIG_KEYS: tuple[str, ...] = (
     "max_budget_usd",
     "memory_limit",
 )
+
+#: The default container memory limit (FR-04-5) surfaced by ``GET /runs`` and
+#: ``GET /runs/{id}`` when a (legacy) run row carries no persisted
+#: ``memory_limit``. Single source so the run-detail and history handlers don't
+#: each re-hardcode ``'8g'`` — matches the engine default (DKMVConfig.memory_limit).
+DEFAULT_MEMORY = "8g"
 
 
 def _is_codex(agent: Any) -> bool:
@@ -276,24 +282,6 @@ def _summary_row(row: dict[str, Any], cost_usd: float | None) -> dict[str, Any]:
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
     }
-
-
-async def build_run_summary(
-    repository: Repository,
-    row: dict[str, Any],
-) -> dict[str, Any]:
-    """Project a ``runs`` row into one ``GET /runs`` list row (the live spine).
-
-    The minimal summary the run list renders (id, identity, status, the
-    segment-sum cost — Codex ``null``, tokens/turns). History filters/sort/columns
-    are Phase 3 (FR-06-4); Phase 2 ships the baseline list spine. Single-row
-    helper retained for callers that already hold one row; the list path uses the
-    bulk :func:`build_run_summaries` (one spend query, not N).
-    """
-    run_id = str(row["id"])
-    agent = row.get("agent")
-    cost_usd = None if _is_codex(agent) else await repository.run_spend(run_id)
-    return _summary_row(row, cost_usd)
 
 
 async def build_run_summaries(

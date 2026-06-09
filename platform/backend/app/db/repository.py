@@ -610,26 +610,6 @@ class Repository:
             )
             return [dict(r) for r in rows]
 
-    async def list_runs(
-        self, *, repo: str | None = None, limit: int = 100, offset: int = 0
-    ) -> list[dict[str, Any]]:
-        """Read ``runs`` rows newest-first for the ``GET /runs`` list (§8.9 read).
-
-        The live-view run-list spine (Phase 2 baseline); the sortable/filterable
-        history with the FR-06-4 columns is Phase 3. Optionally scoped to one
-        ``repo``. A pure WAL read through the repository seam (NFR-PORT-1).
-        """
-        sql = "SELECT * FROM runs"
-        params: list[Any] = []
-        if repo is not None:
-            sql += " WHERE repo = ?"
-            params.append(repo)
-        sql += " ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?"
-        params.extend((limit, offset))
-        async with self._read_conn() as conn:
-            rows = await conn.execute_fetchall(sql, params)  # noqa: S608 — params bound, no interpolation
-            return [dict(r) for r in rows]
-
     # === spend projection (INV-7 prep / §6.5) ================================
 
     async def run_spend(self, run_id: str) -> float:
@@ -776,6 +756,55 @@ class Repository:
                 )
             )
             return float(rows[0]["total"] or 0.0)
+
+    async def daily_spend_series(self) -> list[dict[str, Any]]:
+        """Daily Codex-excluded segment-sum spend ``[{date, usd}]`` oldest-first.
+
+        The ``GET /stats`` ``spend_series`` (FR-06-1a / §8.9): each run's
+        segment-sum spend bucketed by the **date** half of its UTC ``started_at``
+        (``YYYY-MM-DD``). Reuses the **same** canonical ``last_per_task`` CTE shape
+        as :meth:`total_spend` / :meth:`run_spends` — one per-``(run_id,
+        task_index)`` last-cumulative-``cost_usd`` definition (INV-7), never a
+        naive ``SUM`` over events, never keep-latest. **Codex runs are excluded**
+        by the run's ``agent`` column so a $0-cost Codex run never adds a phantom
+        bar; the per-run cumulatives are summed per task, then bucketed by day. A
+        pure WAL read through the repository seam (NFR-PORT-1) so the one
+        segment-sum definition lives here, not forked into the history layer.
+        """
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                """
+                WITH last_per_task AS (
+                    SELECT e.run_id AS run_id,
+                           e.cost_usd AS cost_usd
+                    FROM events e
+                    JOIN (
+                        SELECT run_id, task_index, MAX(id) AS max_id
+                        FROM events
+                        WHERE cost_usd IS NOT NULL
+                        GROUP BY run_id, task_index
+                    ) m
+                      ON e.run_id = m.run_id
+                     AND e.id = m.max_id
+                ),
+                per_run AS (
+                    SELECT lpt.run_id AS run_id, SUM(lpt.cost_usd) AS spend
+                    FROM last_per_task lpt
+                    JOIN runs r ON r.id = lpt.run_id
+                    WHERE COALESCE(LOWER(r.agent), '') != ?
+                      AND r.started_at IS NOT NULL
+                    GROUP BY lpt.run_id
+                )
+                SELECT substr(r.started_at, 1, 10) AS day,
+                       COALESCE(SUM(pr.spend), 0.0) AS usd
+                FROM per_run pr
+                JOIN runs r ON r.id = pr.run_id
+                GROUP BY day
+                ORDER BY day
+                """,
+                (COST_EXCLUDED_AGENT,),
+            )
+            return [{"date": str(r["day"]), "usd": float(r["usd"] or 0.0)} for r in rows]
 
     async def board_aggregate(self, repo: str, *, since_iso: str) -> BoardAggregate:
         """The board aggregate-strip + chip counters for a repo (FR-02-4, AC-17).

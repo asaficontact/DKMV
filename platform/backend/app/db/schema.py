@@ -132,6 +132,13 @@ runs = Table(
     # so the per-poll board read does not table-scan runs (added in migration
     # 75c6c8e45770).
     Index("ix_runs_repo_status", "repo", "status"),
+    # history default ordering (F10 landing read): the GET /runs page does
+    # ORDER BY started_at DESC, id DESC LIMIT 101 with no leading status/repo
+    # predicate. ix_runs_status_started_at (status, started_at) cannot serve it
+    # (status is not bound), so without this it SCANs runs + builds a temp B-tree.
+    # A (started_at, id) composite backs both the sort key and the id DESC
+    # tiebreak from the index (added in migration 9b1f4c2a7e30).
+    Index("ix_runs_started_at_id", "started_at", "id"),
 )
 
 # --- run_stages (mutable read model) ------------------------------------------
