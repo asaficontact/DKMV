@@ -83,9 +83,23 @@ async def answer_pause(run_id: str, body: AnswerPauseBody, request: Request) -> 
     if await repository.get_run(run_id) is None:
         raise run_not_found(run_id)
     decisions = get_decision_registry(request)
-    return await answer_run_pause(
+    result = await answer_run_pause(
         repository=repository,
         decisions=decisions,
         run_id=run_id,
         request=AnswerRequest(answers=dict(body.answers), skip_remaining=body.skip_remaining),
     )
+    # §8.6 audit (slice 5.3 / AC-12): record the HITL decision resolution — incl. the
+    # NFR-SEC-5 PR-push approval gate — to the durable audit trail. Only the WINNING
+    # human resolution reaches here (the exactly-once guard raised 409 otherwise), so
+    # this is a single evidence line per resolved decision. Secret-free + best-effort
+    # (the audit facade swallows sink errors); skipped when no audit sink is composed.
+    audit = getattr(request.app.state, "audit", None)
+    if audit is not None:
+        audit.record_decision_resolution(
+            run_id=run_id,
+            decision_id=run_id,
+            resolved_by="human",
+            skip_remaining=body.skip_remaining,
+        )
+    return result

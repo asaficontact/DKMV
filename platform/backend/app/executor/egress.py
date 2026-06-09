@@ -29,6 +29,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.security.audit import AuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -141,3 +145,27 @@ def proxy_acl_lines(policy: EgressPolicy) -> Sequence[str]:
     This keeps the allowlist single-sourced from :class:`EgressPolicy`.
     """
     return [f"Allow {host}" for host in sorted(policy._normalized)]
+
+
+def audit_egress_denials(
+    policy: EgressPolicy,
+    hosts: Iterable[str],
+    *,
+    audit: AuditLog | None,
+    run_id: str | None = None,
+) -> list[str]:
+    """Record each allowlist-denied host to the §8.6 audit trail; return the denied set.
+
+    The seam the executor / the AT-Isolation release test (5.4) uses to turn the
+    network-layer denial decision (:meth:`EgressPolicy.denied`) into a durable
+    **audit** evidence line (AC-12 / INV-3): "the denial is logged + surfaced to the
+    audit log". Each blocked host is recorded as an ``egress_denial`` kind (host name
+    only — never a credential). ``audit=None`` is a graceful no-op (the denial still
+    happens at the network layer; only its audit line is skipped). Returns the denied
+    hosts so the caller can also log/raise as it already does.
+    """
+    denied = policy.denied(hosts)
+    if audit is not None:
+        for host in denied:
+            audit.record_egress_denial(host=host, run_id=run_id)
+    return denied
