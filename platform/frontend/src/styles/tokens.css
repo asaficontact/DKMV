@@ -152,6 +152,22 @@
   --lbl-docs:             #7c7a82;
   --lbl-infra:            #22b8cf;
   --lbl-good-first-issue: #34c98a;
+
+  /* Named agent brand colors (from data.jsx AGENTS, §6.1). The board's agent
+     chip resolves a color via these vars instead of inline hex; lives here
+     because tokens.css is the only file allowed hex (INV-14). */
+  --agent-claude: #ff6b4a; /* coral  */
+  --agent-codex:  #34c98a; /* green  */
+
+  /* Per-skin accent swatch colors for the TopBar ThemePicker (components.jsx
+     THEMES). The picker shows a small color square per skin; the literal lives
+     here (the only hex-permitted file) and is referenced by var in TopBar. */
+  --skin-accent-ember:     #ff6b4a;
+  --skin-accent-indigo:    #7b7bf5;
+  --skin-accent-evergreen: #18b88a;
+  --skin-accent-graphite:  #5d8bf0;
+  --skin-accent-plum:      #d563c9;
+  --skin-accent-rose:      #fb6f7a;
 }
 
 * { box-sizing: border-box; }
@@ -237,6 +253,24 @@ body {
   border: 1px solid color-mix(in oklab, var(--lc, var(--st-cancel)) 35%, transparent);
   color: var(--lc, var(--st-cancel));
   background: color-mix(in oklab, var(--lc, var(--st-cancel)) 12%, transparent);
+}
+
+/* ---------- Badges / pills (workflow + agent chips, §5.3) ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; font-weight: 600;
+  padding: 3px 9px 3px 8px; border-radius: var(--r-pill);
+  letter-spacing: .1px; line-height: 1.4;
+  border: 1px solid transparent;
+}
+.badge .dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; flex: none; }
+.badge-soft { background: var(--surface-2); color: var(--text-2); border-color: var(--border); }
+
+/* tiny visually-hidden helper for a11y labels that should not render visually */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
 /* ---------- Inputs ---------- */
