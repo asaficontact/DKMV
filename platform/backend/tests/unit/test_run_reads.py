@@ -210,3 +210,126 @@ def test_run_reads_require_token(tmp_path: Path) -> None:
     client, _url = _client(tmp_path / "t.db")
     assert client.get("/api/v1/runs").status_code == 401
     assert client.get("/api/v1/runs/anything").status_code == 401
+
+
+# ── FIX-1: GET /runs list uses ONE bulk spend query (no per-run N+1) ──────────
+
+
+async def _seed_multi_cost_run(
+    url: str, *, key: str, issue_num: int, costs: list[tuple[int, int, float]]
+) -> str:
+    """Seed a Claude run whose ``costs`` are (task_index, seq, cumulative_cost).
+
+    The segment sum is Σ over distinct task_index of the *last* (highest seq/id)
+    cumulative cost — exercising the per-(run_id, task_index) last-cumulative
+    dedup in the bulk projection.
+    """
+    repository = Repository(url)
+    await repository.start()
+    try:
+        run_id, _won = await repository.claim_run(
+            idempotency_key=key,
+            repo="o/r",
+            issue_num=issue_num,
+            workflow_id="qa",
+            agent="claude",
+            model="claude-sonnet-4-6",
+            branch=f"dkmv/issue-{issue_num}",
+            feature_name=f"issue-{issue_num}",
+        )
+        await repository.append_events(
+            [
+                EventRecord(
+                    run_id=run_id,
+                    sequence=seq,
+                    event_type="task_completed",
+                    payload={"type": "task_completed"},
+                    task_index=task_index,
+                    cost_usd=cost,
+                    agent="claude",
+                )
+                for (task_index, seq, cost) in costs
+            ]
+        )
+        return run_id
+    finally:
+        await repository.close()
+
+
+def test_list_bulk_spend_values_correct_multi_run(tmp_path: Path) -> None:
+    """A multi-run page's spend values match the per-(run_id,task_index) segment sum."""
+    client, url = _client(tmp_path / "t.db")
+    # run A: two tasks, each with two cumulative-cost events → last per task summed.
+    a = _run(
+        _seed_multi_cost_run(
+            url,
+            key="a",
+            issue_num=10,
+            costs=[(0, 1, 1.0), (0, 2, 2.0), (1, 3, 0.5), (1, 4, 3.0)],
+        )
+    )
+    # run B: one task, last cumulative is 4.25.
+    b = _run(_seed_multi_cost_run(url, key="b", issue_num=11, costs=[(0, 1, 4.0), (0, 2, 4.25)]))
+    # codex run C: cost excluded → null.
+    c = _run(_seed_codex_run(url))
+
+    resp = client.get("/api/v1/runs", headers=auth_headers())
+    assert resp.status_code == 200
+    items = {row["id"]: row for row in resp.json()["items"]}
+    # run A segment sum = last(task0)=2.0 + last(task1)=3.0 = 5.0 (NOT naive SUM=6.5).
+    assert items[a]["cost_usd"] == 5.0
+    # run B segment sum = last(task0)=4.25 (NOT 8.25).
+    assert items[b]["cost_usd"] == 4.25
+    # Codex excluded.
+    assert items[c]["cost_usd"] is None
+
+
+def test_list_path_is_one_bulk_spend_query_not_per_run(tmp_path: Path) -> None:
+    """The list path issues ONE bulk spend query, never one run_spend per row (FIX-1).
+
+    Builds the page summaries through :func:`build_run_summaries` with a spy
+    repository: ``run_spends`` (the bulk query) is called exactly once and
+    ``run_spend`` (the per-run query) is never called — i.e. the page is O(1)
+    spend queries, not O(N).
+    """
+    from app.runs.service import build_run_summaries
+
+    url = _migrate(tmp_path / "t.db")
+    # Seed several non-Codex runs so a per-run path would be N queries.
+    _run(_seed_multi_cost_run(url, key="a", issue_num=20, costs=[(0, 1, 1.0)]))
+    _run(_seed_multi_cost_run(url, key="b", issue_num=21, costs=[(0, 1, 2.0)]))
+    _run(_seed_multi_cost_run(url, key="c", issue_num=22, costs=[(0, 1, 3.0)]))
+
+    async def _run_with_spy() -> tuple[int, int, list[dict[str, object]]]:
+        repository = Repository(url)
+        await repository.start()
+        try:
+            rows = await repository.list_runs(limit=100)
+
+            spend_calls = 0
+            bulk_calls = 0
+            real_run_spend = repository.run_spend
+            real_run_spends = repository.run_spends
+
+            async def _spy_run_spend(run_id: str) -> float:
+                nonlocal spend_calls
+                spend_calls += 1
+                return await real_run_spend(run_id)
+
+            async def _spy_run_spends(run_ids: object) -> dict[str, float]:
+                nonlocal bulk_calls
+                bulk_calls += 1
+                return await real_run_spends(run_ids)  # type: ignore[arg-type]  # DKMVP-ESCAPE: spy passthrough
+
+            repository.run_spend = _spy_run_spend  # type: ignore[method-assign]  # DKMVP-ESCAPE: test spy
+            repository.run_spends = _spy_run_spends  # type: ignore[method-assign]  # DKMVP-ESCAPE: test spy
+            items = await build_run_summaries(repository, rows)
+            return spend_calls, bulk_calls, items
+        finally:
+            await repository.close()
+
+    spend_calls, bulk_calls, items = _run(_run_with_spy())
+    assert len(items) == 3
+    # O(1): exactly one bulk query, zero per-run queries (no N+1).
+    assert bulk_calls == 1
+    assert spend_calls == 0

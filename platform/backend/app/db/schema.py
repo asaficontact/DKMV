@@ -112,6 +112,14 @@ runs = Table(
     Column("finished_at", Text, nullable=True),
     Column("pr_num", Integer, nullable=True),
     Column("error", Text, nullable=True),
+    # Launched guardrails (FR-04-5 / §8.9 config block) — persisted at launch so
+    # GET /runs/{id}'s config block reflects the *actual* launched values, not a
+    # default. max_turns / max_budget_usd are NULL for a Codex run (the engine has
+    # no such cap — INV-8). Added additively in migration 0aae30d54010.
+    Column("max_turns", Integer, nullable=True),
+    Column("timeout_minutes", Integer, nullable=True),
+    Column("max_budget_usd", Float, nullable=True),
+    Column("memory_limit", Text, nullable=True),
     Column("idempotency_key", Text, nullable=False),
     Column("tenant_id", Text, nullable=True),
     UniqueConstraint("idempotency_key", name="uq_runs_idempotency_key"),
@@ -161,6 +169,13 @@ events = Table(
     UniqueConstraint("run_id", "sequence", name="uq_events_run_id_sequence"),
     # replay scan: WHERE run_id=? AND id > :last ORDER BY id
     Index("ix_events_run_id_id", "run_id", "id"),
+    # segment-sum spend grouping (INV-7): the run_spend / run_spends /
+    # total_spend / _spend_today projections GROUP BY (run_id, task_index) over
+    # cost-bearing events to take the last-cumulative id per task. A covering
+    # (run_id, task_index, id) index lets that grouping + MAX(id) be served from
+    # the index instead of re-scanning the events PK by run_id (added in
+    # migration 0aae30d54010).
+    Index("ix_events_run_id_task_index_id", "run_id", "task_index", "id"),
     # Emit AUTOINCREMENT so events.id is never reused (append-only + future prune).
     sqlite_autoincrement=True,
 )

@@ -319,6 +319,72 @@ def test_concurrent_identical_dispatch_one_row_one_409(tmp_path: Path) -> None:
     assert distinct_ids == 1  # both calls resolve to the same run id
 
 
+# ── FIX-2: GET /runs/{id} config reflects the launched guardrails ────────────
+
+
+def test_config_reflects_launched_guardrails_claude(tmp_path: Path) -> None:
+    """A Claude launch with explicit guardrails → the §8.9 config block is truthful.
+
+    The validated ``max_turns`` / ``timeout_minutes`` / ``max_budget_usd`` /
+    ``memory`` are persisted at ``claim_run`` time, so ``GET /runs/{id}``'s
+    ``config`` block carries the actual launched values, not always-null.
+    """
+    client, _rt, _gh = _client(tmp_path / "t.db")
+    resp = client.post(
+        "/api/v1/runs",
+        json=_body(
+            agent="claude",
+            max_turns=42,
+            timeout_minutes=15,
+            max_budget_usd=7.5,
+            memory="4g",
+        ),
+        headers=auth_headers(),
+    )
+    assert resp.status_code == 201
+    run_id = resp.json()["run_id"]
+
+    detail = client.get(f"/api/v1/runs/{run_id}", headers=auth_headers())
+    assert detail.status_code == 200
+    config = detail.json()["config"]
+    assert config["max_turns"] == 42
+    assert config["timeout_minutes"] == 15
+    assert config["max_budget_usd"] == 7.5
+    assert config["memory_limit"] == "4g"
+
+
+def test_config_memory_defaults_when_unset_claude(tmp_path: Path) -> None:
+    """No explicit memory → config persists the resolved default ('8g')."""
+    client, _rt, _gh = _client(tmp_path / "t.db")
+    resp = client.post("/api/v1/runs", json=_body(agent="claude"), headers=auth_headers())
+    assert resp.status_code == 201
+    run_id = resp.json()["run_id"]
+    config = client.get(f"/api/v1/runs/{run_id}", headers=auth_headers()).json()["config"]
+    assert config["memory_limit"] == "8g"
+    # No turns/budget supplied → null (not a phantom default).
+    assert config["max_turns"] is None
+    assert config["max_budget_usd"] is None
+
+
+def test_config_codex_budget_turns_null(tmp_path: Path) -> None:
+    """A Codex launch → config max_turns / max_budget_usd are null (INV-8)."""
+    client, _rt, _gh = _client(tmp_path / "t.db")
+    resp = client.post(
+        "/api/v1/runs",
+        json=_body(agent="codex", workflow_id="dev", timeout_minutes=20, memory="2g"),
+        headers=auth_headers(),
+    )
+    assert resp.status_code == 201
+    run_id = resp.json()["run_id"]
+    config = client.get(f"/api/v1/runs/{run_id}", headers=auth_headers()).json()["config"]
+    # Codex never has a budget / turns cap (consistent with the INV-8 rejection).
+    assert config["max_turns"] is None
+    assert config["max_budget_usd"] is None
+    # Time-bound + memory are still persisted for Codex.
+    assert config["timeout_minutes"] == 20
+    assert config["memory_limit"] == "2g"
+
+
 def test_runs_post_requires_token(tmp_path: Path) -> None:
     client, _rt, _gh = _client(tmp_path / "t.db")
     resp = client.post("/api/v1/runs", json=_body())

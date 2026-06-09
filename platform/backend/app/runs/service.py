@@ -84,10 +84,13 @@ def build_run_config(
 ) -> dict[str, Any]:
     """Build the FR-04-5 ``config`` snapshot with exactly :data:`RUN_CONFIG_KEYS`.
 
-    The verbatim run-config keys the right rail renders (slice 2.4). ``max_turns``
-    / ``max_budget_usd`` are ``None`` for a Codex run (the engine has no such cap —
-    INV-8) and surface as ``null``. ``memory_limit`` falls back to the configured
-    default when the run did not pin one.
+    The verbatim run-config keys the right rail renders (slice 2.4). The
+    guardrail values (``max_turns`` / ``timeout_minutes`` / ``max_budget_usd`` /
+    ``memory_limit``) are read from the ``runs`` row — the **actual launched
+    values** persisted at ``claim_run`` time — so the block is truthful (FR-04-5).
+    ``max_turns`` / ``max_budget_usd`` are ``None`` for a Codex run (the engine
+    has no such cap — INV-8) and surface as ``null``. ``memory_limit`` falls back
+    to the configured default for a legacy row that did not pin one.
     """
     return {
         "repo": row.get("repo"),
@@ -199,36 +202,30 @@ async def build_run_detail(
 
 
 def _row_memory(row: dict[str, Any], default_memory: str) -> str:
-    """Resolve a run's memory limit, falling back to the configured default.
+    """Resolve a run's memory limit from the persisted ``memory_limit`` column.
 
-    The ``runs`` table does not persist a memory column in the Phase-0 schema, so
-    the baseline read uses the configured default; a per-run override is carried
-    in the launch path and surfaced by Phase-3 history when the column lands.
+    The launch path persists the resolved ``memory_limit`` (``req.memory`` or the
+    configured default) at ``claim_run`` time, so this returns the *actual*
+    launched value (FR-04-5). Falls back to the configured default only for a
+    legacy row that predates the column.
     """
     mem = row.get("memory_limit")
     return str(mem) if mem else default_memory
 
 
-async def build_run_summary(
-    repository: Repository,
-    row: dict[str, Any],
-) -> dict[str, Any]:
-    """Project a ``runs`` row into one ``GET /runs`` list row (the live spine).
+def _summary_row(row: dict[str, Any], cost_usd: float | None) -> dict[str, Any]:
+    """Assemble one ``GET /runs`` list row from a run row + its resolved cost.
 
-    The minimal summary the run list renders (id, identity, status, the
-    segment-sum cost — Codex ``null``, tokens/turns). History filters/sort/columns
-    are Phase 3 (FR-06-4); Phase 2 ships the baseline list spine.
+    Shared by the single- and bulk-cost paths so the wire shape is identical
+    regardless of how ``cost_usd`` was projected.
     """
-    run_id = str(row["id"])
-    agent = row.get("agent")
-    cost_usd = None if _is_codex(agent) else await repository.run_spend(run_id)
     return {
-        "id": run_id,
+        "id": str(row["id"]),
         "engine_run_id": row.get("engine_run_id"),
         "repo": row.get("repo"),
         "issue_num": row.get("issue_num"),
         "workflow_id": row.get("workflow_id"),
-        "agent": agent,
+        "agent": row.get("agent"),
         "model": row.get("model"),
         "status": row.get("status"),
         "branch": row.get("branch"),
@@ -239,3 +236,51 @@ async def build_run_summary(
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
     }
+
+
+async def build_run_summary(
+    repository: Repository,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    """Project a ``runs`` row into one ``GET /runs`` list row (the live spine).
+
+    The minimal summary the run list renders (id, identity, status, the
+    segment-sum cost — Codex ``null``, tokens/turns). History filters/sort/columns
+    are Phase 3 (FR-06-4); Phase 2 ships the baseline list spine. Single-row
+    helper retained for callers that already hold one row; the list path uses the
+    bulk :func:`build_run_summaries` (one spend query, not N).
+    """
+    run_id = str(row["id"])
+    agent = row.get("agent")
+    cost_usd = None if _is_codex(agent) else await repository.run_spend(run_id)
+    return _summary_row(row, cost_usd)
+
+
+async def build_run_summaries(
+    repository: Repository,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project a whole ``GET /runs`` page in **one** bulk spend query (PERF).
+
+    Replaces the per-row :meth:`Repository.run_spend` (a 100-run page = 1 list
+    query + 100 serialized per-run spend queries through the 4-slot read pool)
+    with a single :meth:`Repository.run_spends` call over all the page's
+    non-Codex run ids, so the page costs **one** list query + **one** bulk spend
+    query (O(1), not O(N)). The segment-sum semantics are preserved exactly
+    (per ``(run_id, task_index)`` last-cumulative, Codex excluded — INV-7). A
+    Codex row's ``cost_usd`` stays ``null``; a non-Codex run with no cost events
+    defaults to ``0.0``.
+    """
+    if not rows:
+        return []
+    # Only non-Codex runs contribute to the bulk spend query (Codex → null).
+    spend_ids = [str(r["id"]) for r in rows if not _is_codex(r.get("agent"))]
+    spends = await repository.run_spends(spend_ids)
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        if _is_codex(row.get("agent")):
+            cost_usd: float | None = None
+        else:
+            cost_usd = spends.get(str(row["id"]), 0.0)
+        items.append(_summary_row(row, cost_usd))
+    return items

@@ -237,6 +237,10 @@ class Repository:
         model: str | None = None,
         branch: str | None = None,
         feature_name: str | None = None,
+        max_turns: int | None = None,
+        timeout_minutes: int | None = None,
+        max_budget_usd: float | None = None,
+        memory_limit: str | None = None,
         run_id: str | None = None,
     ) -> tuple[str, bool]:
         """Atomically claim a run row for ``idempotency_key``.
@@ -248,6 +252,12 @@ class Repository:
         (INV-5). The loser gets back the existing row's ``id``.
 
         The platform ``id`` is a generated UUID (R-8) — never the engine id.
+
+        The four launched guardrails (``max_turns`` / ``timeout_minutes`` /
+        ``max_budget_usd`` / ``memory_limit``) are persisted here so the §8.9
+        ``config`` block reflects the *actual* launched values (FR-04-5). For a
+        Codex run ``max_turns`` / ``max_budget_usd`` are ``None`` (the engine has
+        no such cap — INV-8), consistent with the launch-path rejection.
         """
         new_id = run_id or str(uuid.uuid4())
         started_at = _utc_now_iso()
@@ -257,9 +267,11 @@ class Repository:
                 """
                 INSERT INTO runs (
                     id, repo, issue_num, workflow_id, agent, model,
-                    status, branch, feature_name, started_at, idempotency_key
+                    status, branch, feature_name,
+                    max_turns, timeout_minutes, max_budget_usd, memory_limit,
+                    started_at, idempotency_key
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(idempotency_key) DO NOTHING
                 """,
                 (
@@ -271,6 +283,10 @@ class Repository:
                     model,
                     branch,
                     feature_name,
+                    max_turns,
+                    timeout_minutes,
+                    max_budget_usd,
+                    memory_limit,
                     started_at,
                     idempotency_key,
                 ),
@@ -491,6 +507,59 @@ class Repository:
             if run_rows and _is_cost_excluded(run_rows[0]["agent"]):
                 return 0.0
             return await _project_run_spend(conn, run_id)
+
+    async def run_spends(self, run_ids: Sequence[str]) -> dict[str, float]:
+        """Bulk segment-sum spend for a **set** of runs in ONE query (PERF).
+
+        Generalizes :meth:`total_spend`'s set-based last-cumulative dedup to return
+        a ``{run_id: spend}`` map for exactly the supplied ``run_ids``, so the
+        ``GET /runs`` list path is **one** bulk spend query instead of one
+        :meth:`run_spend` per row (the N+1 the list path otherwise serializes
+        through the 4-slot read pool). The semantics are byte-identical to the
+        per-run projection: for each ``(run_id, task_index)`` take the *last*
+        (highest ``id``) event carrying a non-NULL ``cost_usd`` — its cumulative
+        cost for that task — and sum across tasks; **Codex runs are excluded**
+        (FR-06-1a / INV-7), never a naive ``SUM`` over events. A run with no cost
+        events (or a Codex run) is absent from the map; the caller defaults it to
+        ``0.0``/``None`` as appropriate.
+        """
+        ids = list(dict.fromkeys(run_ids))  # de-dup, preserve order
+        if not ids:
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        async with self._read_conn() as conn:
+            rows = list(
+                await conn.execute_fetchall(
+                    # The inner GROUP BY keys on (run_id, task_index) so the
+                    # last-cumulative dedup is per-task; the outer GROUP BY run_id
+                    # sums those per-task cumulatives into the run's segment-sum.
+                    # Codex is excluded by the run's agent column (matching
+                    # total_spend / _spend_today).
+                    f"""
+                    WITH last_per_task AS (
+                        SELECT e.run_id AS run_id,
+                               e.cost_usd AS cost_usd
+                        FROM events e
+                        JOIN (
+                            SELECT run_id, task_index, MAX(id) AS max_id
+                            FROM events
+                            WHERE cost_usd IS NOT NULL AND run_id IN ({placeholders})
+                            GROUP BY run_id, task_index
+                        ) m
+                          ON e.run_id = m.run_id
+                         AND e.id = m.max_id
+                    )
+                    SELECT lpt.run_id AS run_id,
+                           COALESCE(SUM(lpt.cost_usd), 0.0) AS spend
+                    FROM last_per_task lpt
+                    JOIN runs r ON r.id = lpt.run_id
+                    WHERE COALESCE(LOWER(r.agent), '') != ?
+                    GROUP BY lpt.run_id
+                    """,  # noqa: S608 — placeholders only; ids bound below
+                    (*ids, COST_EXCLUDED_AGENT),
+                )
+            )
+            return {str(r["run_id"]): float(r["spend"] or 0.0) for r in rows}
 
     async def total_spend(self) -> float:
         """Sum of :meth:`run_spend` across all runs (Codex excluded).

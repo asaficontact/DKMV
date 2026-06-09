@@ -431,6 +431,12 @@ async def launch_run(
     resolved_model = _validate_agent_model(resolved_agent, req.model)
 
     # ── claim-lock (INV-5): INSERT … ON CONFLICT DO NOTHING under BEGIN IMMEDIATE ─
+    # Persist the VALIDATED launch guardrails so GET /runs/{id}'s §8.9 config
+    # block is truthful (FR-04-5). memory_limit is the resolved value the engine
+    # is started with (req.memory or the configured default). max_turns /
+    # max_budget_usd are already None for Codex (rejected above by INV-8), so the
+    # persisted Codex config has them null/not-applicable.
+    resolved_memory = req.memory or default_memory
     key = idempotency_key(req.issue_num, workflow_id, branch)
     run_id, won = await repository.claim_run(
         idempotency_key=key,
@@ -441,6 +447,10 @@ async def launch_run(
         model=resolved_model,
         branch=branch,
         feature_name=feature_name,
+        max_turns=req.max_turns,
+        timeout_minutes=req.timeout_minutes,
+        max_budget_usd=req.max_budget_usd,
+        memory_limit=resolved_memory,
     )
     if not won:
         # Lost the race / a duplicate dispatch — the row already exists. Reject
@@ -461,7 +471,7 @@ async def launch_run(
         max_turns=req.max_turns,
         timeout_minutes=req.timeout_minutes,
         max_budget_usd=req.max_budget_usd,
-        memory=req.memory or default_memory,
+        memory=resolved_memory,
         context_paths=context_paths or None,
         start_task=req.start_task,
         on_pause=pause_bridge,

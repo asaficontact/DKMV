@@ -35,7 +35,7 @@ from app.api.errors import ApiError, run_not_found
 from app.github.client import GitHubAuthError, GitHubError
 from app.github.provider import get_github_client
 from app.runs.launch import LaunchRequest, launch_run
-from app.runs.service import build_run_detail, build_run_summary
+from app.runs.service import build_run_detail, build_run_summaries
 from app.runtime import RunService
 
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
@@ -217,7 +217,9 @@ async def list_runs(request: Request) -> dict[str, Any]:
         rows = await repository.list_runs(repo=repo, limit=limit + 1, offset=offset)
         has_more = len(rows) > limit
         page = rows[:limit]
-        items = [await build_run_summary(repository, row) for row in page]
+        # One bulk spend query for the whole page (not one run_spend per row —
+        # the N+1 the per-row path otherwise serializes through the read pool).
+        items = await build_run_summaries(repository, page)
 
     next_cursor = str(offset + limit) if has_more else None
     return {"items": items, "next_cursor": next_cursor}
