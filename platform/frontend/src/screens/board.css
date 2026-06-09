@@ -18,6 +18,54 @@
   min-width: 0;
   overflow: hidden;
 }
+/* The skip-link target landmark (a11y pass — AC-10). It owns the column flow the
+   board/issue screens previously placed directly under .app-main, so it is itself
+   a flex column that fills the remaining height (keeping the board's `flex: 1`
+   columns + state panels filling the viewport). */
+.app-main-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+/* It is programmatically focusable (tabIndex=-1) for the skip link; suppress the
+   focus ring on the landmark itself (the ring belongs on interactive targets). */
+.app-main-content:focus { outline: none; }
+
+/* ---------- Skip link (WCAG 2.4.1 bypass-blocks — AC-10) ---------- */
+/* Visually hidden until focused, then a clearly-visible chip pinned top-left. All
+   color is token-driven (INV-14): surface/border/accent from tokens.css. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.12s ease;
+}
+.skip-link:focus {
+  top: 8px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Keyboard focus ring on issue cards (a11y pass — AC-10) ---------- */
+/* A draggable card is keyboard-focusable; show a clear, token-sourced focus ring
+   so the Backlog↔Queued keyboard move (focus.ts / keyboard-drag.ts) is visible. */
+.issue-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-color: var(--accent-ring);
+}
 
 /* ---------- Sidebar ---------- */
 .sidebar {

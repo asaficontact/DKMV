@@ -16,6 +16,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import { type DraggableColumn, keyboardDragProps } from "../a11y/keyboard-drag";
 import type { BoardIssue } from "../api/board";
 import { isCostExcludedAgent, isDraggableColumn } from "./board-model";
 import { AgentChip, Avatar, GhLabel, WfChip } from "./chips";
@@ -33,6 +34,13 @@ export interface IssueCardProps {
   /** Begin a Backlog↔Queued drag (the column owns the drop side). */
   onDragStart?: (issue: BoardIssue) => void;
   onDragEnd?: () => void;
+  /** Keyboard-operable Backlog↔Queued move (AC-10) — the SAME move path as the
+   *  pointer drop; the column passes a callback that posts the agent-state change. */
+  onMoveColumn?: (issue: BoardIssue, target: DraggableColumn) => void;
+  /** Roving-tabindex value for this card (0 for the active card, -1 otherwise). */
+  tabIndex?: number;
+  /** Marks this card active in the roving group when it receives focus. */
+  onFocusCard?: () => void;
 }
 
 export default function IssueCard({
@@ -41,15 +49,32 @@ export default function IssueCard({
   onOpenIssue,
   onDragStart,
   onDragEnd,
+  onMoveColumn,
+  tabIndex,
+  onFocusCard,
 }: IssueCardProps) {
   const draggable = isDraggableColumn(issue.state);
   const running = issue.state === "in_progress";
   const needsYou = issue.state === "needs_you";
 
+  // Keyboard-operable Backlog↔Queued move (AC-10). Only wired for draggable cards
+  // when the board supplies the move callback; the roving tabindex governs which
+  // card is in the tab order so Arrow keys move focus between cards (focus.ts).
+  const kbDrag =
+    draggable && onMoveColumn
+      ? keyboardDragProps(
+          issue.state,
+          (target) => onMoveColumn(issue, target),
+          tabIndex ?? 0,
+        )
+      : {};
+
   return (
     <article
       className={`issue-card${needsYou ? " is-needsyou" : ""}`}
       draggable={draggable}
+      aria-label={`Issue ${issue.num}: ${issue.title}`}
+      onFocus={onFocusCard}
       onDragStart={
         draggable
           ? (e) => {
@@ -66,6 +91,7 @@ export default function IssueCard({
       onDragEnd={draggable ? onDragEnd : undefined}
       data-state={issue.state}
       data-num={issue.num}
+      {...kbDrag}
     >
       <header className="issue-card-top">
         <span className="issue-num mono">#{issue.num}</span>
