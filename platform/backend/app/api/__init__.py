@@ -18,6 +18,7 @@ from app.api.issue_detail import router as issue_detail_router
 from app.api.issues import router as issues_router
 from app.api.preflight import router as preflight_router
 from app.api.repos import router as repos_router
+from app.api.run_actions import router as run_actions_router
 from app.api.runs import router as runs_router
 from app.api.workflows import router as workflows_router
 from app.sse.endpoint import router as sse_router
@@ -38,6 +39,7 @@ api_router.include_router(agent_state_router)
 api_router.include_router(board_router)
 api_router.include_router(issue_detail_router)
 api_router.include_router(runs_router)
+api_router.include_router(run_actions_router)
 api_router.include_router(workflows_router)
 api_router.include_router(sse_router)
 
