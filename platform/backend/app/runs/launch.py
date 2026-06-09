@@ -48,7 +48,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.api.errors import ApiError, validation_error
+from app.api.validation import (
+    GuardrailRequest,
+    agent_is_known,
+    validate_agent_capabilities,
+)
+from app.api.validation import unsupported_for_agent as _unsupported_for_agent
 from app.db.repository import Repository
+from app.orchestrator.enforcement import resolve_enforced_caps
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.github.client import GitHubClient
@@ -82,18 +89,12 @@ _TIMEOUT_MAX = 24 * 60
 def unsupported_for_agent(field_name: str, agent: str) -> ApiError:
     """400 — a guardrail field is unsupported by the resolved agent (INV-8).
 
-    Raised when ``max_budget_usd`` / ``max_turns`` is supplied for an agent whose
-    ``supports_budget()`` / ``supports_max_turns()`` is false (Codex). The code is
-    the §8.10 ``unsupported_for_agent`` so the UI can branch precisely rather than
-    treating it as a generic validation error.
+    Thin re-export of :func:`app.api.validation.unsupported_for_agent` (the §8.10
+    ``unsupported_for_agent`` contract now lives in the shared validation module);
+    kept here so existing callers/tests that import it from ``app.runs.launch``
+    keep working. The single source of the error shape is the validation module.
     """
-    return ApiError(
-        400,
-        "unsupported_for_agent",
-        f"{field_name} is not supported by agent '{agent}' "
-        f"(Codex runs are time-bounded, not cost-bounded).",
-        details={"field": field_name, "agent": agent},
-    )
+    return _unsupported_for_agent(field_name, agent)
 
 
 def duplicate_dispatch(run_id: str) -> ApiError:
@@ -298,36 +299,27 @@ def _validate_agent_model(agent: str, model: str | None) -> str | None:
 
 
 def _agent_known(agent: str) -> bool:
-    """True iff ``agent`` is a registered adapter name (else a 400 is raised)."""
-    from dkmv.adapters import get_adapter
+    """True iff ``agent`` is a registered adapter name (else a 400 is raised).
 
-    try:
-        get_adapter(agent)
-    except Exception:  # noqa: BLE001 - unknown agent → not known
-        return False
-    return True
+    Delegates to :func:`app.api.validation.agent_is_known` (shared §8.10 source).
+    """
+    return agent_is_known(agent)
 
 
 def _validate_capabilities(agent: str, req: LaunchRequest) -> None:
     """Reject budget/turn guardrails the **resolved** agent cannot honor (INV-8).
 
-    Branches on the adapter's ``supports_budget()`` / ``supports_max_turns()``:
-    for Codex (both false) a supplied ``max_budget_usd`` / ``max_turns`` is a
-    ``400 unsupported_for_agent`` — never silently ignored — because the engine
-    has no such cap and a false hard-cap promise would let a Codex run run away.
+    Delegates to the shared :func:`app.api.validation.validate_agent_capabilities`
+    — the single §8.10 capability gate that branches on the adapter's
+    ``supports_budget()`` / ``supports_max_turns()``: for Codex (both false) a
+    supplied ``max_budget_usd`` / ``max_turns`` is a ``400 unsupported_for_agent``
+    (never silently ignored), because the engine has no such cap and a false
+    hard-cap promise would let a Codex run run away. An unknown agent is a 400.
     """
-    from dkmv.adapters import get_adapter
-
-    if not _agent_known(agent):
-        raise validation_error(
-            f"unknown agent '{agent}'",
-            details={"field": "agent"},
-        )
-    adapter = get_adapter(agent)
-    if req.max_budget_usd is not None and not adapter.supports_budget():
-        raise unsupported_for_agent("max_budget_usd", agent)
-    if req.max_turns is not None and not adapter.supports_max_turns():
-        raise unsupported_for_agent("max_turns", agent)
+    validate_agent_capabilities(
+        agent,
+        GuardrailRequest(max_budget_usd=req.max_budget_usd, max_turns=req.max_turns),
+    )
 
 
 def _validate_numeric_guardrails(req: LaunchRequest) -> None:
@@ -448,12 +440,25 @@ async def launch_run(
     _validate_capabilities(resolved_agent, req)  # INV-8: Codex budget/turns → 400
     resolved_model = _validate_agent_model(resolved_agent, req.model)
 
+    # ── capability-aware cap resolution (INV-8 / ADR-P009, 5.2) ────────────────
+    # Branch on the resolved agent's adapter capability to decide which caps are
+    # actually enforced + the effective timeout. For Codex (timeout-only) the
+    # budget/turn caps resolve to None (already rejected above by INV-8) and the
+    # timeout defaults to the *strictly tighter* Codex default — timeout is its
+    # sole runtime guardrail (§7.2 fn3). For Claude they are hard caps and the
+    # timeout defaults to the Claude default when unset. The persisted +
+    # engine-started values are these resolved caps so GET /runs/{id}'s §8.9
+    # config block is truthful (FR-04-5) and the engine is bounded correctly.
+    caps = resolve_enforced_caps(
+        agent=resolved_agent,
+        max_budget_usd=req.max_budget_usd,
+        max_turns=req.max_turns,
+        timeout_minutes=req.timeout_minutes,
+    )
+
     # ── claim-lock (INV-5): INSERT … ON CONFLICT DO NOTHING under BEGIN IMMEDIATE ─
-    # Persist the VALIDATED launch guardrails so GET /runs/{id}'s §8.9 config
-    # block is truthful (FR-04-5). memory_limit is the resolved value the engine
-    # is started with (req.memory or the configured default). max_turns /
-    # max_budget_usd are already None for Codex (rejected above by INV-8), so the
-    # persisted Codex config has them null/not-applicable.
+    # memory_limit is the resolved value the engine is started with (req.memory or
+    # the configured default).
     resolved_memory = req.memory or default_memory
     key = idempotency_key(req.issue_num, workflow_id, branch)
     run_id, won = await repository.claim_run(
@@ -465,9 +470,9 @@ async def launch_run(
         model=resolved_model,
         branch=branch,
         feature_name=feature_name,
-        max_turns=req.max_turns,
-        timeout_minutes=req.timeout_minutes,
-        max_budget_usd=req.max_budget_usd,
+        max_turns=caps.max_turns,
+        timeout_minutes=caps.timeout_minutes,
+        max_budget_usd=caps.max_budget_usd,
         memory_limit=resolved_memory,
     )
     if not won:
@@ -496,9 +501,9 @@ async def launch_run(
         feature_name=feature_name,
         agent=resolved_agent,
         model=resolved_model,
-        max_turns=req.max_turns,
-        timeout_minutes=req.timeout_minutes,
-        max_budget_usd=req.max_budget_usd,
+        max_turns=caps.max_turns,
+        timeout_minutes=caps.timeout_minutes,
+        max_budget_usd=caps.max_budget_usd,
         memory=resolved_memory,
         context_paths=context_paths or None,
         start_task=req.start_task,
