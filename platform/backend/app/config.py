@@ -69,6 +69,22 @@ class Settings(BaseSettings):
         default=Path("./data/outputs"),
         description="Platform-owned engine runs/artifacts volume (OQ-4).",
     )
+    DKMV_PROJECT_ROOT: Path | None = Field(
+        default=None,
+        description=(
+            "Optional local on-disk working copy of the connected project — the "
+            "directory holding ``.dkmv/`` (the ``components.json`` registry + any "
+            "custom components authored on disk). Published once at lifespan startup "
+            "on ``app.state.project_root`` and consumed read-only by BOTH the "
+            "Workflows viewer (``GET /workflows`` surfaces registered custom "
+            "components via ``list_components(project_root)``) and the launch path "
+            "(``POST /runs`` resolves a registry-NAME ``workflow_id`` to a registered "
+            "component). UNSET → the viewer shows the five built-ins only (graceful, "
+            "no error) and only built-ins / absolute paths are dispatchable. This is "
+            "independent of ``orchestrator_repo`` (the connected GitHub repo slug); "
+            "it is the LOCAL filesystem root, not a GitHub identity."
+        ),
+    )
 
     # --- Provider / engine credentials (secrets) ---
     GITHUB_TOKEN: SecretStr = Field(
@@ -138,6 +154,7 @@ class Settings(BaseSettings):
     @field_validator(
         "HOST_MEMORY_BUDGET",
         "DAILY_SPEND_CAP",
+        "DKMV_PROJECT_ROOT",
         mode="before",
     )
     @classmethod

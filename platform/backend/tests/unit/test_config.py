@@ -26,6 +26,7 @@ EXPECTED_KEYS = {
     "PAUSE_TIMEOUT_S",
     "SANDBOX_RUNTIME",
     "EGRESS_ALLOWLIST",
+    "DKMV_PROJECT_ROOT",
 }
 
 
@@ -146,3 +147,55 @@ def test_optional_numeric_env_still_parsed_when_set() -> None:
 
 def test_get_settings_is_cached() -> None:
     assert get_settings() is get_settings()
+
+
+# ── DKMV_PROJECT_ROOT (slice 4.2 / FR-07-1v) ─────────────────────────────────
+
+
+def test_project_root_defaults_to_none() -> None:
+    """Unset DKMV_PROJECT_ROOT → None (viewer lists built-ins only, graceful)."""
+    assert _settings().DKMV_PROJECT_ROOT is None
+
+
+def test_project_root_empty_string_coerced_to_none() -> None:
+    """compose `"${DKMV_PROJECT_ROOT:-}"` passes "" when unset → None, not a Path('')."""
+    assert _settings(DKMV_PROJECT_ROOT="").DKMV_PROJECT_ROOT is None
+    assert _settings(DKMV_PROJECT_ROOT="   ").DKMV_PROJECT_ROOT is None
+
+
+def test_project_root_set_is_path() -> None:
+    s = _settings(DKMV_PROJECT_ROOT="/srv/project")
+    assert s.DKMV_PROJECT_ROOT == Path("/srv/project")
+
+
+def test_resolve_project_root_unset_is_none() -> None:
+    """_resolve_project_root returns None when DKMV_PROJECT_ROOT is unset."""
+    from app.main import _resolve_project_root
+
+    assert _resolve_project_root(_settings()) is None
+
+
+def test_resolve_project_root_existing_dir_resolved(tmp_path: Path) -> None:
+    """A configured, existing dir is resolved to an absolute Path."""
+    from app.main import _resolve_project_root
+
+    s = _settings(DKMV_PROJECT_ROOT=str(tmp_path))
+    assert _resolve_project_root(s) == tmp_path.resolve()
+
+
+def test_resolve_project_root_missing_dir_degrades_to_none(tmp_path: Path) -> None:
+    """A configured-but-missing path degrades to None (never crashes boot)."""
+    from app.main import _resolve_project_root
+
+    s = _settings(DKMV_PROJECT_ROOT=str(tmp_path / "does-not-exist"))
+    assert _resolve_project_root(s) is None
+
+
+def test_resolve_project_root_file_not_dir_degrades_to_none(tmp_path: Path) -> None:
+    """A path that exists but is a file (not a directory) degrades to None."""
+    from app.main import _resolve_project_root
+
+    f = tmp_path / "afile"
+    f.write_text("x")
+    s = _settings(DKMV_PROJECT_ROOT=str(f))
+    assert _resolve_project_root(s) is None

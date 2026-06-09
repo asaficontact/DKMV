@@ -27,6 +27,7 @@ import logging
 import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -65,6 +66,38 @@ async def _cancel_stream_tasks(tasks: set[asyncio.Task[Any]]) -> None:
     for task in pending:
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
+
+
+def _resolve_project_root(settings: Settings) -> Path | None:
+    """Resolve + validate the optional local project root, or ``None`` (slice 4.2).
+
+    ``DKMV_PROJECT_ROOT`` is the LOCAL on-disk working copy of the connected project
+    (the directory holding ``.dkmv/`` — the ``components.json`` registry + any custom
+    components authored on disk). It is published once on ``app.state.project_root``
+    and read **read-only** by both the Workflows viewer (so a registry-registered
+    custom component appears in ``GET /workflows``) and the launch path (so a
+    registry-NAME ``workflow_id`` resolves in ``POST /runs``).
+
+    Unset → ``None`` (the viewer lists built-ins only; only built-ins / absolute
+    paths are dispatchable — graceful, no error). When set but the path does not
+    exist (or is not a directory), we **log and treat as None** rather than crash —
+    a misconfigured local root must never wedge boot (the viewer degrades to
+    built-ins; the operator fixes the path and restarts). This is independent of
+    ``orchestrator_repo`` (the GitHub repo slug) — a connected project is not
+    required for a local checkout to exist, and vice-versa.
+    """
+    root = settings.DKMV_PROJECT_ROOT
+    if root is None:
+        return None
+    resolved = Path(root).expanduser()
+    if not resolved.is_dir():
+        _log.warning(
+            "DKMV_PROJECT_ROOT %s is not an existing directory; "
+            "treating as unset (Workflows viewer lists built-ins only)",
+            resolved,
+        )
+        return None
+    return resolved.resolve()
 
 
 async def _resolve_orchestrator_repo(repository: Repository) -> str | None:
@@ -235,6 +268,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     GitHub client, close the Repository → stop the single writer task).
     """
     settings: Settings = app.state.settings
+
+    # The local on-disk project root (slice 4.2 / FR-07-1v). Published ONCE here from
+    # ``DKMV_PROJECT_ROOT`` (resolved + existence-validated; a missing path degrades
+    # to ``None`` rather than crashing boot) and consumed read-only by BOTH the
+    # Workflows viewer (``GET /workflows`` → ``list_components(project_root)`` surfaces
+    # registered custom components — AC-5) and the launch path (``POST /runs`` resolves
+    # a registry-NAME ``workflow_id`` — AC-8). Independent of ``orchestrator_repo``: a
+    # local checkout can exist with no connected GitHub project, and vice-versa. A test
+    # that pre-injects ``app.state.project_root`` keeps its injection (the settings
+    # value is authoritative only when no override is present).
+    if getattr(app.state, "project_root", None) is None:
+        app.state.project_root = _resolve_project_root(settings)
 
     repository = Repository(settings.DATABASE_URL, redactor=Redactor.from_settings(settings))
     await repository.start()

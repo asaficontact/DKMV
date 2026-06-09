@@ -9,6 +9,7 @@ PR-detection-error degradations, and that :func:`build_retry_scheduler` /
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -135,3 +136,60 @@ async def test_build_and_get_scheduler_caches_on_app_state(repo: Repository) -> 
     request = SimpleNamespace(app=app)
     again = get_retry_scheduler(request)  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed request
     assert again is built  # cached on app.state, not rebuilt
+
+
+async def test_redispatch_threads_project_root_from_app_state(
+    repo: Repository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FIX-1: a retry of a registry-NAME run re-dispatches WITH the project_root.
+
+    The ``_redispatch`` closure built by :func:`build_retry_scheduler` must read the
+    lifespan-published local project root off ``app.state`` (the canonical deps.py
+    seam — FIX-2) and pass it into ``launch_run`` — NOT a hardcoded ``None``. Without
+    it a RETRIED run whose ``workflow_id`` is a registered on-disk custom component
+    NAME loses project-root resolution, so ``validate_component(name, None)`` /
+    ``inspect_component(name, None)`` fail to resolve the NAME and the retry is NOT
+    equivalent to its first dispatch (AC-8 custom-component path breaks on retry).
+    """
+    project_root = Path("/srv/checkout/widgets")
+    # The closure reads every singleton off app.state, including project_root (FIX-2).
+    state = SimpleNamespace(
+        repository=repo,
+        github_client=None,
+        github_write_queue=object(),
+        run_service=object(),
+        github_hash_cache=None,
+        stream_registry=object(),
+        project_root=project_root,
+    )
+    app = SimpleNamespace(state=state)
+    scheduler = build_retry_scheduler(app)  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed app
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_launch_run(req: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        captured["workflow_id"] = req.workflow_id
+        return SimpleNamespace(run_id="re-1")
+
+    import app.runs.launch as launch_mod
+
+    monkeypatch.setattr(launch_mod, "launch_run", _fake_launch_run)
+
+    # A retried run whose workflow_id is a registry NAME (a registered custom
+    # component) — the exact case that breaks when project_root is hardcoded None.
+    row = {
+        "id": "run-abc",
+        "issue_num": 42,
+        "repo": "octo/widgets",
+        "workflow_id": "my-custom-pipeline",
+        "branch": "dkmv/issue-feature",
+        "agent": "claude",
+    }
+    result_run_id = await scheduler.redispatch(row, "qa")  # type: ignore[attr-defined]  # DKMVP-ESCAPE: closure under test
+
+    assert result_run_id == "re-1"
+    # The project_root resolved from app.state is threaded through — equivalent to
+    # the first dispatch's resolution of the registry NAME (AC-8), not a None.
+    assert captured["project_root"] == project_root
+    assert captured["workflow_id"] == "my-custom-pipeline"

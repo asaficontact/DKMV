@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request
 
+from app.api.deps import get_project_root
 from app.api.errors import ApiError
 from app.workflows import WorkflowDetail, WorkflowService, WorkflowSummary
 from app.workflows.service import WorkflowNotFoundError
@@ -53,10 +54,12 @@ def _service(request: Request) -> WorkflowService:
 
     Reuses the single lifespan-owned ``app.state.run_service`` (the configured
     in-process ``EmbeddedRuntime``); the service itself is a stateless adapter, so
-    constructing one per request is cheap and holds no engine resources.
+    constructing one per request is cheap and holds no engine resources. The
+    connected project's root is passed through (when known) so registered on-disk
+    custom components resolve — built-ins do not need one (AC-5 / AC-8).
     """
     run_service: RunService = request.app.state.run_service
-    return WorkflowService(run_service)
+    return WorkflowService(run_service, project_root=get_project_root(request))
 
 
 @router.get("/workflows", response_model=list[WorkflowSummary])

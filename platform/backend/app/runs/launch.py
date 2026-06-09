@@ -166,7 +166,7 @@ async def _passthrough_on_pause(request: Any) -> Any:
     return None
 
 
-def _resolve_workflow_agent(workflow_id: str) -> str:
+def _resolve_workflow_agent(workflow_id: str, project_root: Path | None = None) -> str:
     """Resolve a workflow's declared agent for the ``auto`` path (FR-03-3).
 
     Reads the engine's :func:`dkmv.runtime.inspect_component` to learn the
@@ -174,12 +174,17 @@ def _resolve_workflow_agent(workflow_id: str) -> str:
     the platform default Claude when the workflow pins neither — so ``auto`` always
     resolves to a concrete agent the capability branch can reason about. Engine
     import is in-process (INV-13); never the CLI.
+
+    ``project_root`` is threaded so a registry-NAME ``workflow_id`` (a custom
+    component registered on disk, not a built-in or absolute path) resolves to read
+    its declared agent — without it ``auto`` on a custom component would silently
+    fall back to the default rather than the workflow's pinned agent (FIX-3).
     """
     from dkmv.adapters import infer_agent_from_model
     from dkmv.runtime import inspect_component
 
     try:
-        info = inspect_component(workflow_id)
+        info = inspect_component(workflow_id, project_root)
     except Exception:  # noqa: BLE001 - resolution failure already surfaced by validate_component
         return _DEFAULT_AGENT
     if info.agent:
@@ -191,10 +196,10 @@ def _resolve_workflow_agent(workflow_id: str) -> str:
     return _DEFAULT_AGENT
 
 
-def resolve_agent(agent: str, workflow_id: str) -> str:
+def resolve_agent(agent: str, workflow_id: str, project_root: Path | None = None) -> str:
     """``resolvedAgent = agent == "auto" ? workflow.agent : agent`` (FR-03-3)."""
     if agent.strip().lower() == "auto":
-        return _resolve_workflow_agent(workflow_id)
+        return _resolve_workflow_agent(workflow_id, project_root)
     return agent.strip().lower()
 
 
@@ -240,14 +245,22 @@ def _validate_repo(repo: str, *, connected_repo: str) -> str:
     return value
 
 
-def _validate_workflow(workflow_id: str) -> str:
-    """Reject a ``workflow_id`` that does not resolve via ``validate_component`` (§8.10)."""
+def _validate_workflow(workflow_id: str, project_root: Path | None = None) -> str:
+    """Reject a ``workflow_id`` that does not resolve via ``validate_component`` (§8.10).
+
+    ``project_root`` is threaded so a registry-NAME ``workflow_id`` (a custom
+    component registered on disk via the engine's ``ComponentRegistry``) resolves
+    and validates — the engine's ``resolve_component(name, project_root)`` consults
+    the project's ``.dkmv/components.json`` registry. Without it only built-ins and
+    absolute-path ids resolve, so a registry-name run would 400 (FIX-3). Built-in /
+    absolute-path resolution is unchanged when ``project_root`` is ``None``.
+    """
     from dkmv.runtime import validate_component
 
     value = workflow_id.strip()
     if not value:
         raise validation_error("workflow_id is required", details={"field": "workflow_id"})
-    result = validate_component(value)
+    result = validate_component(value, project_root)
     if not result.valid:
         raise validation_error(
             f"workflow_id '{value}' is not a valid workflow",
@@ -426,11 +439,11 @@ async def launch_run(
     repo = _validate_repo(req.repo, connected_repo=connected_repo)
     branch = _validate_branch(req.branch)
     feature_name = _validate_feature_name(req.feature_name)
-    workflow_id = _validate_workflow(req.workflow_id)
+    workflow_id = _validate_workflow(req.workflow_id, project_root)
     context_paths = _validate_context_paths(req.context, project_root=project_root)
 
     # ── agent resolution (auto → workflow.agent) + capability + model validation ─
-    resolved_agent = resolve_agent(req.agent, workflow_id)
+    resolved_agent = resolve_agent(req.agent, workflow_id, project_root)
     _validate_numeric_guardrails(req)
     _validate_capabilities(resolved_agent, req)  # INV-8: Codex budget/turns → 400
     resolved_model = _validate_agent_model(resolved_agent, req.model)
