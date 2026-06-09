@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.agent_state import router as agent_state_router
+from app.api.answer import router as answer_router
 from app.api.board import router as board_router
 from app.api.connect import router as connect_router
 from app.api.health import router as health_router
@@ -38,6 +39,7 @@ api_router.include_router(agent_state_router)
 api_router.include_router(board_router)
 api_router.include_router(issue_detail_router)
 api_router.include_router(runs_router)
+api_router.include_router(answer_router)
 api_router.include_router(workflows_router)
 api_router.include_router(sse_router)
 
