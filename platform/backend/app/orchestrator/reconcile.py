@@ -60,6 +60,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.github.graphql import BoardPage
     from app.github.hash_cache import HashCache
     from app.github.write_queue import WriteQueue
+    from app.hitl.registry import DecisionRegistry
+    from app.orchestrator.retry import RetryScheduler
 
 _log = logging.getLogger(__name__)
 
@@ -126,6 +128,12 @@ class ReconcileResult:
     orphans: tuple[StallSignal, ...] = ()
     label_writes: int = 0
     stopped_for_terminal_move: int = 0
+    #: Count of pauses auto-resolved on timeout this pass (``resolved_by='timeout'``,
+    #: INV-9 — AC-17). ``0`` when no pause expired (or no decision registry wired).
+    pauses_timed_out: int = 0
+    #: Run ids whose due backoff fired an idempotent re-dispatch this pass (3.4 —
+    #: AC-14/15). Empty when no retry scheduler is wired or none were due.
+    retries_fired: tuple[str, ...] = ()
 
     @property
     def signals(self) -> tuple[StallSignal, ...]:
@@ -152,12 +160,23 @@ class ReconcileDeps:
     settings: Settings
     cache: HashCache[BoardPage] | None = None
     now: Clock = field(default=utc_now)
+    #: HITL decision registry for the pause-timeout auto-resolve sweep (T104 /
+    #: AC-17 — INV-9). When wired, :func:`reconcile_once` runs
+    #: :func:`app.hitl.timeout.sweep_expired_pauses` each pass through the SAME
+    #: exactly-once guard the human answer path uses. ``None`` (the 3.3 default)
+    #: leaves the sweep out — 3.4 wires it via the lifespan-composed registry.
+    decisions: DecisionRegistry | None = None
+    #: The 3.4 retry scheduler. When wired, :func:`reconcile_once` schedules a
+    #: capped-backoff retry for each stall/orphan :class:`StallSignal` and fires any
+    #: due backoff (idempotent re-dispatch) each pass. ``None`` leaves retry out
+    #: (3.3's reconcile only emits the signals; 3.4 consumes them here).
+    retry_scheduler: RetryScheduler | None = None
 
 
 async def reconcile_once(deps: ReconcileDeps, repo: str) -> ReconcileResult:
     """Run one reconcile pass for ``repo`` (stall + label authority + orphan sweep).
 
-    The three §8.2 responsibilities in order:
+    The §8.2 responsibilities in order:
 
     1. :func:`detect_stalls` — kill + signal runs with no events for
        ``STALL_TIMEOUT_S`` (AC-12), using the UTC-persisted last-event-ts vs. a
@@ -167,6 +186,12 @@ async def reconcile_once(deps: ReconcileDeps, repo: str) -> ReconcileResult:
        **stops** the run. All label writes via the write-queue.
     3. :func:`sweep_orphans` — kill containers whose ``run_id``'s row is terminal
        (AC-12).
+    4. :func:`sweep_pause_timeouts` — auto-resolve any pause whose UTC ``timeout_at``
+       has expired, via the exactly-once guard (``resolved_by='timeout'``, T104 /
+       AC-17 / INV-9). Only when a :class:`DecisionRegistry` is wired (3.4).
+    5. **Retry (3.4):** schedule a capped-backoff retry for each stall/orphan signal
+       and fire any due backoff (idempotent re-dispatch). Only when a
+       :class:`~app.orchestrator.retry.RetryScheduler` is wired.
 
     Returns a :class:`ReconcileResult` aggregating the pass. The tick calls this
     each cadence; a single pass is also the unit the AC tests drive directly.
@@ -174,11 +199,15 @@ async def reconcile_once(deps: ReconcileDeps, repo: str) -> ReconcileResult:
     stalled = await detect_stalls(deps, repo)
     label = await refresh_labels(deps, repo)
     orphans = await sweep_orphans(deps, repo)
+    pauses_timed_out = await sweep_pause_timeouts(deps)
+    retries_fired = await drive_retries(deps, (*stalled, *orphans))
     return ReconcileResult(
         stalled=tuple(stalled),
         orphans=tuple(orphans),
         label_writes=label.writes,
         stopped_for_terminal_move=label.terminal_stops,
+        pauses_timed_out=pauses_timed_out,
+        retries_fired=retries_fired,
     )
 
 
@@ -353,6 +382,66 @@ async def sweep_orphans(deps: ReconcileDeps, repo: str) -> list[StallSignal]:
     return signals
 
 
+# ── (d) pause-timeout auto-resolve (T104 / AC-17 — INV-9) ─────────────────────
+
+
+async def sweep_pause_timeouts(deps: ReconcileDeps) -> int:
+    """Auto-resolve pauses whose UTC ``timeout_at`` has expired (T104 / AC-17 — INV-9).
+
+    The Phase-2 pause-timeout sweep (:func:`app.hitl.timeout.sweep_expired_pauses`)
+    wired into the reconcile tick. The pause ``timeout_at`` (default 60 min →
+    auto-abort) is a **UTC persisted deadline** re-evaluated against a fresh
+    ``now()`` each tick (the same suspend-surviving deadline path as stall/backoff —
+    AC-13), and on expiry the pause is auto-resolved via the **exactly-once** guard
+    the human answer path uses (``UPDATE … WHERE status='pending'``,
+    ``resolved_by='timeout'``) — so a pause a human answers in the *same* tick is
+    resolved by exactly one of them (no double-resolve, INV-9). A no-op when no
+    :class:`DecisionRegistry` is wired (3.3's default — 3.4 supplies it). Returns the
+    count of pauses this pass auto-resolved on timeout.
+    """
+    if deps.decisions is None:
+        return 0
+    from app.hitl.timeout import sweep_expired_pauses
+
+    result = await sweep_expired_pauses(
+        repository=deps.repository,
+        decisions=deps.decisions,
+        now=deps.now,
+    )
+    if result.resolved:
+        _log.info("orchestrator.reconcile pause-timeout auto-resolved count=%d", result.resolved)
+    return result.resolved
+
+
+# ── (e) retry: schedule from signals + fire due backoffs (3.4 — AC-14/15) ─────
+
+
+async def drive_retries(deps: ReconcileDeps, signals: Sequence[StallSignal]) -> tuple[str, ...]:
+    """Schedule capped-backoff retries for ``signals`` + fire due backoffs (3.4).
+
+    The reconcile→retry bridge (only active when a
+    :class:`~app.orchestrator.retry.RetryScheduler` is wired — 3.3's reconcile alone
+    just emits the :class:`StallSignal`):
+
+    1. For each stall/orphan signal, schedule a capped-backoff retry (AC-14) —
+       persisting a UTC backoff ``due_at`` (re-evaluated next tick, never slept on).
+    2. Fire any retry whose backoff ``due_at`` is now due
+       (:meth:`~app.orchestrator.retry.RetryScheduler.fire_due_retries`) through the
+       **idempotent** re-dispatch (existing-branch/PR detection → no duplicate PR,
+       same ``runs`` row — AC-15 / INV-5 / R-15).
+
+    Returns the run_ids re-dispatched this pass. A no-op (empty tuple) when no
+    scheduler is wired.
+    """
+    scheduler = deps.retry_scheduler
+    if scheduler is None:
+        return ()
+    for signal in signals:
+        await scheduler.schedule_from_signal(signal)
+    fired = await scheduler.fire_due_retries()
+    return tuple(fired)
+
+
 # ── repository reads (through the public read seam — INV-6) ───────────────────
 
 
@@ -465,7 +554,9 @@ __all__ = [
     "RunKiller",
     "StallSignal",
     "detect_stalls",
+    "drive_retries",
     "reconcile_once",
     "refresh_labels",
     "sweep_orphans",
+    "sweep_pause_timeouts",
 ]
