@@ -10,13 +10,18 @@ Covers the F13 acceptance criteria the concurrency slice owns:
   ``DAILY_SPEND_CAP`` is admission-denied and **re-queued** (not dropped, not
   dispatched). Daily spend uses the Codex-excluded projection (INV-8).
 * **AC-4 (INV-6).** The event-append path is off-loop + batched (one writer, one
-  ``BEGIN IMMEDIATE``); the batched writer coalesces appends.
+  ``BEGIN IMMEDIATE``): the live batching seam is the per-run :class:`EventPump`
+  (:mod:`app.sse.pump`), which coalesces whatever is ready on the run's queue (up to
+  ``MAX_BATCH``) into ONE :meth:`Repository.append_events` round-trip off the loop.
+  (The orchestrator tick/dispatch/reconcile does not emit high-frequency events — it
+  only appends through the same off-loop single-writer :class:`Repository` — so there
+  is no separate orchestrator event-batching module; the pump is THE batching seam.)
 * **AC-5.** The loop heartbeat advances each tick and the slots-in-use gauge tracks
-  the semaphore.
+  the slot counter.
 
-These exercise the real components (no Docker, no engine): the semaphore slots, the
+These exercise the real components (no Docker, no engine): the slot counter, the
 admission controller over a migrated SQLite DB, the bounded dispatcher with a
-recording fake launch, the batched writer, and the loop-metrics gauges.
+recording fake launch, the pump's batched append, and the loop-metrics gauges.
 """
 
 from __future__ import annotations
@@ -41,7 +46,9 @@ from app.orchestrator.dispatch import (
 )
 from app.orchestrator.loop_metrics import LoopMetrics
 from app.orchestrator.tick import Candidate
-from app.orchestrator.writer import BatchedEventWriter
+from app.sse.observer_bridge import RunStreamHub
+from app.sse.pump import MAX_BATCH, EventPump
+from dkmv.runtime import RuntimeEvent
 
 REPO = "o/r"
 
@@ -290,41 +297,65 @@ def test_start_of_utc_day_is_midnight() -> None:
 # ── AC-4: off-loop batched event writes (INV-6) ───────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_batched_writer_coalesces_appends(repository: Repository) -> None:
-    """The batched writer flushes buffered events as ONE off-loop append (AC-4)."""
-    run_id = await _seed_run(repository, status="running")
-    writer = BatchedEventWriter(repository)
+def _runtime_event(run_id: str, seq: int) -> RuntimeEvent:
+    """A minimal engine-shaped event the pump persists (one inbound queue frame)."""
+    from datetime import UTC, datetime
 
+    return RuntimeEvent(
+        timestamp=datetime.now(UTC),
+        run_id=run_id,
+        task_name="dev",
+        event_type="assistant",
+        data={"seq": seq},
+        sequence=seq,
+        task_index=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pump_batches_burst_into_one_off_loop_append(repository: Repository) -> None:
+    """The live batching seam (EventPump) coalesces a queued burst into ONE append (AC-4).
+
+    The orchestrator does not emit a high-frequency event hot path of its own — every
+    event-append (engine frames + the bridge's synthetic spine frames) flows through
+    the per-run :class:`EventPump`, which drains whatever is ready on the run's queue
+    (up to ``MAX_BATCH``) and persists it as a SINGLE off-loop
+    :meth:`Repository.append_events` round-trip (the single writer, one
+    ``BEGIN IMMEDIATE`` — INV-6). This proves a burst of 5 queued events is persisted
+    by ONE batched writer call (the pre-seeded queue drains in one batch), so AC-4
+    "off-loop writes + batched appends" is genuinely satisfied without a redundant
+    second batching module.
+    """
+    run_id = await _seed_run(repository, status="running")
+    loop = asyncio.get_running_loop()
+    hub = RunStreamHub(run_id, loop)
+
+    # Pre-load a burst onto the inbound queue, then signal close so the pump drains
+    # everything ready in one batch and exits.
     for seq in range(5):
-        writer.enqueue(
-            EventRecord(
-                run_id=run_id,
-                sequence=seq,
-                event_type="assistant",
-                payload={"seq": seq},
-                task_index=0,
-            )
-        )
-    assert writer.pending == 5
+        hub.queue.put_nowait(_runtime_event(run_id, seq))
+    hub.mark_closed()
 
-    ids = await writer.flush()
-    assert len(ids) == 5  # one batched append returned all five row ids
-    assert writer.pending == 0
-    # A second flush of an empty buffer is a no-op.
-    assert await writer.flush() == []
+    appended_batches: list[int] = []
+    real_append = repository.append_events
 
+    async def _counting_append(records: list[EventRecord]) -> list[int]:
+        appended_batches.append(len(records))
+        return await real_append(records)
 
-@pytest.mark.asyncio
-async def test_batched_writer_maybe_flush_size_trigger(repository: Repository) -> None:
-    """``maybe_flush`` flushes once the buffer reaches max_batch (AC-4)."""
-    run_id = await _seed_run(repository, status="running")
-    writer = BatchedEventWriter(repository, max_batch=2)
-    writer.enqueue(EventRecord(run_id=run_id, sequence=0, event_type="a", payload={}, task_index=0))
-    assert await writer.maybe_flush() == []  # below threshold
-    writer.enqueue(EventRecord(run_id=run_id, sequence=1, event_type="a", payload={}, task_index=0))
-    flushed = await writer.maybe_flush()  # at threshold → flush
-    assert len(flushed) == 2
+    repository.append_events = _counting_append  # type: ignore[method-assign]  # DKMVP-ESCAPE: spy on the single off-loop writer round-trips
+    try:
+        pump = EventPump(repository=repository, hub=hub)
+        await asyncio.wait_for(pump.run(), timeout=2.0)
+    finally:
+        repository.append_events = real_append  # type: ignore[method-assign]  # DKMVP-ESCAPE: restore the real writer
+
+    # One batched append carried all five queued events (coalesced, off-loop).
+    assert appended_batches == [5]
+    assert appended_batches[0] <= MAX_BATCH
+    # The events are durable + replayable under the platform run id.
+    rows = await repository.read_events_after(run_id, last_id=0, limit=100)
+    assert len(rows) == 5
 
 
 # ── AC-5: loop observability (heartbeat + slots-in-use gauge) ─────────────────

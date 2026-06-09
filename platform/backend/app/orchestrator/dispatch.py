@@ -49,6 +49,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from app.orchestrator.statuses import SLOT_HOLDING_STATUSES
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.db.repository import Repository
     from app.hitl.slots import ConcurrencySlots
@@ -56,12 +58,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.orchestrator.tick import Candidate, DispatchFn
 
 _log = logging.getLogger(__name__)
-
-#: Statuses whose runs currently HOLD a concurrency slot (the resync target). A
-#: ``paused`` run is excluded — it RELEASED its slot at the pause point (INV-9), so
-#: counting it would double-reserve. Terminal statuses hold nothing. ``pending``
-#: (claimed, container starting) + ``running`` + ``stopping`` each hold one.
-SLOT_HOLDING_STATUSES: tuple[str, ...] = ("pending", "running", "stopping")
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,43 +121,81 @@ class BoundedDispatcher:
     repository: Repository
     policy: DispatchPolicy = field(default_factory=DispatchPolicy)
 
-    async def _resync_slots(self, repo: str) -> None:
+    def _resync_slots_from_rows(self, memory_rows: list[dict[str, Any]]) -> None:
         """Reconcile the held-slot count DOWN to the DB's slot-holding run count.
 
         The DB is authoritative (ADR-P001 / NFR-PORT-1): a run that finished, was
         stopped, or was interrupted since last tick no longer holds a slot, but the
-        in-memory semaphore still counts the permit it took at dispatch. Each pass we
+        in-memory counter still counts the slot it took at dispatch. Each pass we
         compute the true slot-holding count (running/pending/stopping — a *paused*
         run already released its slot via the bridge, INV-9) and **release** the
         excess so completed runs' slots drain and queued candidates can take them
         (AC-1: "the rest queue, then drain as slots free"). This only ever releases
-        drifted permits — it never acquires — so it cannot manufacture capacity or
+        drifted slots — it never acquires — so it cannot manufacture capacity or
         over-admit. A run that the bridge already released (paused) is not
         double-counted because it is excluded from the slot-holding set.
+
+        Takes the **already-read** memory-holding rows (read once per tick — the
+        MINOR double-read fix) and filters them to the slot-holding subset locally,
+        so the resync shares the same read the admission baseline uses. The rows are
+        from ``read_active_run_memory`` (not ``read_active_runs``) which does NOT
+        filter ``issue_num IS NOT NULL``, so a run with no issue (a direct
+        ``POST /runs`` launch) still counts toward its held slot.
         """
-        # ``read_active_run_memory`` (not ``read_active_runs``) is the count source —
-        # it does NOT filter ``issue_num IS NOT NULL``, so a run with no issue (a
-        # direct ``POST /runs`` launch) still counts toward its held slot.
-        rows = await self.repository.read_active_run_memory(repo, list(SLOT_HOLDING_STATUSES))
-        active = len(rows)
-        # Release any permits held beyond the true active count (completed runs).
+        slot_holding = {s for s in SLOT_HOLDING_STATUSES}
+        active = sum(1 for row in memory_rows if str(row.get("status")) in slot_holding)
+        # Release any slots held beyond the true active count (completed runs).
         while self.slots.held > active:
             self.slots.release()
 
     async def dispatch_candidates(self, repo: str, candidates: list[Candidate]) -> DispatchResult:
         """Dispatch UP TO ``available`` admitted candidates this tick (AC-1/2/3).
 
-        Iterates the (already-sorted) candidates and, for each, enforces the
-        per-state cap → the count semaphore (only attempt while slots are free) →
-        aggregate admission. An admitted candidate is launched through the existing
-        ``launch_run`` boundary; the permit it took is **kept by the run** (released
-        by the run's completion/pause path). A denied / state-capped / lost-claim
-        candidate is **re-queued** (left for a later tick) and any permit taken for it
+        Reads the aggregate admission inputs **once at the top of the tick** (PERF):
+        a single ``read_active_run_memory`` (the memory-holding rows — also the source
+        for the slot resync, shared) + a single ``spend_today``. Then iterates the
+        (already-sorted) candidates and, for each, enforces the per-state cap → the
+        count gate (only attempt while slots are free) → the **pure** aggregate
+        admission ``decide`` against an **in-memory running memory total** (baseline Σ
+        memory + memory of runs admitted so far this tick + this candidate's memory ≤
+        ``HOST_MEMORY_BUDGET``; spend constant). So admission costs O(1) DB reads per
+        tick, not O(C) — yet the decision is identical (same deny+requeue, same
+        Codex-excluded spend INV-8). An admitted candidate is launched through the
+        existing ``launch_run`` boundary; the slot it took is **kept by the run**
+        (released by its completion/pause path). A denied / state-capped / lost-claim
+        candidate is **re-queued** (left for a later tick) and any slot taken for it
         is handed straight back. Returns a :class:`DispatchResult` for the gauges.
         """
-        # Reclaim slots of runs that completed since last tick (DB-authoritative) so
-        # queued candidates can drain into the freed slots (AC-1).
-        await self._resync_slots(repo)
+        from app.orchestrator.admission import (
+            DEFAULT_MEMORY as _DEFAULT_MEMORY,
+        )
+        from app.orchestrator.admission import (
+            MEMORY_HOLDING_STATUSES,
+            parse_memory_bytes,
+        )
+        from app.orchestrator.admission import (
+            sum_memory_bytes as _sum_memory_bytes,
+        )
+
+        # ── ONE per-tick aggregate read (PERF): the memory-holding rows + spend. ──
+        memory_rows = await self.repository.read_active_run_memory(
+            repo, list(MEMORY_HOLDING_STATUSES)
+        )
+        # Reclaim slots of runs that completed since last tick (DB-authoritative),
+        # reusing the rows just read (shared single read — the MINOR fix). Queued
+        # candidates can then drain into the freed slots (AC-1).
+        self._resync_slots_from_rows(memory_rows)
+
+        # Build the per-tick admission snapshot from the shared memory read + one
+        # spend read. ``spent_today`` is constant within the tick (dispatching adds no
+        # cost); ``baseline_memory`` is the start-of-tick Σ memory. Per-candidate
+        # admission then adds the in-memory ``admitted_memory`` running total.
+        baseline_memory = _sum_memory_bytes(memory_rows)
+        spent_today = await self.repository.spend_today(repo, since_iso=self._since_iso())
+        snapshot = self.admission.build_snapshot(
+            baseline_memory_bytes=baseline_memory, spent_today_usd=spent_today
+        )
+        admitted_memory = 0  # Σ memory of runs admitted so far THIS tick (in-memory).
 
         dispatched: list[Any] = []
         admission_denied = 0
@@ -178,29 +212,35 @@ class BoundedDispatcher:
                     state_capped += 1
                     continue
 
-            # 2. Count semaphore (AC-1): only attempt while a slot is free this tick.
-            #    A held slot frees asynchronously (run completes/pauses) → re-evaluated
-            #    next tick; we do not block the whole tick on a held slot.
+            # 2. Count gate (AC-1): only attempt while a slot is free this tick. A held
+            #    slot frees asynchronously (run completes/pauses) → re-evaluated next
+            #    tick; we do not block the whole tick on a held slot.
             if self.slots.available <= 0:
                 # No free slots — every remaining candidate queues for a later tick.
                 break
 
-            # Take the permit (does not block: available > 0 here). The run keeps it
-            # on success; on admission-deny / failed launch we hand it back below.
+            # 3. Aggregate admission (AC-3): the PURE per-candidate decision against
+            #    the per-tick snapshot + the in-memory admitted-memory total (no DB
+            #    read). Evaluated BEFORE taking the slot so a denied candidate never
+            #    even touches the gate (identical deny+requeue behaviour).
+            decision = self.admission.decide(
+                snapshot,
+                run_memory=candidate.memory,
+                admitted_memory_bytes=admitted_memory,
+            )
+            if not decision.admitted:
+                admission_denied += 1
+                _log.info(
+                    "dispatch re-queue issue=%s reason=%s (admission denied)",
+                    candidate.num,
+                    decision.reason,
+                )
+                continue
+
+            # Take the slot (does not block: available > 0 here). The run keeps it on
+            # success; on a failed launch we hand it back below.
             await self.slots.acquire_async()
             try:
-                # 3. Aggregate admission (AC-3): memory + daily-spend (Codex-excluded).
-                decision = await self.admission.evaluate(repo, run_memory=candidate.memory)
-                if not decision.admitted:
-                    admission_denied += 1
-                    _log.info(
-                        "dispatch re-queue issue=%s reason=%s (admission denied)",
-                        candidate.num,
-                        decision.reason,
-                    )
-                    self.slots.release()  # hand the permit back — never drop the candidate
-                    continue
-
                 result = await self.dispatch(candidate)
             except BaseException:
                 # A launch error must not strand the slot it took.
@@ -212,7 +252,10 @@ class BoundedDispatcher:
                 self.slots.release()
                 continue
 
-            # Launched: the run now holds the permit (released by its lifecycle path).
+            # Launched: the run now holds the slot (released by its lifecycle path).
+            # Add its memory to the in-memory running total so the NEXT candidate this
+            # tick is sized against it (keeps the memory bound real without a re-read).
+            admitted_memory += parse_memory_bytes(candidate.memory or _DEFAULT_MEMORY)
             dispatched.append(result)
             state_label = self._capped_state(candidate.labels, cap_keys=self.policy.per_state)
             if state_label is not None:
@@ -224,6 +267,16 @@ class BoundedDispatcher:
             state_capped=state_capped,
             seen=len(candidates),
         )
+
+    def _since_iso(self) -> str:
+        """The UTC start-of-day boundary for the per-tick spend read (shared clock).
+
+        Uses the admission controller's injected clock so a frozen-clock test drives
+        the same UTC-day window the per-candidate path used.
+        """
+        from app.orchestrator.admission import start_of_utc_day
+
+        return start_of_utc_day(now=self.admission.now)
 
     @staticmethod
     def _capped_state(labels: tuple[str, ...], *, cap_keys: dict[str, int]) -> str | None:
@@ -241,27 +294,20 @@ class BoundedDispatcher:
 def build_policy_from_settings(settings: Any) -> DispatchPolicy:
     """Build the :class:`DispatchPolicy` from settings (AC-2).
 
-    v1 ships **no** per-state throttle by default (the global semaphore + aggregate
-    admission are the bounds); the seam exists so an operator can throttle a state
-    without a code change. If a future ``PER_STATE_CAPS`` setting is added it parses
-    here; absent it, the policy is empty (uncapped per-state). Kept as a builder so
-    the tick wires one policy from the one settings object.
+    v1 ships **no** per-state throttle by default (the global concurrency cap +
+    aggregate admission are the bounds); the seam exists so an operator can throttle
+    a state without a code change. The typed :attr:`Settings.PER_STATE_CAPS` field
+    parses the ``'label:cap,label:cap'`` env string into a ``{label: cap}`` dict at
+    settings-load time (alongside the other admission knobs), so this builder simply
+    surfaces it onto the :class:`DispatchPolicy`. Absent / empty → an uncapped policy.
+    Kept as a builder so the tick wires one policy from the one settings object.
     """
-    raw = getattr(settings, "PER_STATE_CAPS", None)
-    if not raw:
-        return DispatchPolicy()
-    per_state: dict[str, int] = {}
-    for pair in str(raw).split(","):
-        if ":" not in pair:
-            continue
-        label, _, cap = pair.partition(":")
-        label = label.strip()
-        if label and cap.strip().isdigit():
-            per_state[label] = int(cap.strip())
-    return DispatchPolicy(per_state=per_state)
+    caps = getattr(settings, "PER_STATE_CAPS", None) or {}
+    return DispatchPolicy(per_state=dict(caps))
 
 
 __all__ = [
+    "SLOT_HOLDING_STATUSES",
     "BoundedDispatcher",
     "DispatchPolicy",
     "DispatchResult",
