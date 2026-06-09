@@ -59,6 +59,13 @@ DEFAULT_MAX_RETRY_AFTER_SECONDS = 60.0
 #: header (GitHub usually sends one, but we must not busy-loop if it is absent).
 DEFAULT_FALLBACK_RETRY_SECONDS = 1.0
 
+#: Default bounded grace window for a graceful drain on shutdown (§8.1, INV-11).
+#: A queued ``agent:*`` label PUT must be FLUSHED (executed) on shutdown so the
+#: GitHub label and the DB row stay consistent — dropping it would orphan one of
+#: the two. But the queue is token-bucket-paced, so an unbounded backlog could
+#: otherwise wedge shutdown forever; after this window any remainder is cancelled.
+DEFAULT_DRAIN_GRACE_SECONDS = 10.0
+
 
 class SecondaryRateLimitError(Exception):
     """A mutating call hit GitHub's **secondary** (content-creation) limit (§8.1).
@@ -229,6 +236,9 @@ class WriteQueue:
         self._queue: asyncio.Queue[_Job[Any]] = asyncio.Queue()
         self._worker: asyncio.Task[None] | None = None
         self._state = RateLimitState()
+        #: Set on a graceful shutdown so :meth:`submit` rejects NEW jobs while the
+        #: worker flushes the in-flight + queued backlog (INV-11 consistency).
+        self._closing = False
 
     @property
     def rate_limit_state(self) -> RateLimitState:
@@ -240,16 +250,53 @@ class WriteQueue:
         if self._worker is None or self._worker.done():
             self._worker = asyncio.ensure_future(self._run())
 
-    async def stop(self) -> None:
-        """Cancel the drain worker for a clean app shutdown (slice 2.0 lifespan).
+    async def stop(self, *, grace: float = DEFAULT_DRAIN_GRACE_SECONDS) -> None:
+        """Gracefully **drain** the queue on app shutdown, then stop (INV-11).
 
-        Cancels the single FIFO worker (if running) and cancels any still-pending
-        job futures so a caller awaiting ``submit`` does not hang past shutdown.
+        A mutating ``agent:*`` label PUT that is already enqueued (or mid-flight)
+        must be **flushed** (executed) on shutdown, not dropped — dropping it would
+        leave the GitHub label and the active-run DB row inconsistent (the exact
+        single-occupancy invariant this queue exists to protect, §8.1 / INV-11).
+        So ``stop`` is **drain-within-grace, then cancel the remainder**:
+
+        1. **Stop accepting new jobs** (``_closing``): a fresh :meth:`submit`
+           raises so we never grow the backlog we are trying to flush.
+        2. **Flush the in-flight + queued jobs** by awaiting the FIFO to fully
+           drain (the in-flight job is never cancelled — it may already be
+           mid-``PUT`` to GitHub), **bounded by** ``grace`` seconds. The queue is
+           token-bucket-paced, so a graceful shutdown must not hang forever on a
+           large backlog — hence the bound.
+        3. **Only after the grace window** cancel the worker and fail any jobs that
+           did not make it, so their awaiting ``submit`` calls unblock rather than
+           hanging past shutdown.
+
         Idempotent: a queue that never spawned a worker (no ``submit`` yet) is a
-        no-op. After ``stop`` a fresh ``submit`` re-spawns a worker on the live
-        loop (the worker already exits when idle), so this is teardown, not a
-        permanent close.
+        no-op. ``grace`` is the bounded window (default
+        :data:`DEFAULT_DRAIN_GRACE_SECONDS`); pass ``0`` for an immediate
+        cancel-only shutdown. This is :meth:`drain` under its shutdown name.
         """
+        await self.drain(grace=grace)
+
+    async def drain(self, *, grace: float = DEFAULT_DRAIN_GRACE_SECONDS) -> None:
+        """Flush the in-flight + queued jobs within ``grace``, then cancel remainder.
+
+        See :meth:`stop` for the full contract. Separated so callers can express
+        intent ("drain this queue") independently of the lifespan teardown name.
+        """
+        self._closing = True
+        worker = self._worker
+        # Flush the backlog: let the running worker finish the in-flight job and
+        # every still-queued job, bounded by ``grace``. ``Queue.join`` returns once
+        # every put has a matching ``task_done`` — i.e. the FIFO is fully flushed.
+        if worker is not None and not worker.done() and grace > 0:
+            try:
+                await asyncio.wait_for(self._queue.join(), timeout=grace)
+            except TimeoutError:
+                # Backlog did not drain within the grace window — fall through to
+                # cancel the worker + fail the remainder below (bounded shutdown).
+                pass
+        # Cancel the worker (now idle if the drain completed; mid-job only if the
+        # grace window expired — accepted, since the bound must hold).
         worker = self._worker
         if worker is not None and not worker.done():
             worker.cancel()
@@ -258,7 +305,8 @@ class WriteQueue:
             except asyncio.CancelledError:
                 pass
         self._worker = None
-        # Fail any jobs still queued so their awaiting ``submit`` calls unblock.
+        # Fail any jobs still queued (only reachable if the grace window expired)
+        # so their awaiting ``submit`` calls unblock instead of hanging.
         while not self._queue.empty():
             try:
                 job = self._queue.get_nowait()
@@ -280,8 +328,12 @@ class WriteQueue:
 
         Returns the mutation's result once the worker has run it (after any pacing
         wait and any honored ``Retry-After`` retries). Re-raises any other
-        exception the mutation raised.
+        exception the mutation raised. Raises :class:`RuntimeError` if the queue is
+        **draining** (a graceful shutdown is in progress) — new mutations are
+        rejected so the in-flight backlog can flush cleanly (INV-11).
         """
+        if self._closing:
+            raise RuntimeError("WriteQueue is shutting down; new mutations are rejected")
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
         await self._queue.put(_Job(factory=factory, future=future, label=label))
