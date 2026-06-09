@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -38,8 +39,9 @@ from app.db import Repository
 from app.github.provider import aclose_github_client, build_pat_github_client
 from app.github.write_queue import DEFAULT_DRAIN_GRACE_SECONDS, WriteQueue
 from app.hitl import ConcurrencySlots, DecisionRegistry
+from app.orchestrator.recovery import DockerOrphanReaper, RecoveryDeps, recover_orphans
 from app.orchestrator.retry_deps import RETRY_SCHEDULER_ATTR, build_retry_scheduler
-from app.orchestrator.tick import OrchestratorHandle, start_orchestrator
+from app.orchestrator.tick import EngineRunKiller, OrchestratorHandle, start_orchestrator
 from app.runtime import RunService
 from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
 from app.security import AccessControlMiddleware
@@ -87,6 +89,110 @@ async def _resolve_orchestrator_repo(repository: Repository) -> str | None:
         return None
     row = next(iter(rows), None)
     return str(row["repo"]) if row is not None else None
+
+
+async def _run_boot_recovery(app: FastAPI, repo: str) -> None:
+    """Boot crash-recovery scan — runs at startup BEFORE the tick dispatches (3.5).
+
+    Honors INV-10 / ADR-P007 / R-15: for each non-terminal ``runs`` row the dead
+    process left in-flight, ``docker kill`` the orphaned (budget-burning) container
+    via the :class:`DockerOrphanReaper` seam, mark the run ``interrupted``, and offer
+    a jittered + semaphore-bounded ``start_task`` retry through **3.4's existing**
+    scheduler (no second launch path). It does **not** re-attach to any container
+    started by the dead process — the engine has no such API. Composed from the same
+    lifespan singletons the tick uses; a recovery failure is swallowed so a boot is
+    never wedged by the orphan sweep (the next boot retries). Called **before**
+    :func:`start_orchestrator` so no new run is dispatched while orphans are reaped.
+    """
+    state = app.state
+    settings: Settings = state.settings
+    repository: Repository = state.repository
+    run_service: RunService = state.run_service
+    scheduler = getattr(state, RETRY_SCHEDULER_ATTR, None)
+    # Anti-thundering-herd (AC-19): bound the boot recovery retry offers by the
+    # configured concurrency so N orphans never re-dispatch onto Docker + GitHub all
+    # at once. The Phase-3 tick dispatches serially (the admission *cap* is Phase 5);
+    # this dedicated semaphore caps only the recovery fan-out, jittered per orphan.
+    semaphore = asyncio.Semaphore(max(1, settings.MAX_CONCURRENT_RUNS))
+    try:
+        await recover_orphans(
+            RecoveryDeps(
+                repository=repository,
+                reaper=DockerOrphanReaper(run_service),
+                repo=repo,
+                retry_scheduler=scheduler,
+                concurrency=semaphore,
+            )
+        )
+    except Exception:  # noqa: BLE001 - never wedge boot on the orphan-recovery sweep
+        _log.warning("orchestrator boot recovery failed; continuing startup", exc_info=True)
+
+
+def _register_sigterm_drain(app: FastAPI, repo: str) -> Any | None:
+    """Register a SIGTERM handler that gracefully drains live runs (3.5 — AC-18).
+
+    A ``docker compose restart`` delivers SIGTERM. The handler schedules
+    :func:`app.orchestrator.drain.drain_with_stop` on the serving loop so it (1)
+    stops the tick dispatching new runs and (2) calls ``RunHandle.stop(force=True)``
+    on every live run — stopping its container (INV-10; **never** a bare task-cancel
+    that would orphan a money-spending container) — within the drain deadline,
+    marking any it could not cleanly stop ``interrupted`` for the next boot sweep.
+
+    Registered via ``loop.add_signal_handler`` when the running loop supports it
+    (POSIX). On a platform without signal-handler support (or when no orchestrator is
+    running), this is a no-op and the lifespan ``finally`` drain is the backstop.
+    Returns the previously-registered handler reference (currently unused) or
+    ``None``.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover - lifespan always has a running loop
+        return None
+
+    def _on_sigterm() -> None:
+        _log.info("SIGTERM received; starting graceful drain")
+        loop.create_task(_drain_orchestrator(app))  # noqa: RUF006 - fire-and-forget drain on shutdown
+
+    try:
+        loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
+    except (NotImplementedError, ValueError, RuntimeError):
+        # Non-POSIX / no main thread: no signal handler. The shutdown drain backstops.
+        _log.info("SIGTERM handler unavailable on this platform; relying on shutdown drain")
+        return None
+    return _on_sigterm
+
+
+async def _drain_orchestrator(app: FastAPI) -> None:
+    """Stop dispatch + stop every live run's container (the SIGTERM/shutdown drain).
+
+    The shared drain body the SIGTERM handler and the lifespan ``finally`` both call
+    (idempotent — a second drain over already-stopped runs is a no-op). It binds the
+    **same** :class:`EngineRunKiller` the tick uses (``RunHandle.stop(force=True)`` —
+    INV-10) and the orchestrator's ``stop`` event so dispatch halts first, then
+    drains live runs within the deadline, marking any undrained run ``interrupted``.
+    Swallows errors so a drain never crashes shutdown.
+    """
+    from app.orchestrator.drain import DrainDeps, drain, drain_with_stop
+
+    orchestrator = getattr(app.state, "orchestrator", None)
+    repo = getattr(orchestrator, "deps", None)
+    repo_name = getattr(repo, "repo", None)
+    if repo_name is None:
+        repo_name = getattr(app.state, "orchestrator_repo", None)
+    if repo_name is None:
+        return
+    deps = DrainDeps(
+        repository=app.state.repository,
+        killer=EngineRunKiller(app.state.run_service),
+        repo=str(repo_name),
+    )
+    try:
+        if isinstance(orchestrator, OrchestratorHandle):
+            await drain_with_stop(deps, stop=orchestrator.stop)
+        else:
+            await drain(deps)
+    except Exception:  # noqa: BLE001 - a drain must never crash shutdown
+        _log.warning("orchestrator graceful drain failed", exc_info=True)
 
 
 def _build_secret_store(repository: Repository, settings: Settings) -> SecretStore:
@@ -195,12 +301,32 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # in tests via ``run_tick`` without entering the lifespan.
     app.state.orchestrator = None
     orchestrator_repo = await _resolve_orchestrator_repo(repository)
+    app.state.orchestrator_repo = orchestrator_repo
     if orchestrator_repo is not None:
+        # Boot crash recovery FIRST (slice 3.5 / §8.2 — INV-10, ADR-P007): before
+        # the tick dispatches any new run, ``docker kill`` every orphan container the
+        # dead process left alive, mark those runs ``interrupted``, and offer a
+        # jittered + semaphore-bounded ``start_task`` retry through 3.4's scheduler.
+        # NO re-attach (the engine has no such API — R-15). Run before the tick so a
+        # reaped orphan's slot is free and a recovery retry races no fresh dispatch.
+        await _run_boot_recovery(app, orchestrator_repo)
+        # Register the SIGTERM graceful-drain handler (slice 3.5 — AC-18): on a
+        # ``docker compose restart`` it stops dispatch + ``RunHandle.stop(force=True)``s
+        # every live run (stopping its container — INV-10), marking the undrained
+        # ``interrupted`` for the next boot sweep. The lifespan ``finally`` drain is
+        # the backstop on a platform without signal-handler support.
+        _register_sigterm_drain(app, orchestrator_repo)
         app.state.orchestrator = start_orchestrator(app, orchestrator_repo)
 
     try:
         yield
     finally:
+        # Graceful drain on shutdown (slice 3.5 — AC-18 / INV-10): stop every live
+        # run's container BEFORE cancelling the tick + tearing down singletons, so a
+        # ``docker compose restart`` never leaves an orphaned money-spending
+        # container. Idempotent with the SIGTERM handler (a second drain is a no-op).
+        if getattr(app.state, "orchestrator_repo", None) is not None:
+            await _drain_orchestrator(app)
         # Stop + cancel + await the tick loop first so it stops dispatching new
         # runs and reconciling before the singletons it depends on are torn down.
         orchestrator = getattr(app.state, "orchestrator", None)
