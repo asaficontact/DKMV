@@ -19,6 +19,7 @@
  * requests via {@link apiGet}/{@link apiPost}.
  */
 import { apiGet, apiPost } from "./client";
+import type { AnswerBody, PauseRequest } from "../components/PauseCard";
 
 /** A GitHub label on the issue detail (color is the GitHub hex, only for `--lc`). */
 export interface IssueLabel {
@@ -127,6 +128,26 @@ export interface CreateRunResponse {
   run_id: string;
 }
 
+/**
+ * The `decision:{...}|null` PauseCard rehydration block from `GET /runs/{id}`
+ * (slice 2.3, §8.3). When the run is paused this carries the open pause decision:
+ * the `decision_id`, the `task_name`, the decision `status`, the UTC `timeout_at`,
+ * and the engine-authored {@link PauseRequest} (`{task_name, questions, context}`)
+ * the {@link PauseCard} renders. `null` when the run is not paused.
+ *
+ * This is the **rehydration source** (not the live push): if the SSE socket drops
+ * mid-pause, the reconnect replay only reaches `pause_requested`, so the card is
+ * sourced from this block on `GET /runs/{id}` rather than the live `decision` event.
+ */
+export interface RunDecision {
+  decision_id: string;
+  task_name: string | null;
+  status: string | null;
+  timeout_at: string | null;
+  /** The engine `PauseRequest` payload the {@link PauseCard} renders (§6.1). */
+  request: PauseRequest;
+}
+
 /** A stage row in the run detail (§8.9 `RunStage`). */
 export interface RunStage {
   idx: number;
@@ -164,6 +185,8 @@ export interface RunDetailResponse {
   config: Record<string, unknown>;
   sandbox: { image: string; mem: string; vcpu: number; health: string };
   artifacts: { name: string; size?: number; live?: boolean }[];
+  /** The open pause decision (PauseCard rehydration), or null when not paused. */
+  decision?: RunDecision | null;
 }
 
 function encodeRepo(slug: string): string {
@@ -220,6 +243,26 @@ export interface StopRunResponse {
  */
 export function stopRun(runId: string): Promise<StopRunResponse> {
   return apiPost<StopRunResponse>(`/runs/${encodeURIComponent(runId)}/stop`);
+}
+
+/** The `POST /runs/{id}/answer` 200 body (§8.5/§8.9). */
+export interface AnswerRunResponse {
+  /** `true` on the winning exactly-once transition (INV-9). */
+  resolved: boolean;
+}
+
+/**
+ * Resolve a run's open pause (slice 2.5 wiring — `POST /runs/{id}/answer`, §8.5).
+ *
+ * The {@link PauseCard}'s Approve/Ship/Abort actions post the chosen option
+ * **value** (`{answers:{question_id: value}, skip_remaining}` — never the label,
+ * §6.1). The backend resolves the pending decision **exactly once** (INV-9) and
+ * resumes the engine; a double-submit / second tab / racing timeout surfaces as a
+ * `409 pause_already_resolved` {@link ApiError}. A state-changing POST — it rides
+ * the CSRF-safe {@link apiPost} (INV-1); no token is ever placed in a URL (INV-2).
+ */
+export function answerRun(runId: string, body: AnswerBody): Promise<AnswerRunResponse> {
+  return apiPost<AnswerRunResponse>(`/runs/${encodeURIComponent(runId)}/answer`, body);
 }
 
 /** The `POST /runs/{id}/exec` 200 body — a one-shot command's stdout. */
