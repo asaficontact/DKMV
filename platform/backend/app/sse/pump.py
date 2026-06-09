@@ -42,10 +42,6 @@ from app.sse.observer_bridge import RunStreamHub
 #: per-event writer hop (PERF).
 MAX_BATCH = 256
 
-#: Idle wait when the inbound queue is empty — the pump blocks on the first
-#: event (no busy-poll), then opportunistically drains whatever else is ready.
-_DRAIN_POLL_S = 0.05
-
 #: Outer-``RuntimeEvent`` field names the SSE body carries verbatim (§6.4). The
 #: inner agent line is ``data{}``; the Raw toggle (slice 2.4) reads that dict.
 _BODY_FIELDS: tuple[str, ...] = (
@@ -78,9 +74,17 @@ class StreamFrame:
     ``Last-Event-ID`` cursor). ``event_type`` is duplicated out of the body so the
     subscriber slow-consumer policy (coalesce meter, keep spine) can branch
     without re-parsing ``body``. ``body`` is the outer :class:`RuntimeEvent`
-    projected to the §6.4 wire shape; it is the **redacted** view (the persisted
-    payload went through the repository redactor — INV-4 — and ``data`` mirrors
-    it).
+    projected to the §6.4 wire shape.
+
+    On redaction (INV-4): the **durable** persisted payload and therefore the
+    **replay** view (reconstructed from ``events`` by :func:`app.sse.replay.row_to_frame`)
+    are redacted — the repository scrubs every payload before it touches the
+    append-only ``events`` table, and the replay path reads those scrubbed rows
+    back. The **live** fan-out frame built here carries the engine event body as
+    emitted; it is the authenticated *operator's* own real-time view of their run
+    (the live SSE stream is gated by the INV-1 middleware + the INV-2 SSE cookie),
+    not a third-party sink — and the same event's durable copy in ``events`` (the
+    only thing that persists / replays) is redacted.
     """
 
     event_id: int
@@ -88,8 +92,17 @@ class StreamFrame:
     body: dict[str, Any]
 
 
-def event_to_record(event: RuntimeEvent) -> EventRecord:
+def event_to_record(event: RuntimeEvent, *, run_id: str | None = None) -> EventRecord:
     """Project an engine :class:`RuntimeEvent` into a persistable :class:`EventRecord`.
+
+    ``run_id`` overrides the persisted ``events.run_id`` with the **platform UUID**
+    (the hub's id) — binding: the platform addresses every run by its UUID, but the
+    engine stamps ``event.run_id`` with its OWN ``YYMMDD-HHMM`` id once it surfaces.
+    Persisting under the platform UUID is what makes ``read_events_after`` /
+    ``Last-Event-ID`` replay / the segment-sum spend (all keyed by the platform id)
+    find the run's events; the engine id is preserved inside the redacted
+    ``payload`` (``event.data``) for the ``engine_run_id`` back-fill. When ``run_id``
+    is ``None`` the event's own id is used (a direct, pre-wired test).
 
     Materializes ``task_index`` / ``cost_usd`` out of the event so the segment-sum
     spend projection (INV-7) can dedup last-cumulative cost per ``(run_id,
@@ -102,7 +115,7 @@ def event_to_record(event: RuntimeEvent) -> EventRecord:
     raw_idx = event.task_index
     task_index = raw_idx if raw_idx is not None and raw_idx >= 0 else None
     return EventRecord(
-        run_id=event.run_id,
+        run_id=run_id or event.run_id,
         sequence=event.sequence,
         event_type=event.event_type,
         payload=dict(event.data),
@@ -151,8 +164,13 @@ class EventPump:
     async def run(self) -> None:
         """Drain-persist-fan-out until the run is closed and the queue is empty.
 
-        Blocks on the first event (no busy-poll), then opportunistically batches
-        everything currently ready (up to :data:`MAX_BATCH`) into one
+        **Sleeps until an event arrives or the hub closes — no busy-poll.** The
+        idle wait is a ``FIRST_COMPLETED`` race of ``queue.get()`` against
+        ``hub.closed`` (the same pattern :mod:`app.sse.replay` uses), so an idle
+        or paused run (a pause can hold for up to the 60-min HITL timeout) costs
+        zero CPU — the pump blocks on the event/close future instead of waking 20×
+        a second. When an event arrives it opportunistically batches everything
+        currently ready (up to :data:`MAX_BATCH`) into one
         :meth:`Repository.append_events` round-trip. Continues until the hub is
         marked closed AND no events remain. Always flushes a trailing batch so a
         late ``task_completed`` (meter-critical — INV-7) is persisted + replayable.
@@ -174,14 +192,41 @@ class EventPump:
             self._hub.mark_closed()
 
     async def _next_batch(self, queue: asyncio.Queue[RuntimeEvent]) -> list[RuntimeEvent]:
-        """Await ≥1 event (or a short tick if closed), then drain what's ready."""
-        try:
-            first = await asyncio.wait_for(queue.get(), timeout=_DRAIN_POLL_S)
-        except TimeoutError:
+        """Sleep until ≥1 event arrives (or the hub closes), then drain what's ready.
+
+        No polling: races ``queue.get()`` against ``hub.closed.wait()`` with
+        ``FIRST_COMPLETED`` so the pump idles on a future and wakes only on a real
+        event or the close signal. If the close fires first (and no event raced in)
+        returns an empty batch — the caller's close-and-drained check then exits.
+        """
+        first = await self._await_next_event(queue)
+        if first is None:
             return []
         batch = [first]
         batch.extend(self._drain_ready(queue, limit=MAX_BATCH - 1))
         return batch
+
+    async def _await_next_event(self, queue: asyncio.Queue[RuntimeEvent]) -> RuntimeEvent | None:
+        """Await the next inbound event, or ``None`` if the hub closes while waiting.
+
+        The non-polling idle wait (FIX-4): a ``FIRST_COMPLETED`` race between the
+        queue ``get`` and the hub's ``closed`` event. If ``get`` wins, return the
+        event; if ``closed`` wins (and ``get`` didn't also complete), cancel the
+        pending ``get`` and return ``None``. A frame that arrived on the queue in
+        the same wakeup as ``closed`` is still returned (``get`` is checked first),
+        so the close path never drops a buffered final event.
+        """
+        get_task = asyncio.ensure_future(queue.get())
+        closed_task = asyncio.ensure_future(self._hub.closed.wait())
+        try:
+            await asyncio.wait({get_task, closed_task}, return_when=asyncio.FIRST_COMPLETED)
+            if get_task.done():
+                return get_task.result()
+            return None
+        finally:
+            for task in (get_task, closed_task):
+                if not task.done():
+                    task.cancel()
 
     @staticmethod
     def _drain_ready(
@@ -204,8 +249,17 @@ class EventPump:
         cursor always matches a durable row (no live id the backlog lacks). The
         whole batch is one :meth:`Repository.append_events` round-trip through the
         single writer (INV-6) and the redactor (INV-4).
+
+        Every row is persisted under the **platform UUID** (``hub.run_id``), not the
+        engine's ``event.run_id`` — the platform addresses each run by its UUID, so
+        replay / spend / stage reads (all keyed by it) must find these rows. The
+        engine id is captured off the first stamped frame for the completion
+        ``engine_run_id`` back-fill.
         """
-        records = [event_to_record(e) for e in batch]
+        platform_run_id = self._hub.run_id
+        for event in batch:
+            self._hub.note_engine_run_id(event.run_id)
+        records = [event_to_record(e, run_id=platform_run_id) for e in batch]
         ids = await self._repository.append_events(records)
         # Project run_stages from lifecycle frames (mutable stepper read model).
         for event in batch:
@@ -227,19 +281,22 @@ class EventPump:
         INV-7); ``task_failed`` marks it ``failed``. Non-lifecycle frames (stream/
         assistant/result) don't move the stepper. The stage index is the engine's
         ``task_index``; a frame without a real task context (``-1``) is ignored.
+        The stage rows are keyed by the **platform UUID** (``hub.run_id``), matching
+        the events persistence, so the §8.9 stage read finds them.
         """
         idx = event.task_index
         if idx is None or idx < 0:
             return
+        run_id = self._hub.run_id
         etype = event.event_type
         if etype in _STAGE_START_TYPES:
             name = event.task_name or self._stage_names.get(idx, "")
             self._stage_names[idx] = name
-            await self._repository.upsert_stage(event.run_id, idx, name, status="running")
+            await self._repository.upsert_stage(run_id, idx, name, status="running")
         elif etype in _STAGE_DONE_TYPES:
             name = event.task_name or self._stage_names.get(idx, "")
             await self._repository.upsert_stage(
-                event.run_id,
+                run_id,
                 idx,
                 name,
                 status="done",
@@ -249,7 +306,7 @@ class EventPump:
         elif etype in _STAGE_FAILED_TYPES:
             name = event.task_name or self._stage_names.get(idx, "")
             await self._repository.upsert_stage(
-                event.run_id,
+                run_id,
                 idx,
                 name,
                 status="failed",

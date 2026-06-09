@@ -38,7 +38,7 @@ from app.db.repository import Repository
 from app.sse.auth import SseAuthError, authenticate_sse
 from app.sse.observer_bridge import StreamRegistry, Subscriber
 from app.sse.pump import StreamFrame
-from app.sse.replay import parse_last_event_id, replay_then_tail, row_to_frame
+from app.sse.replay import iter_backlog, parse_last_event_id, replay_then_tail
 
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
 # router in :mod:`app.api`, which this router attaches to.
@@ -147,12 +147,13 @@ async def stream_run_events(run_id: str, request: Request) -> EventSourceRespons
                         break
                     yield _frame_to_sse(frame)
             else:
-                # No live hub: stream the durable backlog once, then end.
-                backlog = await repository.read_events_after(run_id, last_id)
-                for backlog_row in backlog:
+                # No live hub (finished run): stream the durable backlog once, then
+                # end — in BOUNDED PAGES (FIX-3) so a reconnect on a long finished
+                # run doesn't materialize the whole history into memory at once.
+                async for frame in iter_backlog(repository, run_id, last_id):
                     if await request.is_disconnected():
                         break
-                    yield _frame_to_sse(row_to_frame(backlog_row))
+                    yield _frame_to_sse(frame)
         finally:
             if hub is not None:
                 hub.remove_subscriber(subscriber)

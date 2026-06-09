@@ -403,6 +403,7 @@ async def launch_run(
     default_memory: str,
     current_labels: list[str],
     on_pause: Callable[[Any], Awaitable[Any]] | None = None,
+    attach_stream: Callable[[str, Any], None] | None = None,
 ) -> LaunchResult:
     """Validate → resolve → claim-lock → start → move-label (the §8.11 launch flow).
 
@@ -411,9 +412,11 @@ async def launch_run(
     budget/turn guardrails (INV-8), claims the run row via the INV-5
     ``ON CONFLICT DO NOTHING`` helper (``409 duplicate_dispatch`` on a lost race),
     starts the engine through :class:`~app.runtime.RunService` (with the
-    ``on_pause`` bridge — a pass-through placeholder until slice 2.5), and moves the
-    issue to ``agent:in-progress`` via ``set_agent_state`` on the write-queue
-    (INV-11). Returns the **platform UUID**.
+    ``on_pause`` bridge — a pass-through placeholder until slice 2.5), **wires the
+    run into the live SSE stream** via the ``attach_stream`` hook (registers the
+    platform observer on the ``RunHandle`` + spawns the per-run pump/supervisor —
+    F8/§8.3), and moves the issue to ``agent:in-progress`` via ``set_agent_state``
+    on the write-queue (INV-11). Returns the **platform UUID**.
     """
     from app.github.state_machine import set_agent_state
 
@@ -461,7 +464,7 @@ async def launch_run(
     # The on_pause bridge is owned by slice 2.5; until then a pass-through
     # placeholder is wired through so start() already carries the on_pause= seam.
     pause_bridge = on_pause or _passthrough_on_pause
-    await run_service.start(
+    handle = await run_service.start(
         component=workflow_id,
         repo=repo,
         branch=branch,
@@ -477,6 +480,17 @@ async def launch_run(
         on_pause=pause_bridge,
         keep_alive=req.keep_alive,
     )
+
+    # ── wire the run into the live stream (F8 — the SSE backbone, §8.3) ─────────
+    # The engine returned the RunHandle BEFORE its run coroutine had a chance to
+    # emit (it was just create_task-d), so registering the platform observer +
+    # pump here — synchronously, before any await below — never races the first
+    # event (INV-12). ``attach_stream`` (provided by the route, bound to
+    # app.state.stream_registry) registers ``hub.observer()`` on the handle and
+    # spawns the per-run pump + completion supervisor; without it a launched run
+    # would never persist events or fan out (the dead-code gap this closes).
+    if attach_stream is not None:
+        attach_stream(run_id, handle)
 
     # ── move the issue to agent:in-progress (INV-11, write-queue) ──────────────
     await set_agent_state(

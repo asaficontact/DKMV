@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+import app.sse.replay as replay_mod
 import pytest
 import pytest_asyncio
 from alembic import command
@@ -22,7 +23,7 @@ from app.db import Repository
 from app.db.repository import EventRecord
 from app.sse.observer_bridge import RunStreamHub, Subscriber
 from app.sse.pump import StreamFrame, event_to_body
-from app.sse.replay import parse_last_event_id, replay_then_tail
+from app.sse.replay import iter_backlog, parse_last_event_id, replay_then_tail
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
@@ -178,6 +179,75 @@ async def test_replay_then_tail_stops_on_disconnected_subscriber(repository: Rep
         seen.append(frame.event_id)
     # The backlog still flushes; the live tail then stops immediately.
     assert seen == backlog_ids
+
+
+@pytest.mark.asyncio
+async def test_iter_backlog_pages_large_backlog_no_gaps_no_dups(
+    repository: Repository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FIX-3: a large backlog replays in BOUNDED pages — every id once, in order.
+
+    Seeds many more events than a single page and shrinks ``BACKLOG_PAGE_SIZE`` so
+    the read MUST span several pages, then asserts ``iter_backlog`` yields each id
+    exactly once in strictly increasing order (no gap at a page boundary, no dup of
+    the page's last row) — i.e. the bounded paging preserves the no-gaps/no-dups
+    contract while keeping each read O(page), not O(run-so-far).
+    """
+    monkeypatch.setattr(replay_mod, "BACKLOG_PAGE_SIZE", 5)
+    total = 23  # 23 / 5 → 5 pages (the last short page ends the loop)
+    run_id, backlog_ids = await _seed(repository, total)
+
+    seen: list[int] = []
+    async for frame in iter_backlog(repository, run_id, 0):
+        seen.append(frame.event_id)
+
+    assert seen == backlog_ids  # every id, in id order
+    assert seen == sorted(seen)
+    assert len(seen) == len(set(seen))  # no duplicate across page boundaries
+
+
+@pytest.mark.asyncio
+async def test_iter_backlog_respects_cursor_and_drains_exactly(
+    repository: Repository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FIX-3: paging from a non-zero cursor yields only id > cursor, fully drained."""
+    monkeypatch.setattr(replay_mod, "BACKLOG_PAGE_SIZE", 3)
+    run_id, backlog_ids = await _seed(repository, 10)
+    cursor = backlog_ids[3]
+
+    seen: list[int] = []
+    async for frame in iter_backlog(repository, run_id, cursor):
+        seen.append(frame.event_id)
+
+    assert all(i > cursor for i in seen)
+    assert seen == backlog_ids[4:]  # exactly the tail, drained across pages
+
+
+@pytest.mark.asyncio
+async def test_replay_then_tail_pages_backlog_then_tails(
+    repository: Repository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FIX-3: replay_then_tail uses the paged backlog, then tails live with dedup."""
+    monkeypatch.setattr(replay_mod, "BACKLOG_PAGE_SIZE", 4)
+    loop = asyncio.get_running_loop()
+    run_id, backlog_ids = await _seed(repository, 11)  # 3 pages of backlog
+    hub = RunStreamHub(run_id, loop)
+    sub = Subscriber()
+    hub.add_subscriber(sub)  # subscribe-before-read
+
+    # Overlap (the backlog tail also arrives live) + one new live event.
+    overlap_id = backlog_ids[-1]
+    next_id = overlap_id + 1
+    hub.publish(StreamFrame(overlap_id, "stream", {"i": "overlap"}))
+    hub.publish(StreamFrame(next_id, "task_completed", {"i": "live"}))
+    hub.mark_closed()
+
+    seen: list[int] = []
+    async for frame in replay_then_tail(repository=repository, hub=hub, subscriber=sub, last_id=0):
+        seen.append(frame.event_id)
+
+    assert seen == [*backlog_ids, next_id]  # paged backlog + live, no gap
+    assert len(seen) == len(set(seen))  # the overlap id is not duplicated
 
 
 def test_event_to_body_roundtrips_through_frame() -> None:

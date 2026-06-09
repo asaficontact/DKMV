@@ -37,6 +37,45 @@ from app.db.repository import Repository
 from app.sse.observer_bridge import RunStreamHub, Subscriber
 from app.sse.pump import StreamFrame
 
+#: Max backlog rows materialized per :meth:`Repository.read_events_after` read on
+#: reconnect (PERF / FIX-3). A long, chatty run can accumulate tens of thousands of
+#: ``events`` rows; replaying that as ONE unbounded SELECT materializes the entire
+#: run-so-far into memory at reconnect. Instead :func:`iter_backlog` pages the
+#: backlog ``id`` window at a time — continuing from the last id read until drained
+#: — so a reconnect costs O(window) per page, not O(run-so-far). Each page is still
+#: id-ordered and strictly after the prior page's max id, so the subscribe-before-read
+#: + dedup-by-id contract (no gaps / no dups) is preserved across page boundaries.
+BACKLOG_PAGE_SIZE = 1000
+
+
+async def iter_backlog(
+    repository: Repository, run_id: str, last_id: int
+) -> AsyncIterator[StreamFrame]:
+    """Yield the durable backlog ``id > last_id`` in bounded, id-ordered pages.
+
+    Reads ``events`` through :meth:`Repository.read_events_after` with a
+    ``LIMIT BACKLOG_PAGE_SIZE``, advancing the cursor to the last id of each page
+    and continuing until a short (or empty) page signals the backlog is drained
+    (FIX-3). This keeps a reconnect's memory + read cost bounded to one page even
+    on a run with a huge event history, while preserving strict ``id`` order across
+    pages (each page is ``id > the prior page's max``). It never un-redacts — the
+    rows were scrubbed at persist time (INV-4).
+    """
+    cursor = last_id
+    while True:
+        page = await repository.read_events_after(run_id, cursor, limit=BACKLOG_PAGE_SIZE)
+        if not page:
+            return
+        for row in page:
+            frame = row_to_frame(row)
+            cursor = max(cursor, frame.event_id)
+            yield frame
+        if len(page) < BACKLOG_PAGE_SIZE:
+            # A short page means we reached the end of the backlog → done. (A full
+            # page might be exactly the last page; the next read returns empty and
+            # the early-return above ends the loop without an extra yield.)
+            return
+
 
 def parse_last_event_id(raw: str | None) -> int:
     """Parse a ``Last-Event-ID`` header / ``?Last-Event-ID`` into a cursor int.
@@ -115,10 +154,11 @@ async def replay_then_tail(
     """
     sent_max = last_id
 
-    # Step 2: durable backlog, id-ordered, strictly after the client's cursor.
-    backlog = await repository.read_events_after(hub.run_id, last_id)
-    for row in backlog:
-        frame = row_to_frame(row)
+    # Step 2: durable backlog, id-ordered, strictly after the client's cursor —
+    # read in BOUNDED PAGES (FIX-3) so a reconnect on a long run never materializes
+    # the whole history at once. iter_backlog advances its own cursor per page; the
+    # dedup-by-id below still applies across pages and the replay→live handoff.
+    async for frame in iter_backlog(repository, hub.run_id, last_id):
         if frame.event_id <= sent_max:
             continue
         sent_max = frame.event_id

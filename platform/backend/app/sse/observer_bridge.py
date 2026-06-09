@@ -261,6 +261,25 @@ class RunStreamHub:
         #: Set when the run has fully streamed; the pump signals it so subscriber
         #: generators can terminate the SSE stream after draining.
         self.closed = asyncio.Event()
+        #: The engine's own ``YYMMDD-HHMM`` run id, captured by the pump from the
+        #: FIRST event whose ``run_id`` differs from this hub's platform UUID. The
+        #: engine id is not known synchronously at ``start`` (§8.4) — it arrives on
+        #: the event stream — so the completion supervisor reads it here to
+        #: back-fill ``runs.engine_run_id`` (the platform still addresses the run by
+        #: the platform UUID). ``None`` until an engine id appears.
+        self.engine_run_id: str | None = None
+
+    def note_engine_run_id(self, candidate: str | None) -> None:
+        """Record the engine's run id the first time it appears on the stream.
+
+        Idempotent + monotonic-once: keeps the first non-empty engine id that is
+        NOT the platform UUID (the engine stamps ``event.run_id`` with its own id
+        once it surfaces). A no-op for the platform-UUID-stamped or empty frames.
+        """
+        if self.engine_run_id is not None:
+            return
+        if candidate and candidate != self._run_id:
+            self.engine_run_id = candidate
 
     @property
     def run_id(self) -> str:

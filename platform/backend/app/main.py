@@ -21,9 +21,12 @@ The container entrypoint reads ``Settings.DKMV_PLATFORM_BIND`` (default
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -38,8 +41,25 @@ from app.runtime import RunService
 from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
 from app.security import AccessControlMiddleware
 from app.sse import StreamRegistry
+from app.sse.run_stream import RUN_STREAM_TASKS_ATTR
 
 _log = logging.getLogger(__name__)
+
+
+async def _cancel_stream_tasks(tasks: set[asyncio.Task[Any]]) -> None:
+    """Cancel + await every live per-run pump/supervisor task on shutdown (FIX-1).
+
+    Snapshots the set (tasks remove themselves via a done-callback), cancels each,
+    and awaits them swallowing ``CancelledError`` so a draining process tears the
+    streams down cleanly instead of leaking a pump blocked on its hub queue.
+    """
+    pending = list(tasks)
+    for task in pending:
+        if not task.done():
+            task.cancel()
+    for task in pending:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
 
 
 def _build_secret_store(repository: Repository, settings: Settings) -> SecretStore:
@@ -104,9 +124,23 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if getattr(app.state, "stream_registry", None) is None:
         app.state.stream_registry = StreamRegistry()
 
+    # The set of live per-run pump/supervisor tasks (slice 2.3 / FIX-1). Each
+    # launched run spawns one EventPump + one completion supervisor here; the set
+    # is tracked so shutdown can cancel any still-running stream (a task removes
+    # itself from the set when it finishes — no unbounded growth).
+    if getattr(app.state, RUN_STREAM_TASKS_ATTR, None) is None:
+        setattr(app.state, RUN_STREAM_TASKS_ATTR, set())
+
     try:
         yield
     finally:
+        # Cancel any in-flight per-run pump/supervisor tasks (slice 2.3 / FIX-1) so
+        # a draining process doesn't leak a pump blocked on its hub. This is the
+        # graceful-shutdown path; orphan-container recovery on a HARD crash is
+        # Phase 3 (INV-10 — no re-attach, kill+interrupt+retry).
+        stream_tasks = getattr(app.state, RUN_STREAM_TASKS_ATTR, None)
+        if isinstance(stream_tasks, set):
+            await _cancel_stream_tasks(stream_tasks)
         write_queue = getattr(app.state, "github_write_queue", None)
         if isinstance(write_queue, WriteQueue):
             # Graceful, BOUNDED drain (INV-11): flush any in-flight / queued
