@@ -152,8 +152,25 @@ class WorkflowService:
 
         Raises :class:`WorkflowNotFoundError` (→ 404 ``workflow_not_found``) when
         the id resolves to no component on disk or in the registry.
+
+        **Security (allow-list before introspection):** the client-supplied
+        ``workflow_id`` is validated against the *enumerable* component set returned
+        by ``list_components()`` **before** any engine introspection or file read.
+        The locked engine's ``resolve_component`` treats any id containing ``/`` or
+        starting with ``.`` as a **filesystem path** and reads ``*.yaml`` from that
+        directory — so passing an arbitrary id straight to ``inspect_component`` /
+        ``preview_execution_plan`` / ``read_text`` is an arbitrary-file-read
+        (path-traversal / dotfile disclosure). Rejecting any id that is not a
+        genuine, listable component id closes that hole at the platform boundary
+        (the engine is locked; the fix is platform-side). This is the authoritative
+        guard — we do not rely on string-sanitizing the id.
         """
         runtime = self._run_service.runtime
+
+        valid_ids = {info.name for info in runtime.list_components(project_root=self._project_root)}
+        if workflow_id not in valid_ids:
+            raise WorkflowNotFoundError(workflow_id)
+
         try:
             info = runtime.inspect_component(workflow_id, project_root=self._project_root)
         except Exception as exc:  # noqa: BLE001 - any resolution failure is a 404

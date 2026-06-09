@@ -171,6 +171,95 @@ def test_service_unknown_id_raises() -> None:
         _service().get_workflow("nope-not-real")
 
 
+# ── SECURITY: path-traversal / arbitrary-file-read via workflow_id ────────────
+
+
+def test_detail_dotted_id_rejected_no_file_leak(tmp_path: Path) -> None:
+    """A single-segment dotted id (``.leakprobe``) is routable past Starlette but
+    must be rejected by the allow-list **before** any engine file read.
+
+    The locked engine's ``resolve_component`` treats an id starting with ``.`` as a
+    filesystem path and reads ``*.yaml`` from that directory. We plant a dotfile dir
+    with a YAML "secret" relative to the server cwd; the endpoint must return
+    ``404 workflow_not_found`` and the response body must NOT contain the secret.
+    """
+    import os
+
+    secret = "SUPER_SECRET_LEAKED_VALUE"
+    probe_dir = tmp_path / ".leakprobe"
+    probe_dir.mkdir()
+    (probe_dir / "component.yaml").write_text(f"name: leak\nsecret: {secret}\n")
+    (probe_dir / "01-task.yaml").write_text(f"name: t\nsecret: {secret}\n")
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        resp = _client().get("/api/v1/workflows/.leakprobe", headers=auth_headers())
+    finally:
+        os.chdir(cwd)
+
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "workflow_not_found"
+    assert secret not in resp.text
+
+
+def test_detail_symlink_style_id_rejected(tmp_path: Path) -> None:
+    """A dotted id pointing (via the engine's path resolver) outside the server cwd
+    must be rejected by the allow-list, leaking no out-of-cwd YAML content.
+    """
+    import os
+
+    secret = "OUTSIDE_CWD_SECRET"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "component.yaml").write_text(f"name: x\nsecret: {secret}\n")
+
+    server_cwd = tmp_path / "server"
+    server_cwd.mkdir()
+    link = server_cwd / ".link"
+    link.symlink_to(outside, target_is_directory=True)
+
+    cwd = os.getcwd()
+    os.chdir(server_cwd)
+    try:
+        resp = _client().get("/api/v1/workflows/.link", headers=auth_headers())
+    finally:
+        os.chdir(cwd)
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "workflow_not_found"
+    assert secret not in resp.text
+
+
+def test_legitimate_builtin_still_returns_200() -> None:
+    """The allow-list must not regress genuine ids: ``qa`` still returns the
+    summary + YAML.
+    """
+    resp = _client().get("/api/v1/workflows/qa", headers=auth_headers())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary"]["id"] == "qa"
+    assert body["component_yaml"] is not None
+
+
+def test_service_rejects_dotted_id_before_introspection(tmp_path: Path) -> None:
+    """At the service layer, a dotted id is rejected without reaching the engine's
+    path resolver — the allow-list is the authoritative guard.
+    """
+    import pytest
+
+    probe_dir = tmp_path / ".leakprobe"
+    probe_dir.mkdir()
+    (probe_dir / "component.yaml").write_text("name: leak\nsecret: NOPE\n")
+
+    service = _service()
+    with pytest.raises(WorkflowNotFoundError):
+        service.get_workflow(str(tmp_path / ".leakprobe"))
+    with pytest.raises(WorkflowNotFoundError):
+        service.get_workflow(".leakprobe")
+
+
 # ── AC-2 / ADR-P010: no write endpoint exists (read-only) ─────────────────────
 
 
