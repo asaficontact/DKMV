@@ -19,7 +19,7 @@ import pytest
 from app.config import Settings
 from app.db.repository import Repository
 from app.orchestrator import tick
-from app.orchestrator.gauges import TickGauges
+from app.orchestrator.loop_metrics import LoopMetrics
 from app.orchestrator.tick import Candidate, TickDeps, run_tick, tick_loop
 
 pytestmark = pytest.mark.asyncio
@@ -85,7 +85,7 @@ def _deps(
         dispatch=dispatch,
         repo=_REPO,
         cache=None,
-        gauges=TickGauges(),
+        gauges=LoopMetrics(),
     )
 
 

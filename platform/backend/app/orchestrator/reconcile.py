@@ -140,6 +140,25 @@ class ReconcileResult:
         """All stall/retry signals emitted this pass (stall + orphan)."""
         return (*self.stalled, *self.orphans)
 
+    @property
+    def action_count(self) -> int:
+        """Total reconcile actions taken this pass (the loop-observability gauge).
+
+        Sums the mutating actions — stalls killed, orphans reaped, authority-rule
+        label refreshes, human-terminal stops, pause timeouts auto-resolved, and
+        backoff re-dispatches fired — so the loop's ``reconcile_actions`` gauge
+        (5.1 / AC-5) surfaces a thrashing reconcile pass. A pure read-only derive
+        over the existing fields; it adds no state.
+        """
+        return (
+            len(self.stalled)
+            + len(self.orphans)
+            + self.label_writes
+            + self.stopped_for_terminal_move
+            + self.pauses_timed_out
+            + len(self.retries_fired)
+        )
+
 
 @dataclass(slots=True)
 class ReconcileDeps:

@@ -1149,6 +1149,43 @@ class Repository:
             )
             return [dict(r) for r in rows]
 
+    async def read_active_run_memory(
+        self, repo: str, statuses: Sequence[str]
+    ) -> list[dict[str, Any]]:
+        """Read this repo's memory-holding runs' ``memory_limit`` (admission — AC-3).
+
+        The aggregate-memory admission input (:mod:`app.orchestrator.admission`):
+        the ``(id, status, memory_limit)`` projection for runs in ``statuses`` so the
+        controller can sum ``Σ(running container memory)``. A ``paused`` run still
+        holds memory (its container is parked open — §8.5) so the caller includes it
+        in the status set even though it has *released* its concurrency slot. A pure
+        WAL read through the repository seam (NFR-PORT-1).
+        """
+        status_list = list(statuses)
+        if not status_list:
+            return []
+        placeholders = ", ".join("?" for _ in status_list)
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT id, status, memory_limit FROM runs "  # noqa: S608 — placeholders only
+                f"WHERE repo = ? AND status IN ({placeholders})",
+                (repo, *status_list),
+            )
+            return [dict(r) for r in rows]
+
+    async def spend_today(self, repo: str, *, since_iso: str) -> float:
+        """Codex-excluded segment-sum spend for this repo since ``since_iso`` (AC-3).
+
+        The daily-spend admission input (:mod:`app.orchestrator.admission`): the
+        **same** ``_spend_today`` segment-sum projection the board strip uses (per
+        ``(run_id, task_index)`` last-cumulative ``cost_usd``, INV-7 — never a naive
+        SUM), with **Codex excluded** (INV-8 / FR-06-1a: a Codex run contributes $0
+        and never trips the daily-spend cap). Routed through the one helper so the
+        admission cap and the board ``spent_today`` can never drift.
+        """
+        async with self._read_conn() as conn:
+            return await _spend_today(conn, repo, since_iso)
+
 
 #: The single ``issues`` upsert statement, shared by :meth:`Repository.upsert_issue`
 #: (one row) and :meth:`Repository.upsert_issues` (batched via ``executemany``), so

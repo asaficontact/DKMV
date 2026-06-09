@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.orchestrator.deadlines import Clock, utc_now
-from app.orchestrator.gauges import TickGauges
+from app.orchestrator.loop_metrics import LoopMetrics
 from app.orchestrator.reconcile import ReconcileDeps, ReconcileResult, RunKiller, reconcile_once
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -61,6 +61,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.github.hash_cache import HashCache
     from app.github.write_queue import WriteQueue
     from app.hitl.registry import DecisionRegistry
+    from app.orchestrator.dispatch import BoundedDispatcher
     from app.orchestrator.retry import RetryScheduler
     from app.runs.launch import LaunchResult
     from app.runtime import RunService
@@ -119,8 +120,13 @@ class TickDeps:
     dispatch: DispatchFn
     repo: str
     cache: HashCache[BoardPage] | None = None
-    gauges: TickGauges = field(default_factory=TickGauges)
+    gauges: LoopMetrics = field(default_factory=LoopMetrics)
     now: Clock = field(default=utc_now)
+    #: The Phase-5 bounded-dispatch gate (semaphore + per-state caps + aggregate
+    #: admission — AC-1/2/3). Production wires it via :func:`build_tick_deps`; a bare
+    #: unit test may leave it ``None``, in which case the tick falls back to the
+    #: Phase-3 single-serial-dispatch behaviour (so legacy tick tests still pass).
+    bounded_dispatcher: BoundedDispatcher | None = None
     #: The lifespan-composed HITL :class:`DecisionRegistry` (slice 2.5). Threaded
     #: into :class:`ReconcileDeps` so the production reconcile pass runs the
     #: pause-timeout auto-resolve sweep through the SAME exactly-once guard the
@@ -159,6 +165,11 @@ class Candidate:
     agent: str | None = None
     priority: int = 0
     labels: tuple[str, ...] = ()
+    #: The container memory the launch will request (admission input — AC-3). The
+    #: candidate carries it so :class:`~app.orchestrator.admission.AdmissionController`
+    #: sizes ``Σ memory + this run`` against ``HOST_MEMORY_BUDGET`` BEFORE the launch.
+    #: ``None`` → the platform default memory is assumed (never treated as free).
+    memory: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +227,8 @@ async def run_tick(deps: TickDeps) -> TickOutcome:
     preflight_ok = _preflight_ok(deps.run_service)
 
     dispatched: list[LaunchResult] = []
+    queue_depth = 0
+    dispatch_latency_s: float | None = None
     if preflight_ok:
         # 3. fetch candidates: ONE board read (refresh the cache), then read the
         #    queued candidates from the issues DB cache.
@@ -223,16 +236,42 @@ async def run_tick(deps: TickDeps) -> TickOutcome:
         candidates = await _read_candidates(deps)
         # 4. sort: priority ascending, then oldest (lowest issue number) first.
         candidates.sort(key=lambda c: (c.priority, c.num))
-        # 5. dispatch through the EXISTING launch boundary (ADR-P001). Phase 3
-        #    dispatches serially — one candidate per tick within the existing
-        #    single-PR/serialized-writer constraints (the cap is Phase 5).
-        for candidate in candidates:
-            result = await deps.dispatch(candidate)
-            if result is not None:
-                dispatched.append(result)
-                break  # serial dispatch (Phase 3); the cap loop is Phase 5
+        queue_depth = len(candidates)
+        # 5. dispatch through the EXISTING launch boundary (ADR-P001). Phase 5 layers
+        #    the cap (semaphore + per-state caps + aggregate admission) INTO this
+        #    path: the bounded dispatcher dispatches UP TO ``available`` admitted
+        #    candidates per tick, re-queuing the rest. Falls back to Phase-3 serial
+        #    dispatch only when no bounded dispatcher is wired (a bare unit test).
+        dispatch_started = time.monotonic()
+        if deps.bounded_dispatcher is not None:
+            result = await deps.bounded_dispatcher.dispatch_candidates(deps.repo, candidates)
+            dispatched.extend(result.dispatched)
+            deps.gauges.record_loop(
+                slots_in_use=deps.bounded_dispatcher.slots.held,
+                slots_capacity=deps.bounded_dispatcher.slots.capacity,
+                queue_depth=queue_depth,
+                reconcile_actions=reconcile_result.action_count,
+                dispatch_latency_s=time.monotonic() - dispatch_started,
+            )
+        else:
+            for candidate in candidates:
+                launched = await deps.dispatch(candidate)
+                if launched is not None:
+                    dispatched.append(launched)
+                    break  # serial dispatch fallback (no cap wired)
+        dispatch_latency_s = time.monotonic() - dispatch_started
 
     deps.gauges.record_tick(duration_s=time.monotonic() - started)
+    if deps.bounded_dispatcher is None:
+        # Keep the workload gauges fresh even on the serial-fallback path so the
+        # queue-depth / dispatch-latency gauges are populated for the heartbeat.
+        deps.gauges.record_loop(
+            slots_in_use=deps.gauges.slots_in_use,
+            slots_capacity=deps.gauges.slots_capacity,
+            queue_depth=queue_depth,
+            reconcile_actions=reconcile_result.action_count,
+            dispatch_latency_s=dispatch_latency_s,
+        )
     deps.gauges.heartbeat()
     return TickOutcome(
         reconcile=reconcile_result,
@@ -491,7 +530,14 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
     ``attach_stream`` is bound to the slice-2.3 run-stream wiring so a tick-launched
     run streams + persists events exactly like a ``POST /runs`` one.
     """
-    from app.api.deps import DECISION_REGISTRY_ATTR, project_root_from_state
+    from app.api.deps import (
+        CONCURRENCY_SLOTS_ATTR,
+        DECISION_REGISTRY_ATTR,
+        project_root_from_state,
+    )
+    from app.hitl.slots import ConcurrencySlots
+    from app.orchestrator.admission import AdmissionController
+    from app.orchestrator.dispatch import BoundedDispatcher, build_policy_from_settings
     from app.orchestrator.retry_deps import RETRY_SCHEDULER_ATTR, build_retry_scheduler
     from app.runs.service import DEFAULT_MEMORY
     from app.sse.run_stream import attach_run_stream
@@ -550,17 +596,37 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
             project_root=project_root,
         )
 
+    dispatch_fn = build_dispatch(_dispatch_context)
+
+    # Phase-5 bounded dispatch (AC-1/2/3): gate the SAME ``launch_run`` boundary with
+    # the shared concurrency semaphore (the one the pause bridge releases/reacquires —
+    # INV-9), per-state caps, and the aggregate memory/spend admission. Composed from
+    # the lifespan-owned ``concurrency_slots`` singleton so the cap, the pause
+    # release, and the admission all share ONE permit pool + ONE settings object.
+    slots: ConcurrencySlots = getattr(state, CONCURRENCY_SLOTS_ATTR, None) or ConcurrencySlots(
+        capacity=settings.MAX_CONCURRENT_RUNS
+    )
+    setattr(state, CONCURRENCY_SLOTS_ATTR, slots)
+    bounded_dispatcher = BoundedDispatcher(
+        dispatch=dispatch_fn,
+        slots=slots,
+        admission=AdmissionController(repository=repository, settings=settings),
+        repository=repository,
+        policy=build_policy_from_settings(settings),
+    )
+
     return TickDeps(
         repository=repository,
         github_client=github_client,
         write_queue=write_queue,
         run_service=run_service,
         settings=settings,
-        dispatch=build_dispatch(_dispatch_context),
+        dispatch=dispatch_fn,
         repo=repo,
         cache=cache,
         decisions=decisions,
         retry_scheduler=retry_scheduler,
+        bounded_dispatcher=bounded_dispatcher,
     )
 
 

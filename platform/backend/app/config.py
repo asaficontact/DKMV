@@ -124,6 +124,16 @@ class Settings(BaseSettings):
         default=None,
         description="Daily USD spend cap; None disables the cap.",
     )
+    PER_STATE_CAPS: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Optional per-tick dispatch throttle per ``agent:*`` state, e.g. "
+            "'agent:queued:2' caps the queued state to two launches per tick. "
+            "Empty (the default) means no per-state throttle — the global "
+            "concurrency cap + aggregate admission are the only bounds. Parsed "
+            "from a 'label:cap,label:cap' env string."
+        ),
+    )
 
     # --- Orchestrator timing (Phase 3 consumes these) ---
     TICK_INTERVAL_S: int = Field(
@@ -169,6 +179,35 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str) and value.strip() == "":
             return None
+        return value
+
+    @field_validator("PER_STATE_CAPS", mode="before")
+    @classmethod
+    def _parse_per_state_caps(cls, value: object) -> object:
+        """Parse the ``'label:cap,label:cap'`` env string into a ``{label: cap}`` dict.
+
+        The env surface is a flat string (one var per the PRD §8.8 table), so an
+        operator sets e.g. ``PER_STATE_CAPS=agent:queued:2``. The ``agent:`` prefix
+        itself contains a colon, so the **last** colon splits the cap off the label
+        (``agent:queued`` → ``2``). Empty / unset → an empty dict (no throttle). A
+        dict passed directly (a test) is returned as-is; a malformed pair is skipped
+        rather than crashing the container at startup.
+        """
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return {}
+            parsed: dict[str, int] = {}
+            for pair in text.split(","):
+                label, sep, cap = pair.strip().rpartition(":")
+                if not sep or not label.strip() or not cap.strip().isdigit():
+                    continue
+                parsed[label.strip()] = int(cap.strip())
+            return parsed
         return value
 
     @field_validator("DKMV_PLATFORM_BIND")
