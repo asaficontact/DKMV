@@ -9,7 +9,10 @@
  *  - **List** — every component from `GET /workflows`: **built-in**
  *    (`plan/dev/qa/docs/ship`) **and registered** custom ones (AC-5). Each row is a
  *    selectable card (emoji, name, purpose, compact stage chain). A registered
- *    on-disk custom component appears here (the backend wires `project_root`).
+ *    on-disk custom component appears here when the backend is configured with a
+ *    local `DKMV_PROJECT_ROOT` (published on `app.state.project_root`; the engine's
+ *    `list_components(project_root)` then surfaces the project registry). With no
+ *    local root configured the list shows the built-ins only.
  *  - **Detail** — selecting a component fetches `GET /workflows/{id}` and renders
  *    its {@link PipelineSummary} (stages / pauses / est. — AC-6) + {@link YamlView}
  *    (`component.yaml` + task text, read-only + the authoring-deferred note — AC-7).

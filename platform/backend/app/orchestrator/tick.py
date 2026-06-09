@@ -52,6 +52,8 @@ from app.orchestrator.gauges import TickGauges
 from app.orchestrator.reconcile import ReconcileDeps, ReconcileResult, RunKiller, reconcile_once
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pathlib import Path
+
     from app.config import Settings
     from app.db.repository import Repository
     from app.github.client import GitHubClient
@@ -379,7 +381,7 @@ def build_dispatch(
                 write_queue=ctx.write_queue,
                 cache=ctx.cache,
                 connected_repo=candidate.repo,
-                project_root=None,
+                project_root=ctx.project_root,
                 default_memory=ctx.default_memory,
                 current_labels=current_labels,
                 attach_stream=ctx.attach_stream,
@@ -417,6 +419,7 @@ class DispatchContext:
     default_memory: str = "8g"
     cache: HashCache[BoardPage] | None = None
     attach_stream: Any | None = None
+    project_root: Path | None = None
 
 
 #: A zero-arg factory returning a fresh :class:`DispatchContext` per dispatch.
@@ -527,6 +530,12 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
             tasks=stream_tasks,
         )
 
+    # The lifespan-published local project root (slice 4.2 / DKMV_PROJECT_ROOT) so a
+    # tick-dispatched candidate whose ``workflow_id`` is a registry NAME resolves
+    # exactly like a ``POST /runs`` one (FIX-3). ``None`` when no local root is
+    # configured (built-ins / absolute paths only).
+    project_root = getattr(state, "project_root", None)
+
     def _dispatch_context() -> DispatchContext:
         return DispatchContext(
             repository=repository,
@@ -537,6 +546,7 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
             default_memory=DEFAULT_MEMORY,
             cache=cache,
             attach_stream=_attach_stream,
+            project_root=project_root,
         )
 
     return TickDeps(

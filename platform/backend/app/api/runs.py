@@ -24,6 +24,7 @@ Nothing here reaches into ``dkmv/`` except through the in-process
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Request
@@ -159,6 +160,22 @@ def _connected_repo(request: Request, body_repo: str) -> str:
     return body_repo
 
 
+def _project_root(request: Request) -> Path | None:
+    """Resolve the local project root the launch path resolves NAME workflows against.
+
+    The same lifespan-published ``app.state.project_root`` the Workflows viewer reads
+    (slice 4.2 / ``DKMV_PROJECT_ROOT``). Threading it into ``launch_run`` lets a
+    registry-NAME ``workflow_id`` (a custom component registered on disk) validate +
+    dispatch — without it only built-ins / absolute paths resolve. ``None`` when no
+    local root is configured (built-ins / absolute paths only). A plain ``app.state``
+    read — no DB write, no engine call.
+    """
+    root = getattr(request.app.state, "project_root", None)
+    if root is None:
+        return None
+    return root if isinstance(root, Path) else Path(root)
+
+
 @router.post("/runs")
 async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
     """Launch a run for an issue → ``201 { run_id }`` (the platform UUID) (§8.4, §8.11).
@@ -254,7 +271,7 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
                 write_queue=write_queue,
                 cache=cache,
                 connected_repo=_connected_repo(request, body.repo),
-                project_root=None,
+                project_root=_project_root(request),
                 default_memory=DEFAULT_MEMORY,
                 current_labels=current_labels,
                 build_on_pause=_build_on_pause,

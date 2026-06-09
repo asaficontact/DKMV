@@ -50,7 +50,7 @@ def workflow_not_found(workflow_id: str) -> ApiError:
 
 
 def _connected_project_root(request: Request) -> Path | None:
-    """Resolve the connected project's on-disk root, or ``None`` (read-only).
+    """Resolve the local on-disk project root, or ``None`` (read-only).
 
     The engine's ``list_components(project_root=…)`` only surfaces **registered**
     on-disk custom components when it is handed the project root that owns the
@@ -58,12 +58,15 @@ def _connected_project_root(request: Request) -> Path | None:
     wiring only the five built-ins ever appear and a ``register``'d custom workflow
     (FR-07-1v / AC-8) is invisible in the viewer.
 
-    The connected project is the same single project the orchestrator tick polls
-    at lifespan startup (``app.state.orchestrator_repo`` — v1 connects one project,
-    §8.8). Its local root is published on ``app.state.project_root`` by the same
-    lifespan seam; we read it here (a plain ``app.state`` read — no DB write, no
-    engine call) and fall back to ``None`` when no project is connected yet (a
-    fresh install before ``POST /connect``), in which case only built-ins list.
+    The local project root is the operator-configured ``DKMV_PROJECT_ROOT`` (the
+    local working copy holding ``.dkmv/``), published once on
+    ``app.state.project_root`` by the lifespan (``_resolve_project_root`` — resolved
+    + existence-validated, degrading to ``None`` on a missing path). It is
+    **independent of** the connected GitHub repo (``orchestrator_repo``): a local
+    checkout can exist with no connected project, and a project can be connected with
+    no local root configured. We read the published value here (a plain ``app.state``
+    read — no DB write, no engine call) and fall back to ``None`` when
+    ``DKMV_PROJECT_ROOT`` is unset, in which case only the built-ins list (graceful).
 
     This is strictly a **read**: resolving the root performs no mutation, no
     registry write, and no file write — the viewer stays read-only (ADR-P010,

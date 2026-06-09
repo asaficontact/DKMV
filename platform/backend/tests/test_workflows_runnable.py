@@ -7,13 +7,18 @@ app + a migrated SQLite DB:
 1. **Author a component on disk** (a ``component.yaml`` + one task ``*.yaml``) and
    **register it** via the engine's ``ComponentRegistry.register`` — exactly the
    "custom component authored on disk" path FR-07-1v promises is supported.
-2. Publish the project root on ``app.state.project_root`` (the connected-project
-   seam the ``GET /workflows`` route reads — slice 4.2's project_root wiring) and
-   assert the custom component **appears** in ``GET /workflows`` alongside the five
-   built-ins.
-3. Assert ``POST /runs`` against that component **dispatches** through the normal
-   Phase-2 launch path: the engine ``start(...)`` is invoked **and** the INV-5
-   claim-lock ``runs`` row is created (a real run row, status ``pending``).
+2. Drive the project root through the **real production seam** — set
+   ``DKMV_PROJECT_ROOT`` on the settings so the app **lifespan** publishes it on
+   ``app.state.project_root`` (exactly as production does), NOT a bare ``app.state``
+   injection — and assert the custom component **appears** in ``GET /workflows``
+   alongside the five built-ins.
+3. Assert ``POST /runs`` against that component **by its registry NAME** (the id the
+   viewer surfaces — ``"custom"``, not an absolute path) **dispatches** through the
+   normal Phase-2 launch path: the engine ``start(...)`` is invoked with the NAME
+   workflow id **and** the INV-5 claim-lock ``runs`` row is created (status
+   ``pending``). This proves the end-to-end production path: a registry-name workflow
+   resolves only because ``project_root`` is threaded from the lifespan seam into the
+   launch path's ``validate_component`` / agent resolution (FIX-3).
 
 The injected runtime both (a) delegates introspection to the **real** engine
 functions (pure, read-only, Docker-free) so the viewer lists the registered
@@ -169,11 +174,22 @@ def _author_and_register(project_root: Path) -> Path:
     return comp_dir
 
 
-def _client(db_path: Path) -> tuple[TestClient, IntrospectStartRuntime]:
-    """A TestClient over a fresh migrated DB + the introspect/start runtime + fake GH."""
+def _client(
+    db_path: Path, project_root: Path | None = None
+) -> tuple[TestClient, IntrospectStartRuntime]:
+    """A TestClient over a fresh migrated DB + the introspect/start runtime + fake GH.
+
+    ``project_root`` is passed as ``DKMV_PROJECT_ROOT`` on the settings so the app
+    **lifespan** publishes it on ``app.state.project_root`` through the REAL seam
+    (``_resolve_project_root``) — proving the production wiring, not a bare
+    ``app.state`` injection.
+    """
     url = _migrate(db_path)
     runtime = IntrospectStartRuntime()
-    client = build_client(settings=make_settings(DATABASE_URL=url), runtime=runtime)
+    overrides: dict[str, Any] = {"DATABASE_URL": url}
+    if project_root is not None:
+        overrides["DKMV_PROJECT_ROOT"] = str(project_root)
+    client = build_client(settings=make_settings(**overrides), runtime=runtime)
     set_github_client(client.app, FakeClient())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck GitHub client
     return client, runtime
 
@@ -185,10 +201,10 @@ def test_registered_component_appears_in_workflows(tmp_path: Path) -> None:
     project_root = tmp_path / "proj"
     _author_and_register(project_root)
 
-    client, _runtime = _client(tmp_path / "t.db")
-    # Publish the connected-project root on the same app.state seam the workflows
-    # route reads (slice 4.2 project_root wiring) so the registry resolves.
-    client.app.state.project_root = project_root
+    # The project root is published by the LIFESPAN from DKMV_PROJECT_ROOT (the real
+    # production seam) — not a bare app.state injection — so the registry resolves.
+    client, _runtime = _client(tmp_path / "t.db", project_root=project_root)
+    assert client.app.state.project_root == project_root.resolve()
 
     resp = client.get("/api/v1/workflows", headers=auth_headers())
     assert resp.status_code == 200
@@ -201,8 +217,7 @@ def test_registered_component_detail_summary(tmp_path: Path) -> None:
     project_root = tmp_path / "proj"
     _author_and_register(project_root)
 
-    client, _runtime = _client(tmp_path / "t.db")
-    client.app.state.project_root = project_root
+    client, _runtime = _client(tmp_path / "t.db", project_root=project_root)
 
     resp = client.get("/api/v1/workflows/custom", headers=auth_headers())
     assert resp.status_code == 200
@@ -217,22 +232,29 @@ def test_registered_component_detail_summary(tmp_path: Path) -> None:
 
 
 def test_registered_component_is_runnable(tmp_path: Path) -> None:
-    """``POST /runs`` against the registered component dispatches (start + row)."""
+    """``POST /runs`` against the registered component BY REGISTRY NAME dispatches.
+
+    Drives the launch BY THE REGISTRY NAME (``"custom"`` — the id ``GET /workflows``
+    surfaces), not an absolute path. That id resolves ONLY because the lifespan
+    published ``DKMV_PROJECT_ROOT`` on ``app.state.project_root`` and the launch path
+    threads it into ``validate_component`` (FIX-3). This is the genuine end-to-end
+    production path a user follows: see a registered workflow in the viewer, run it.
+    """
     project_root = tmp_path / "proj"
-    comp_dir = _author_and_register(project_root)
+    _author_and_register(project_root)
 
-    client, runtime = _client(tmp_path / "t.db")
-    client.app.state.project_root = project_root
+    client, runtime = _client(tmp_path / "t.db", project_root=project_root)
 
-    # The custom component resolves through the engine's path-based resolver
-    # (the absolute component dir contains ``/``), so the normal launch path
-    # validates + dispatches it without needing project_root in launch.
+    # Confirm the viewer surfaces the NAME we then dispatch by (the real id contract).
+    listed = client.get("/api/v1/workflows", headers=auth_headers())
+    assert "custom" in {entry["id"] for entry in listed.json()}
+
     resp = client.post(
         "/api/v1/runs",
         json={
             "issue_num": 42,
             "repo": "o/r",
-            "workflow_id": str(comp_dir),
+            "workflow_id": "custom",
             "agent": "claude",
             "branch": "dkmv/issue-42-custom",
             "feature_name": "issue-42-custom",
@@ -243,9 +265,10 @@ def test_registered_component_is_runnable(tmp_path: Path) -> None:
     run_id = resp.json()["run_id"]
     assert run_id
 
-    # Engine ``start(...)`` was invoked exactly once for the registered component.
+    # Engine ``start(...)`` was invoked exactly once for the registered component,
+    # addressed BY ITS REGISTRY NAME (proving NAME resolution, not a path).
     assert len(runtime.start_calls) == 1
-    assert runtime.start_calls[0]["component"] == str(comp_dir)
+    assert runtime.start_calls[0]["component"] == "custom"
 
     # The INV-5 claim-lock ``runs`` row exists (a real, dispatched run).
     async def _row_count() -> int:
