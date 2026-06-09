@@ -2,15 +2,32 @@
 
 §8.6 calls for an audit log that records the **security-relevant** actions the
 control plane takes, distinct from the per-run agent ``events`` stream (which is a
-debug/observability feed). The four kinds recorded here (AC-12) are:
+debug/observability feed). The kinds recorded here (AC-12) are:
 
 * ``run_launch`` — a run was dispatched (who/what/which repo + agent);
-* ``token_mint`` / ``token_use`` — a repo-scoped GitHub run token was minted / used
-  (the *fact* and its scope + TTL, **never the token value**);
+* ``token_grant`` — the platform **provisioned** a run's GitHub credential into its
+  ``RuntimeConfig`` (the *fact* that run X was granted access to repo Y + the
+  scope/TTL of the operator PAT, **never the token value**). This is the one real,
+  platform-observable GitHub-credential security decision in v1 (see the deferral
+  note below);
+* ``token_mint`` / ``token_use`` — the deferred fine-grained GitHub-App model's
+  per-run mint / in-container push-use telemetry (scope + TTL / allowed-denied,
+  **never the token value**). These remain in the contract for the App model but
+  are **not** emitted by the v1 launch path, which audits the real ``token_grant``;
 * ``egress_denial`` — the network-layer egress allowlist blocked a host (the
   exfiltration-attempt signal — INV-3);
 * ``decision_resolution`` — a HITL pause was resolved (human or timeout), incl. the
   irreversible PR-push approval gate (NFR-SEC-5).
+
+**Honest v1 credential model (ADR-P004).** v1 threads the operator's fine-grained
+PAT into the engine's ``RuntimeConfig``; the engine clones/pushes **inside the
+gVisor container** with that PAT, so a true per-run *mint* and the in-container
+*use* are **not observable in platform Python**. Fine-grained per-run token
+*minting* (the GitHub-App installation-token model) and in-container push-*use*
+telemetry are **deferred post-v1** (like the egress-denial proxy hook). The one
+genuine, auditable GitHub-credential event the platform performs is **granting a
+run access to a repo** — provisioning the credential into the run's
+``RuntimeConfig`` — recorded here as ``token_grant``.
 
 **Redact-before-persist (INV-4).** The audit log is a persistence sink, so every
 record is scrubbed through the Phase-0 :class:`~app.secrets.Redactor` before it is
@@ -45,9 +62,14 @@ _log = logging.getLogger(__name__)
 
 
 class AuditEventKind(StrEnum):
-    """The four §8.6 audit-event kinds (AC-12). String-valued for JSONL fidelity."""
+    """The §8.6 audit-event kinds (AC-12). String-valued for JSONL fidelity."""
 
     RUN_LAUNCH = "run_launch"
+    #: The v1 GitHub-credential security decision: the platform provisioned a run's
+    #: credential into its RuntimeConfig (granted run X access to repo Y).
+    TOKEN_GRANT = "token_grant"
+    #: Deferred GitHub-App model (ADR-P004): per-run mint / in-container push-use
+    #: telemetry. Kept in the contract; NOT emitted by the v1 launch path.
     TOKEN_MINT = "token_mint"
     TOKEN_USE = "token_use"
     EGRESS_DENIAL = "egress_denial"
@@ -221,6 +243,39 @@ class AuditLog:
             details=details,
         )
 
+    def record_token_grant(
+        self,
+        *,
+        run_id: str,
+        repo: str,
+        scope: str = "repo",
+        expires_at: datetime | str | None = None,
+        actor: str = "platform",
+    ) -> None:
+        """Record that the platform granted a run access to ``repo`` (the v1 real event).
+
+        This is the genuine, platform-observable GitHub-credential security decision:
+        the platform provisioned the run's credential into its ``RuntimeConfig``, i.e.
+        granted run ``run_id`` access to ``repo``. The record carries only the *fact*
+        plus the credential's ``scope`` (the operator PAT's repo scope) and optional
+        ``expires_at`` TTL metadata — **never the token value** (INV-4; the redactor is
+        a backstop over the whole record). The deferred GitHub-App per-run *mint* and
+        in-container *use* telemetry (``token_mint`` / ``token_use``) are NOT emitted by
+        v1 — this honest grant record stands in their place (see the module docstring +
+        ADR-P004).
+        """
+        details: dict[str, Any] = {"repo": repo, "scope": scope}
+        if expires_at is not None:
+            details["expires_at"] = (
+                expires_at.isoformat() if isinstance(expires_at, datetime) else expires_at
+            )
+        self._record(
+            AuditEventKind.TOKEN_GRANT,
+            run_id=run_id,
+            actor=actor,
+            details=details,
+        )
+
     def record_token_mint(
         self,
         *,
@@ -229,7 +284,13 @@ class AuditLog:
         expires_at: datetime | str | None = None,
         actor: str = "platform",
     ) -> None:
-        """Record that a repo-scoped run token was minted (scope + TTL, never value)."""
+        """Record a deferred GitHub-App per-run token mint (scope + TTL, never value).
+
+        Part of the deferred fine-grained-App credential model (ADR-P004); **not**
+        emitted by the v1 launch path, which records the real ``token_grant`` instead.
+        Retained so the App-model call sites (post-v1) and the Phase-0 minter machinery
+        keep a stable seam.
+        """
         details: dict[str, Any] = {"repo": repo}
         if expires_at is not None:
             details["expires_at"] = (
@@ -250,7 +311,13 @@ class AuditLog:
         allowed: bool,
         actor: str = "platform",
     ) -> None:
-        """Record a repo-scoped token use attempt (allowed/denied — never the value)."""
+        """Record a deferred GitHub-App in-container push-use attempt (allowed/denied).
+
+        Part of the deferred credential model (ADR-P004); **not** emitted by the v1
+        launch path (the in-container push USE is not observable in platform Python).
+        Retained for the Phase-0 :class:`~app.secrets.github_token.MintedToken`
+        ``authorize_push`` guard + the post-v1 App model. Never records the value.
+        """
         self._record(
             AuditEventKind.TOKEN_USE,
             run_id=run_id,

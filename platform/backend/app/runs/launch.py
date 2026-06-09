@@ -494,6 +494,11 @@ async def launch_run(
         pause_bridge = build_on_pause(run_id)
     else:
         pause_bridge = _passthrough_on_pause
+    # ``run_id`` is the claimed platform UUID — thread it into ``start`` so the §8.6
+    # ``token_grant`` audit line (the real "platform granted run X access to repo Y"
+    # decision, recorded as the credential is provisioned into RuntimeConfig) is
+    # correlated to this run (AC-12 / INV-4; never the raw PAT). ADR-P004: fine-grained
+    # per-run mint + in-container push-use telemetry are the deferred GitHub-App model.
     handle = await run_service.start(
         component=workflow_id,
         repo=repo,
@@ -509,6 +514,7 @@ async def launch_run(
         start_task=req.start_task,
         on_pause=pause_bridge,
         keep_alive=req.keep_alive,
+        run_id=run_id,
     )
 
     # ── wire the run into the live stream (F8 — the SSE backbone, §8.3) ─────────
