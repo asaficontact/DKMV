@@ -204,6 +204,9 @@ body {
 .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
 .btn-soft { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 .btn-soft:hover { background: var(--surface-3); border-color: var(--border-2); }
+/* Danger button (run Stop) — the failed/red state token (run.jsx .btn-danger). */
+.btn-danger { background: color-mix(in oklab, var(--st-failed) 14%, var(--surface-2)); color: var(--st-failed); border-color: color-mix(in oklab, var(--st-failed) 40%, transparent); }
+.btn-danger:hover { background: color-mix(in oklab, var(--st-failed) 22%, var(--surface-2)); border-color: color-mix(in oklab, var(--st-failed) 60%, transparent); }
 .btn-lg { padding: 13px 20px; font-size: 15px; border-radius: var(--r-md); }
 .btn-sm { padding: 6px 10px; font-size: 12.5px; border-radius: var(--r-sm); }
 .btn-icon { padding: 8px; border-radius: var(--r-sm); }
