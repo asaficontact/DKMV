@@ -36,6 +36,7 @@ import json
 from typing import Any
 
 from app.db.repository import COST_EXCLUDED_AGENT, Repository
+from app.runs.meters import compute_run_meters
 
 #: The verbatim FR-04-5 run-config snapshot keys the right-rail renders (slice
 #: 2.4). Pinned here so the ``GET /runs/{id}`` ``config`` block carries exactly
@@ -202,13 +203,12 @@ async def build_run_detail(
         issue_row = await repository.read_issue(str(row["repo"]), int(issue_num))
         issue_title = (issue_row or {}).get("title") if issue_row else None
 
-    # Codex contributes $0 / "—": cost_usd is null (FR-06-1a). Otherwise the
-    # segment-sum projection (per (run_id, task_index) last-cumulative — INV-7).
-    cost_usd: float | None
-    if _is_codex(agent):
-        cost_usd = None
-    else:
-        cost_usd = await repository.run_spend(run_id)
+    # The live segment-sum meters (INV-7 / §8.3): cost is Σ(completed-task finals)
+    # + latest-within-active, deduped by task_index (Codex → null/"—", FR-06-1a);
+    # turns/tokens aggregate identically (Codex tokens DO count). This is the SAME
+    # dedup-by-task_index computation as the persisted spend projection, so the
+    # meter and the dashboard spend never diverge.
+    meters = await compute_run_meters(repository, row)
 
     return {
         "id": run_id,
@@ -220,10 +220,11 @@ async def build_run_detail(
         "model": row.get("model"),
         "status": row.get("status"),
         "branch": row.get("branch"),
-        "cost_usd": cost_usd,
-        "tokens_in": int(row.get("tokens_in") or 0),
-        "tokens_out": int(row.get("tokens_out") or 0),
-        "turns": int(row.get("turns") or 0),
+        "cost_usd": meters.cost_usd,
+        "cost_excluded": meters.cost_excluded,
+        "tokens_in": meters.tokens_in,
+        "tokens_out": meters.tokens_out,
+        "turns": meters.turns,
         "duration_s": row.get("duration_s"),
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
