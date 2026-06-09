@@ -32,6 +32,7 @@ from typing import Any
 
 import pytest
 from app.db.repository import Repository
+from app.github.client import GitHubClient
 from app.orchestrator.recovery import RecoveryDeps, recover_orphans
 from app.orchestrator.retry import RetryScheduler
 
@@ -237,6 +238,55 @@ async def test_idempotent_retry_branch_detection_no_duplicate_pr(repo: Repositor
     assert dispatched is False
     assert redispatched == []
     assert client.find_calls == [(_REPO, "issue-1")]  # the branch detector was consulted
+
+
+async def test_typed_find_open_pr_blocks_duplicate_without_db_pr_num(repo: Repository) -> None:
+    """FIX-3 (INV-5/R-15): the **typed** ``find_open_pr_for_branch`` (→ ``int | None``)
+    blocks the duplicate dispatch when it returns a PR number — WITHOUT any
+    ``runs.pr_num`` set. This pins the promoted GitHubClient seam (no getattr): a
+    real :class:`GitHubClient` subclass returning the PR *number* is enough.
+    """
+    await _seed_run(repo, run_id="r-pr", issue_num=1, status="interrupted", branch="issue-1")
+    redispatched: list[str] = []
+
+    async def _redispatch(row: dict[str, Any], start_task: str | None) -> str | None:
+        redispatched.append(str(row["id"]))  # a fresh dispatch = a NEW PR (must NOT happen)
+        return "new-run"
+
+    class _TypedOpenPrClient(GitHubClient):
+        """A GitHubClient whose typed branch detector reports an open PR (number 77)."""
+
+        def __init__(self) -> None:
+            self.find_calls: list[tuple[str, str]] = []
+
+        async def list_repos(self) -> list[Any]:  # pragma: no cover - unused in this test
+            return []
+
+        async def check_write_permission(self, repo: str) -> Any:  # pragma: no cover - unused
+            raise NotImplementedError
+
+        async def graphql(
+            self, query: str, variables: dict[str, Any]
+        ) -> dict[str, Any]:  # pragma: no cover - unused
+            return {}
+
+        async def replace_labels(
+            self, repo: str, num: int, labels: Any
+        ) -> list[str]:  # pragma: no cover - unused
+            return []
+
+        async def find_open_pr_for_branch(self, repo: str, branch: str) -> int | None:
+            self.find_calls.append((repo, branch))
+            return 77  # an open PR exists for this head branch
+
+    client = _TypedOpenPrClient()
+    scheduler = RetryScheduler(repository=repo, redispatch=_redispatch, github_client=client)
+
+    dispatched = await scheduler.redispatch_run("r-pr")
+
+    assert dispatched is False  # detected via the typed seam → skip, no duplicate PR
+    assert redispatched == []  # the PR-opening redispatch was NEVER issued
+    assert client.find_calls == [(_REPO, "issue-1")]  # the typed detector was consulted
 
 
 # ── optional real-Docker variant (self-skips without Docker) ───────────────────
