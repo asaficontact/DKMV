@@ -304,12 +304,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     secret_store = _build_secret_store(repository, settings)
     app.state.secret_store = secret_store
 
-    # Bind the run-token minter + audit sink onto the (app-creation-time) RunService
-    # now that the encrypted SecretStore and the audit log exist (slice 5.3 / AC-12).
-    # This is what makes the ``token_mint`` + ``token_use`` §8.6 audit kinds actually
-    # recorded IN PRODUCTION: the launch path's ``RunService.start`` mints a repo-
-    # scoped, ≤1 hr token (INV-4) and authorizes the push, passing this audit sink —
-    # previously those two kinds were exercised only by tests (dormant hooks).
+    # Bind the SecretStore + audit sink onto the (app-creation-time) RunService now
+    # that both exist (slice 5.3 / AC-12). This makes ``RunService.start`` record the
+    # real ``token_grant`` §8.6 audit kind IN PRODUCTION: when the platform provisions
+    # a run's GitHub credential into its RuntimeConfig it logs the genuine "granted run
+    # X access to repo Y" decision (run_id + repo + scope, NO raw token — INV-4).
+    # NOTE: v1 uses a fine-grained operator PAT (ADR-P004); true per-run token *minting*
+    # (GitHub-App installation tokens) and the in-container push *use* telemetry are
+    # deferred post-v1 — the ``token_mint``/``token_use`` kinds + the GitHubTokenMinter
+    # /authorize_push machinery are retained as that deferred seam, not faked here.
     app.state.run_service.bind_run_token_minting(
         secret_store=secret_store,
         audit=getattr(app.state, "audit", None),
