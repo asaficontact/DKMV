@@ -63,6 +63,7 @@ def build_retry_scheduler(app: Starlette) -> RetryScheduler:
         reused the row — INV-5 — or it was rejected; the tick treats either as "no
         new dispatch").
         """
+        from app.api.deps import project_root_from_state
         from app.runs.launch import LaunchRequest, duplicate_dispatch, launch_run
         from app.runs.service import DEFAULT_MEMORY
         from app.sse.run_stream import attach_run_stream
@@ -70,6 +71,14 @@ def build_retry_scheduler(app: Starlette) -> RetryScheduler:
         write_queue: WriteQueue = state.github_write_queue
         run_service: RunService = state.run_service
         cache: HashCache[BoardPage] | None = getattr(state, "github_hash_cache", None)
+        # The lifespan-published local project root (slice 4.2 / DKMV_PROJECT_ROOT),
+        # read through the canonical deps.py seam exactly like the tick + POST /runs
+        # (FIX-2). Threading it in lets a RETRIED run whose ``workflow_id`` is a
+        # registry NAME (a registered on-disk custom component) resolve the same way
+        # its first dispatch did — a retry is equivalent to first dispatch (AC-8 /
+        # FIX-1). ``None`` when no local root is configured (built-ins / absolute
+        # paths only) — the prior hardcoded ``None`` silently broke the NAME path.
+        project_root = project_root_from_state(state)
         registry = state.stream_registry
         stream_tasks = getattr(state, "run_stream_tasks", None)
         if stream_tasks is None:
@@ -111,7 +120,7 @@ def build_retry_scheduler(app: Starlette) -> RetryScheduler:
                 write_queue=write_queue,
                 cache=cache,
                 connected_repo=repo,
-                project_root=None,
+                project_root=project_root,
                 default_memory=DEFAULT_MEMORY,
                 current_labels=[],
                 attach_stream=_attach_stream,

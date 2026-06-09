@@ -491,7 +491,7 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
     ``attach_stream`` is bound to the slice-2.3 run-stream wiring so a tick-launched
     run streams + persists events exactly like a ``POST /runs`` one.
     """
-    from app.api.deps import DECISION_REGISTRY_ATTR
+    from app.api.deps import DECISION_REGISTRY_ATTR, project_root_from_state
     from app.orchestrator.retry_deps import RETRY_SCHEDULER_ATTR, build_retry_scheduler
     from app.runs.service import DEFAULT_MEMORY
     from app.sse.run_stream import attach_run_stream
@@ -533,8 +533,9 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
     # The lifespan-published local project root (slice 4.2 / DKMV_PROJECT_ROOT) so a
     # tick-dispatched candidate whose ``workflow_id`` is a registry NAME resolves
     # exactly like a ``POST /runs`` one (FIX-3). ``None`` when no local root is
-    # configured (built-ins / absolute paths only).
-    project_root = getattr(state, "project_root", None)
+    # configured (built-ins / absolute paths only). Read through the canonical
+    # deps.py seam (consistent Path coercion — FIX-2) rather than a bare getattr.
+    project_root = project_root_from_state(state)
 
     def _dispatch_context() -> DispatchContext:
         return DispatchContext(

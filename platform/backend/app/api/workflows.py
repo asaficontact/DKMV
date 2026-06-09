@@ -17,11 +17,11 @@ token + Host/Origin + CSRF; INV-1) — neither opts out, so neither is unauthent
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request
 
+from app.api.deps import get_project_root
 from app.api.errors import ApiError
 from app.workflows import WorkflowDetail, WorkflowService, WorkflowSummary
 from app.workflows.service import WorkflowNotFoundError
@@ -49,35 +49,6 @@ def workflow_not_found(workflow_id: str) -> ApiError:
     )
 
 
-def _connected_project_root(request: Request) -> Path | None:
-    """Resolve the local on-disk project root, or ``None`` (read-only).
-
-    The engine's ``list_components(project_root=…)`` only surfaces **registered**
-    on-disk custom components when it is handed the project root that owns the
-    ``.dkmv/components.json`` registry; built-ins resolve without one. Without this
-    wiring only the five built-ins ever appear and a ``register``'d custom workflow
-    (FR-07-1v / AC-8) is invisible in the viewer.
-
-    The local project root is the operator-configured ``DKMV_PROJECT_ROOT`` (the
-    local working copy holding ``.dkmv/``), published once on
-    ``app.state.project_root`` by the lifespan (``_resolve_project_root`` — resolved
-    + existence-validated, degrading to ``None`` on a missing path). It is
-    **independent of** the connected GitHub repo (``orchestrator_repo``): a local
-    checkout can exist with no connected project, and a project can be connected with
-    no local root configured. We read the published value here (a plain ``app.state``
-    read — no DB write, no engine call) and fall back to ``None`` when
-    ``DKMV_PROJECT_ROOT`` is unset, in which case only the built-ins list (graceful).
-
-    This is strictly a **read**: resolving the root performs no mutation, no
-    registry write, and no file write — the viewer stays read-only (ADR-P010,
-    AC-2). Only a ``Path`` (or ``None``) is returned to the introspection adapter.
-    """
-    root = getattr(request.app.state, "project_root", None)
-    if root is None:
-        return None
-    return root if isinstance(root, Path) else Path(root)
-
-
 def _service(request: Request) -> WorkflowService:
     """Build the read-only :class:`WorkflowService` over the app's ``RunService``.
 
@@ -88,7 +59,7 @@ def _service(request: Request) -> WorkflowService:
     custom components resolve — built-ins do not need one (AC-5 / AC-8).
     """
     run_service: RunService = request.app.state.run_service
-    return WorkflowService(run_service, project_root=_connected_project_root(request))
+    return WorkflowService(run_service, project_root=get_project_root(request))
 
 
 @router.get("/workflows", response_model=list[WorkflowSummary])

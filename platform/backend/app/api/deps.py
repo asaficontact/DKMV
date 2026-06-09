@@ -33,7 +33,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Request
 
@@ -61,6 +62,54 @@ BOARD_CACHE_ATTR = "github_hash_cache"
 DECISION_REGISTRY_ATTR = "decision_registry"
 CONCURRENCY_SLOTS_ATTR = "concurrency_slots"
 STREAM_REGISTRY_ATTR = "stream_registry"
+#: ``app.state`` attribute name for the lifespan-published LOCAL project root (slice
+#: 4.2). Published once by ``app.main._resolve_project_root`` (the PUBLISHER — resolves
+#: + existence-validates ``DKMV_PROJECT_ROOT``, degrading to ``None`` on a missing
+#: path). Read **read-only** by the Workflows viewer (so a registered custom component
+#: surfaces in ``GET /workflows``), the launch path (so a registry-NAME ``workflow_id``
+#: resolves in ``POST /runs``), the tick (so a tick-dispatched candidate resolves
+#: identically), and the retry redispatch (so a RETRIED registry-NAME run is equivalent
+#: to its first dispatch — FIX-1). One canonical READER seam — never a private per-module
+#: string-literal ``getattr`` helper with divergent Path coercion (FIX-2 consolidation).
+PROJECT_ROOT_ATTR = "project_root"
+
+
+def _coerce_project_root(root: Any) -> Path | None:
+    """Normalize a raw ``app.state.project_root`` value to ``Path | None``.
+
+    One place owns the coercion so every reader (routes + the non-request
+    orchestrator/retry sites) agrees: ``None`` stays ``None``; an already-resolved
+    :class:`Path` (the publisher's normal output) is returned as-is; a non-``Path``
+    (e.g. a test injecting a ``str``) is coerced to ``Path``. No file I/O — the
+    publisher already did the existence check; this is a pure read-side normalize.
+    """
+    if root is None:
+        return None
+    return root if isinstance(root, Path) else Path(root)
+
+
+def project_root_from_state(state: Any) -> Path | None:
+    """Read the lifespan-published LOCAL project root off a bare ``app.state``.
+
+    The non-request reader seam for the orchestrator tick and the retry redispatch
+    (which hold ``app.state`` directly, not a :class:`Request`). Mirrors how those
+    sites resolve every other singleton off ``state``, with the **same** Path
+    coercion the route resolver uses (so the tick no longer skips normalization).
+    Returns ``None`` when ``DKMV_PROJECT_ROOT`` is unset (built-ins / absolute paths
+    only). A plain ``app.state`` read — no DB write, no engine call.
+    """
+    return _coerce_project_root(getattr(state, PROJECT_ROOT_ATTR, None))
+
+
+def get_project_root(request: Request) -> Path | None:
+    """Return the lifespan-published LOCAL project root for a serving request.
+
+    The route reader seam (``GET /workflows`` viewer, ``POST /runs`` launch). Delegates
+    to :func:`project_root_from_state` so request and non-request callers share ONE
+    coercion. Strictly a **read** — no mutation, no registry write, no file write — so
+    the Workflows viewer stays read-only (ADR-P010, AC-2).
+    """
+    return project_root_from_state(request.app.state)
 
 
 def resolve_secret_key(settings: Settings) -> str:
