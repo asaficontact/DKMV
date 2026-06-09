@@ -22,6 +22,7 @@ from app.db.connection import (
 )
 from app.db.repository import (
     COST_EXCLUDED_AGENT,
+    BoardAggregate,
     EventRecord,
     IssueRow,
     Repository,
@@ -38,6 +39,7 @@ __all__ = [
     "ALL_TABLE_NAMES",
     "BUSY_TIMEOUT_MS",
     "CASCADE_CHILD_TABLES",
+    "BoardAggregate",
     "COST_EXCLUDED_AGENT",
     "EventRecord",
     "IssueRow",

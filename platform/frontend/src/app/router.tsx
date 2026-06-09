@@ -1,16 +1,17 @@
 /**
  * App router (FR-NAV-3) — finalizes the Phase-0 scaffold router.
  *
- * Phase 1 ships Screen 01 (Connect) at `/connect`. The board (Screen 02) is
- * slice 1.5; until it lands the `/board` route renders a minimal placeholder so
- * the connect → board handoff is exercised end-to-end without depending on 1.5.
- * The theme is applied at module load (dark/indigo default, persisted) so the
- * first paint is correctly skinned (INV-14).
+ * Phase 1 ships Screen 01 (Connect) at `/connect` and Screen 02 (Board, slice
+ * 1.5) at `/board`. The Connect → Board handoff carries the chosen repo slug in
+ * the `?repo=` query; `/board` reads it and renders the real Board (with the
+ * global chrome). The theme is applied at module load (dark/indigo default,
+ * persisted) so the first paint is correctly skinned (INV-14).
  */
 
 import { useCallback } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 
+import Board from "../screens/Board";
 import Connect from "../screens/Connect";
 import { initTheme } from "./theme";
 
@@ -29,16 +30,15 @@ function ConnectRoute() {
 }
 
 /**
- * Placeholder board (Screen 02 is slice 1.5). Renders only enough to confirm the
- * connect handoff resolved; 1.5 replaces this route with the real Board.
+ * Board route (Screen 02). Reads the connected repo slug from `?repo=`; if it is
+ * missing (a direct `/board` visit before connecting), send the operator back to
+ * Connect to pick a project first.
  */
-function BoardPlaceholder() {
-  return (
-    <main className="board-placeholder">
-      <h1>Board</h1>
-      <p className="cap">The board (Screen 02) lands in slice 1.5.</p>
-    </main>
-  );
+function BoardRoute() {
+  const [params] = useSearchParams();
+  const repo = params.get("repo");
+  if (!repo) return <Navigate to="/connect" replace />;
+  return <Board repoSlug={repo} />;
 }
 
 export default function AppRouter() {
@@ -46,7 +46,7 @@ export default function AppRouter() {
     <Routes>
       <Route path="/" element={<Navigate to="/connect" replace />} />
       <Route path="/connect" element={<ConnectRoute />} />
-      <Route path="/board" element={<BoardPlaceholder />} />
+      <Route path="/board" element={<BoardRoute />} />
       <Route path="*" element={<Navigate to="/connect" replace />} />
     </Routes>
   );

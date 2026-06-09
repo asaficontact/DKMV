@@ -99,6 +99,24 @@ class RunTotals:
     duration_s: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class BoardAggregate:
+    """The board aggregate strip + sidebar chip counters (FR-02-4, FR-NAV-1).
+
+    Renders *"{in_progress} in progress · {needs_you} needs you · ${spent_today}
+    spent today · {tokens_today} tokens."* (FR-02-4). The Codex caveat (FR-06-1a,
+    INV-8) is encoded in the split: ``spent_today`` is the segment-sum spend with
+    **Codex runs excluded** (Codex reports $0 from the engine), while
+    ``tokens_today`` counts **every** run's tokens including Codex — its tokens are
+    real even though its cost is unpriced.
+    """
+
+    in_progress: int
+    needs_you: int
+    spent_today: float
+    tokens_today: int
+
+
 @dataclass(slots=True)
 class IssueRow:
     """One ``issues`` cache row for the batch upsert (PK ``(repo, num)``).
@@ -474,6 +492,43 @@ class Repository:
             )
             return float(rows[0]["total"] or 0.0)
 
+    async def board_aggregate(self, repo: str, *, since_iso: str) -> BoardAggregate:
+        """The board aggregate-strip + chip counters for a repo (FR-02-4, AC-17).
+
+        Computes, in pure WAL reads (NFR-PORT-1):
+
+        * ``in_progress`` — active runs in this repo whose board state is
+          *In Progress* (``running``/``pending``/``stopping``); a ``paused`` run
+          is **Needs You**, not In Progress (the §5.3.1 authority-rule split).
+        * ``needs_you`` — active runs that are ``paused`` (the amber count the
+          sidebar chip surfaces, FR-NAV-1).
+        * ``spent_today`` — the **segment-sum** spend (per ``(run_id, task_index)``
+          last-cumulative ``cost_usd``, never a naive SUM — INV-7) over runs
+          ``started_at >= since_iso``, with **Codex runs excluded** (FR-06-1a /
+          INV-8: Codex reports $0 from the engine).
+        * ``tokens_today`` — the token total over the same window counting **every**
+          run including Codex (its tokens are real even though its cost is
+          unpriced — FR-06-1a).
+
+        ``since_iso`` is the UTC start-of-day boundary the caller supplies (see
+        :func:`app.api.board.start_of_utc_day`); the today-window is re-evaluated
+        each poll, never cached, so the strip refreshes on the poll cadence
+        (FR-NAV-2), not via SSE (AC-20).
+        """
+        async with self._read_conn() as conn:
+            in_progress = await _count_runs_by_status(
+                conn, repo, ("running", "pending", "stopping")
+            )
+            needs_you = await _count_runs_by_status(conn, repo, ("paused",))
+            spent_today = await _spend_today(conn, repo, since_iso)
+            tokens_today = await _tokens_today(conn, repo, since_iso)
+        return BoardAggregate(
+            in_progress=in_progress,
+            needs_you=needs_you,
+            spent_today=spent_today,
+            tokens_today=tokens_today,
+        )
+
     # === run_totals snapshot + backup (§6.5) =================================
 
     async def snapshot_run_totals(self, run_id: str, totals: RunTotals) -> None:
@@ -835,6 +890,73 @@ def _issue_upsert_params(
 def _is_cost_excluded(agent: Any) -> bool:
     """True if a run's agent is cost-excluded from spend (Codex; FR-06-1a)."""
     return isinstance(agent, str) and agent.strip().lower() == COST_EXCLUDED_AGENT
+
+
+async def _count_runs_by_status(
+    conn: aiosqlite.Connection, repo: str, statuses: Sequence[str]
+) -> int:
+    """Count this repo's runs whose ``status`` is one of ``statuses``."""
+    status_list = list(statuses)
+    if not status_list:
+        return 0
+    placeholders = ", ".join("?" for _ in status_list)
+    rows = await conn.execute_fetchall(
+        "SELECT COUNT(*) AS n FROM runs "  # noqa: S608 — placeholders only
+        f"WHERE repo = ? AND status IN ({placeholders})",
+        (repo, *status_list),
+    )
+    return int(next(iter(rows))["n"]) if rows else 0
+
+
+async def _spend_today(conn: aiosqlite.Connection, repo: str, since_iso: str) -> float:
+    """Segment-sum spend for this repo's runs started since ``since_iso``.
+
+    Per ``(run_id, task_index)`` last-cumulative ``cost_usd`` (INV-7 — never a
+    naive SUM over events), summed over runs ``started_at >= since_iso`` with
+    **Codex excluded** (FR-06-1a / INV-8). The Codex exclusion is by the run's
+    ``agent`` column, matching :meth:`Repository.total_spend`.
+    """
+    rows = await conn.execute_fetchall(
+        """
+        WITH last_per_task AS (
+            SELECT e.run_id AS run_id, e.cost_usd AS cost_usd
+            FROM events e
+            JOIN (
+                SELECT run_id, task_index, MAX(id) AS max_id
+                FROM events
+                WHERE cost_usd IS NOT NULL
+                GROUP BY run_id, task_index
+            ) m ON e.run_id = m.run_id AND e.id = m.max_id
+        )
+        SELECT COALESCE(SUM(lpt.cost_usd), 0.0) AS total
+        FROM last_per_task lpt
+        JOIN runs r ON r.id = lpt.run_id
+        WHERE r.repo = ?
+          AND r.started_at IS NOT NULL
+          AND r.started_at >= ?
+          AND COALESCE(LOWER(r.agent), '') != ?
+        """,
+        (repo, since_iso, COST_EXCLUDED_AGENT),
+    )
+    return float(next(iter(rows))["total"] or 0.0) if rows else 0.0
+
+
+async def _tokens_today(conn: aiosqlite.Connection, repo: str, since_iso: str) -> int:
+    """Token total for this repo's runs started since ``since_iso`` (all agents).
+
+    Counts ``tokens_in + tokens_out`` across **every** run in the window —
+    Codex included (FR-06-1a: Codex tokens are real even though its cost is
+    unpriced and excluded from :func:`_spend_today`).
+    """
+    rows = await conn.execute_fetchall(
+        """
+        SELECT COALESCE(SUM(tokens_in + tokens_out), 0) AS total
+        FROM runs
+        WHERE repo = ? AND started_at IS NOT NULL AND started_at >= ?
+        """,
+        (repo, since_iso),
+    )
+    return int(next(iter(rows))["total"] or 0) if rows else 0
 
 
 async def _project_run_spend(conn: aiosqlite.Connection, run_id: str) -> float:
