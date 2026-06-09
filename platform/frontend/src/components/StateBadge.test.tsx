@@ -42,4 +42,22 @@ describe("StateBadge", () => {
     render(<StateBadge status="paused" label="Needs you" />);
     expect(screen.getByText("Needs you")).toBeInTheDocument();
   });
+
+  // AC-6 (INV-14, binding): the history status palette mapping.
+  it("maps timed_out → failed palette with a 'Timed out' label + icon", () => {
+    const { container } = render(<StateBadge status="timed_out" />);
+    expect(container.querySelector(".state.s-failed")).toBeInTheDocument();
+    expect(screen.getByText("Timed out")).toBeInTheDocument();
+    // icon + label, never color alone
+    expect(screen.getByTestId("state-icon")).toBeInTheDocument();
+    expect(container.querySelector("svg")).toBeInTheDocument();
+  });
+
+  it("maps interrupted (platform-only) → cancel palette with an 'Interrupted' label + icon", () => {
+    const { container } = render(<StateBadge status="interrupted" />);
+    expect(container.querySelector(".state.s-cancel")).toBeInTheDocument();
+    expect(screen.getByText("Interrupted")).toBeInTheDocument();
+    expect(screen.getByTestId("state-icon")).toBeInTheDocument();
+    expect(container.querySelector("svg")).toBeInTheDocument();
+  });
 });

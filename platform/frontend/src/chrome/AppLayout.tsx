@@ -16,7 +16,7 @@
 import type { ReactNode } from "react";
 
 import type { BoardAggregate } from "../api/board";
-import Sidebar from "./Sidebar";
+import Sidebar, { type NavId } from "./Sidebar";
 import TopBar from "./TopBar";
 
 import "../screens/board.css";
@@ -26,6 +26,9 @@ export interface AppLayoutProps {
   repoSlug: string;
   /** The page title / breadcrumb for the top bar. */
   title: string;
+  /** Which sidebar nav item is the current screen (highlighted + `aria-current`).
+   *  Defaults to `board` (the recorded 2.4 nit: the nav is now route-aware). */
+  activeNav?: NavId;
   /** Poll-driven aggregate for the sidebar live chip (null while loading / N/A). */
   aggregate?: BoardAggregate | null;
   /** Seconds since the last successful poll, or null (the live run has no poll). */
@@ -47,6 +50,7 @@ export interface AppLayoutProps {
 export default function AppLayout({
   repoSlug,
   title,
+  activeNav = "board",
   aggregate = null,
   lastSyncedSeconds = null,
   onRefresh,
@@ -55,7 +59,7 @@ export default function AppLayout({
 }: AppLayoutProps) {
   return (
     <div className="app-shell">
-      <Sidebar repoSlug={repoSlug} aggregate={aggregate} />
+      <Sidebar repoSlug={repoSlug} aggregate={aggregate} activeNav={activeNav} />
       <div className="app-main">
         <TopBar
           title={title}
