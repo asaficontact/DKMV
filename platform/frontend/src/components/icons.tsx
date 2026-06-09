@@ -189,3 +189,19 @@ export const SparkleIcon = (p: IcoProps) => (
     <path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8z" />
   </svg>
 );
+export const TokenIcon = (p: IcoProps) => (
+  <svg {...base(p)} aria-hidden>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M8 12h8M12 8v8" />
+  </svg>
+);
+export const ChartIcon = (p: IcoProps) => (
+  <svg {...base(p)} aria-hidden>
+    <path d="M4 19V5M4 19h16M8 19v-6M12 19v-9M16 19v-4M20 19V8" />
+  </svg>
+);
+export const RetryIcon = (p: IcoProps) => (
+  <svg {...base(p)} aria-hidden>
+    <path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4" />
+  </svg>
+);

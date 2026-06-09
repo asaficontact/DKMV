@@ -20,8 +20,10 @@ import {
 
 import Board from "../screens/Board";
 import Connect from "../screens/Connect";
+import History from "../screens/History";
 import IssueDetail from "../screens/IssueDetail";
 import LiveRun from "../screens/LiveRun";
+import RunDetail from "../screens/RunDetail";
 import { initTheme } from "./theme";
 
 // Apply the persisted (or default dark/indigo) theme before the first render.
@@ -99,6 +101,46 @@ function LiveRunRoute() {
   );
 }
 
+/**
+ * Runs history route (Screen E, slice 3.2). The connected repo slug rides `?repo=`
+ * (scopes the history + the chrome). A row click opens the **read-only**
+ * finished-run view at `/runs/:id/detail` (distinct from the live `/runs/:id`).
+ */
+function HistoryRoute() {
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const repo = params.get("repo") ?? "";
+  const repoQuery = repo ? `?repo=${encodeURIComponent(repo)}` : "";
+  return (
+    <History
+      repoSlug={repo}
+      onOpenRun={(runId) => navigate(`/runs/${encodeURIComponent(runId)}/detail${repoQuery}`)}
+    />
+  );
+}
+
+/**
+ * Read-only finished-run route (slice 3.2). The platform UUID rides the path
+ * (`/runs/:id/detail`); the repo slug rides `?repo=` (chrome + PR link), falling
+ * back to the run's own `repo`. Distinct from the live `/runs/:id` view (2.4): this
+ * one is static (no SSE) and exposes only the failed-run "Retry now".
+ */
+function RunDetailRoute() {
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const { id } = useParams();
+  const repo = params.get("repo") ?? "";
+  const repoQuery = repo ? `?repo=${encodeURIComponent(repo)}` : "";
+  if (!id) return <Navigate to="/runs" replace />;
+  return (
+    <RunDetail
+      runId={id}
+      repoSlug={repo}
+      onBack={() => navigate(`/runs${repoQuery}`)}
+    />
+  );
+}
+
 export default function AppRouter() {
   return (
     <Routes>
@@ -106,7 +148,9 @@ export default function AppRouter() {
       <Route path="/connect" element={<ConnectRoute />} />
       <Route path="/board" element={<BoardRoute />} />
       <Route path="/issues/:owner/:name/:num" element={<IssueDetailRoute />} />
+      <Route path="/runs" element={<HistoryRoute />} />
       <Route path="/runs/:id" element={<LiveRunRoute />} />
+      <Route path="/runs/:id/detail" element={<RunDetailRoute />} />
       <Route path="*" element={<Navigate to="/connect" replace />} />
     </Routes>
   );

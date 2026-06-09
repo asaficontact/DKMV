@@ -6,34 +6,64 @@
  * dot + count when paused** (a run needs the operator), reusing the shared
  * `StateBadge` palette (AC-19).
  *
- * **Phase boundary.** "+ New run" routes to the Phase-2 launch screen → it is a
- * **disabled placeholder** here (no dispatch — OUT of scope). Runs / Workflows /
- * Settings nav targets are Phase 2/3 screens; in Phase 1 only **Board** is live,
- * the rest are disabled nav items. The chip is **poll-driven** (AC-20) — it reads
- * the aggregate the parent polls; no server-sent-events stream is opened here.
+ * **Route-aware nav (3.2 — the recorded 2.4 nit).** The current screen is passed
+ * as `activeNav`; the matching nav item highlights (`is-active` + `aria-current`).
+ * **Board** and (now, Phase 3) **Runs** are live nav targets — clicking navigates
+ * via the router (carrying the connected `?repo=` so the chrome stays scoped).
+ * **Workflows / Settings** remain disabled placeholders (Phase 4 / later screens).
+ * The chip is **poll-driven** (AC-20) — it reads the aggregate the parent polls.
  */
+import { useInRouterContext, useNavigate } from "react-router-dom";
+
 import { Avatar } from "../components/chips";
 import { BoardIcon, FlowIcon, PlusIcon, RunsIcon, SettingsIcon } from "../components/icons";
 import StateBadge from "../components/StateBadge";
 import type { BoardAggregate } from "../api/board";
+
+/** The four primary nav targets (the `activeNav` discriminant). */
+export type NavId = "board" | "runs" | "workflows" | "settings";
 
 export interface SidebarProps {
   /** The connected project slug ("org/name"); shown in the switcher. */
   repoSlug: string;
   /** Poll-driven aggregate for the live-status chip (null while loading). */
   aggregate: BoardAggregate | null;
+  /** The current screen's nav id (highlighted). Defaults to `board`. */
+  activeNav?: NavId;
 }
 
-const NAV_ITEMS = [
-  { id: "board", label: "Board", Icon: BoardIcon, active: true },
-  { id: "runs", label: "Runs", Icon: RunsIcon, active: false },
-  { id: "workflows", label: "Workflows", Icon: FlowIcon, active: false },
-  { id: "settings", label: "Settings", Icon: SettingsIcon, active: false },
-] as const;
+interface NavItem {
+  id: NavId;
+  label: string;
+  Icon: (p: { size?: number }) => JSX.Element;
+  /** A live (clickable) nav target; disabled placeholders set this false. */
+  enabled: boolean;
+}
 
-export default function Sidebar({ repoSlug, aggregate }: SidebarProps) {
+const NAV_ITEMS: NavItem[] = [
+  { id: "board", label: "Board", Icon: BoardIcon, enabled: true },
+  { id: "runs", label: "Runs", Icon: RunsIcon, enabled: true },
+  { id: "workflows", label: "Workflows", Icon: FlowIcon, enabled: false },
+  { id: "settings", label: "Settings", Icon: SettingsIcon, enabled: false },
+];
+
+export default function Sidebar({ repoSlug, aggregate, activeNav = "board" }: SidebarProps) {
+  // `useNavigate` throws outside a `<Router>`; the production app always mounts the
+  // chrome under `<BrowserRouter>`, but rendering a screen standalone (some unit
+  // tests) has no router — `useInRouterContext` lets us degrade the nav to inert
+  // buttons rather than crash. Hooks stay unconditional (rules-of-hooks safe).
+  const inRouter = useInRouterContext();
+  const navigate = inRouter ? useNavigate() : null;
   const [org, name] = repoSlug.includes("/") ? repoSlug.split("/") : ["", repoSlug];
   const initials = (name || repoSlug).slice(0, 2).toUpperCase();
+
+  // Carry the connected repo so the destination screen stays scoped to the project.
+  const repoQuery = repoSlug ? `?repo=${encodeURIComponent(repoSlug)}` : "";
+  const go = (id: NavId) => {
+    if (!navigate) return;
+    if (id === "board") navigate(`/board${repoQuery}`);
+    else if (id === "runs") navigate(`/runs${repoQuery}`);
+  };
 
   return (
     <nav className="sidebar" aria-label="Primary">
@@ -56,20 +86,24 @@ export default function Sidebar({ repoSlug, aggregate }: SidebarProps) {
       </button>
 
       <ul className="sidebar-nav">
-        {NAV_ITEMS.map(({ id, label, Icon, active }) => (
-          <li key={id}>
-            <button
-              type="button"
-              className={`nav-item${active ? " is-active" : ""}`}
-              aria-current={active ? "page" : undefined}
-              disabled={!active}
-              title={active ? label : `${label} (Phase 2)`}
-            >
-              <Icon size={17} />
-              <span>{label}</span>
-            </button>
-          </li>
-        ))}
+        {NAV_ITEMS.map(({ id, label, Icon, enabled }) => {
+          const active = id === activeNav;
+          return (
+            <li key={id}>
+              <button
+                type="button"
+                className={`nav-item${active ? " is-active" : ""}`}
+                aria-current={active ? "page" : undefined}
+                disabled={!enabled}
+                onClick={enabled ? () => go(id) : undefined}
+                title={enabled ? label : `${label} (coming soon)`}
+              >
+                <Icon size={17} />
+                <span>{label}</span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
 
       <div className="sidebar-foot">

@@ -1,0 +1,119 @@
+/* ============================================================
+   DKMV — Read-only finished-run view (slice 3.2)
+   Static render of a finished run (no live SSE). Layout only — every color is a
+   CSS variable from tokens.css (the only hex-permitted file); no hex here (INV-14).
+   ============================================================ */
+
+.run-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 18px;
+  height: 100%;
+  overflow: hidden;
+  padding: 18px 22px;
+}
+.run-detail-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* ---------- header ---------- */
+.run-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.run-detail-head-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.run-detail-head-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.run-detail-id {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.run-detail-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.run-detail-issue-num {
+  color: var(--text-3);
+}
+.run-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.run-detail-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.run-detail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.run-detail-retry {
+  color: var(--st-paused);
+  border-color: color-mix(in oklab, var(--st-paused) 40%, transparent);
+}
+
+/* ---------- error note (failed run) ---------- */
+.run-detail-error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  background: color-mix(in oklab, var(--st-failed) 8%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--st-failed) 30%, var(--border));
+  border-radius: var(--r-md);
+}
+.run-detail-error-label {
+  font-weight: 700;
+  color: var(--st-failed);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.run-detail-error-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* ---------- loading / error ---------- */
+.run-detail-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-3);
+}
+.run-detail-loading-bar {
+  width: 180px;
+}
+.run-detail-state-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
