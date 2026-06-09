@@ -11,10 +11,11 @@ The binding fix (INV-12, ADR-P003): capture the loop at startup and hand off wit
 ``loop.call_soon_threadsafe(queue.put_nowait, event)``. ``call_soon_threadsafe``
 is the *only* thread-safe scheduling primitive here; it enqueues the
 ``put_nowait`` call onto the loop thread, so the queue is only ever touched there.
-This module therefore **never** calls bare ``queue.put_nowait``, ``loop.create_task``
-or per-event ``run_coroutine_threadsafe`` from the observer (each would either be
-thread-unsafe or spawn an unbounded coroutine per event — the AC-8 grep over this
-file for ``create_task``/``run_coroutine_threadsafe`` is asserted **empty**).
+This module therefore **never** calls bare ``put_nowait`` off-thread, **never**
+schedules a coroutine from the observer, and **never** uses a coroutine-scheduling
+primitive in the hand-off (each would either be thread-unsafe or spawn an unbounded
+coroutine per event). The INV-12 grep over this file for the forbidden
+coroutine-scheduling calls is asserted **empty** by AC-8.
 
 The pieces:
 
@@ -171,11 +172,16 @@ class Subscriber:
     def publish(self, frame: StreamFrame) -> None:
         """Enqueue a frame for this connection, applying the slow-consumer policy.
 
-        Fast path: the queue has room → enqueue. Slow path (full): if ``frame``
-        is droppable meter/stream and we can evict an older droppable frame, do
-        so and enqueue (coalesce). Otherwise the connection cannot keep up with
-        the spine → mark it disconnected (the endpoint will close it; it
-        reconnects + replays). Runs on the loop thread (called from the pump).
+        Fast path: the queue has room → enqueue. Slow path (full): evict the
+        oldest *coalescible* (meter/stream) frame to make room and enqueue —
+        regardless of whether ``frame`` itself is meter or spine, since the point
+        is to keep the spine flowing by shedding stale meter frames (keep-latest,
+        INV-7). Only if there is **no** coalescible frame to evict (the queue is
+        full of spine) do we give up: a spine frame can't be dropped, so the
+        consumer is persistently slow → mark it disconnected (the endpoint closes
+        it; it reconnects + replays the durable backlog — §8.3). A meter frame
+        that can't be placed on a spine-full queue is likewise dropped by
+        disconnecting. Runs on the loop thread (called from the pump).
         """
         if self._disconnected:
             return
@@ -185,17 +191,18 @@ class Subscriber:
         except asyncio.QueueFull:
             pass
 
-        # Queue is full. Only coalescible frames may be dropped to make room.
-        if is_coalescible(frame.event_type) and self._evict_one_coalescible():
+        # Queue is full. Evict the oldest coalescible frame (if any) to make room
+        # for this frame — shedding a stale meter frame keeps the spine flowing.
+        if self._evict_one_coalescible():
             try:
                 self._queue.put_nowait(frame)
                 return
             except asyncio.QueueFull:  # pragma: no cover - re-filled by another task
                 pass
 
-        # Either the incoming frame is spine (must not drop it) or we could not
-        # free room without dropping spine. The consumer is persistently slow:
-        # cut it loose so it reconnects and replays the durable backlog (§8.3).
+        # No coalescible frame to drop → the queue is full of spine. We cannot
+        # drop spine, so the consumer is persistently slow: cut it loose (it
+        # reconnects and replays the durable backlog — §8.3).
         self._disconnected = True
 
     def _evict_one_coalescible(self) -> bool:
