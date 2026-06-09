@@ -1,0 +1,491 @@
+/* ============================================================
+   DKMV — Screen 03: Issue detail & launch (issue.jsx)
+   Ported from the locked prototype into token-driven classes. No hex literals
+   anywhere here (INV-14) — every color resolves to a token from tokens.css.
+   ============================================================ */
+
+/* Two-pane layout: issue (fluid) + run panel (fixed 408px), §5.4 FR-03-1. */
+.issue-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 408px;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ---------- Left: the issue ---------- */
+.issue-col {
+  overflow-y: auto;
+  padding: 26px 30px 60px;
+}
+.issue-col-inner {
+  max-width: 720px;
+}
+
+.issue-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.issue-num {
+  font-size: 14px;
+  color: var(--text-3);
+  font-weight: 600;
+}
+.issue-branch-cap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.issue-branch-cap .mono {
+  font-size: 11.5px;
+}
+.issue-gh-link {
+  margin-left: auto;
+  text-decoration: none;
+}
+
+.issue-h1 {
+  margin: 0 0 14px;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.issue-author-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.issue-author-text {
+  font-size: 13.5px;
+}
+.issue-author-muted {
+  color: var(--text-3);
+}
+.issue-labels {
+  display: flex;
+  gap: 5px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+/* Existing-run alert (paused/running variants) */
+.existing-run-alert {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 14px;
+  margin-bottom: 20px;
+}
+.existing-run-alert.is-running {
+  border-color: color-mix(in oklab, var(--st-running) 30%, transparent);
+  background: color-mix(in oklab, var(--st-running) 6%, transparent);
+}
+.existing-run-alert.is-paused {
+  border-color: color-mix(in oklab, var(--st-paused) 40%, transparent);
+  background: color-mix(in oklab, var(--st-paused) 8%, transparent);
+}
+.existing-run-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.existing-run-alert.is-running .existing-run-icon {
+  background: color-mix(in oklab, var(--st-running) 16%, transparent);
+  color: var(--st-running);
+}
+.existing-run-alert.is-paused .existing-run-icon {
+  background: color-mix(in oklab, var(--st-paused) 16%, transparent);
+  color: var(--st-paused);
+}
+.existing-run-body {
+  flex: 1;
+  min-width: 0;
+}
+.existing-run-title {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.existing-run-id {
+  margin-top: 2px;
+  font-size: 11px;
+}
+.existing-run-cta {
+  flex: none;
+}
+
+/* Markdown body card */
+.issue-body-card {
+  padding: 8px 20px 18px;
+}
+
+/* Comments thread */
+.issue-comments {
+  margin-top: 22px;
+}
+.issue-comments-head {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 12px;
+}
+.issue-comment {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.issue-comment-card {
+  flex: 1;
+  padding: 11px 14px;
+}
+.issue-comment-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 5px;
+}
+.issue-comment-author {
+  font-size: 13px;
+  font-weight: 700;
+}
+.issue-comment-body {
+  font-size: 13.5px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+/* ---------- Markdown renderer ---------- */
+.markdown .md-h {
+  margin: 18px 0 8px;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.markdown .md-p {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.65;
+}
+.markdown .md-list {
+  margin: 6px 0;
+  padding-left: 22px;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.markdown .md-gap {
+  height: 6px;
+}
+.md-code {
+  font-size: 12.5px;
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+}
+.md-strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* ---------- Right: run panel ---------- */
+.run-panel {
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.run-panel-head {
+  padding: 22px 22px 18px;
+}
+.run-panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 4px;
+  color: var(--accent);
+}
+.run-panel-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.run-panel-sub {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.run-panel-divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+.run-panel-body {
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  flex: 1;
+}
+
+.run-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.run-field-label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Workflow picker */
+.wf-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wf-empty {
+  margin: 0;
+}
+.wf-card {
+  text-align: left;
+  padding: 11px 13px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: all 0.14s var(--ease);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-family: var(--font-ui);
+  color: var(--text);
+}
+.wf-card.is-active {
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+}
+.wf-card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 6px;
+}
+.wf-emoji {
+  font-size: 16px;
+}
+.wf-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+.wf-purpose {
+  margin-left: 2px;
+}
+.wf-pauses {
+  margin-left: auto;
+  background: color-mix(in oklab, var(--st-paused) 13%, transparent);
+  color: var(--st-paused);
+  font-size: 10px;
+}
+.wf-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.wf-stage-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-3);
+}
+.wf-stage-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.wf-card.is-active .wf-stage-name {
+  color: var(--accent);
+}
+.wf-est {
+  margin-top: 7px;
+}
+
+/* Agent segmented control */
+.agent-seg {
+  display: flex;
+  gap: 8px;
+}
+.agent-seg-btn {
+  flex: 1;
+  padding: 11px 8px;
+  border-radius: 11px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.14s var(--ease);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-family: var(--font-ui);
+  color: var(--text);
+}
+.agent-seg-btn.is-active {
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+}
+.agent-seg-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 13.5px;
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+.agent-seg-model {
+  display: block;
+  font-size: 9.5px;
+  color: var(--text-3);
+}
+
+/* Branch input */
+.branch-input {
+  position: relative;
+  color: var(--text-3);
+}
+.branch-input svg {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.branch-field {
+  padding-left: 33px;
+  font-size: 12px;
+}
+
+/* Advanced guardrails */
+.advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: 0;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  padding: 0;
+}
+.advanced-chev {
+  transition: transform 0.15s var(--ease);
+}
+.advanced-chev.is-open {
+  transform: rotate(90deg);
+}
+.advanced-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+.advanced-wide {
+  grid-column: 1 / -1;
+}
+.advanced-codex-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--st-paused) 9%, transparent);
+  color: var(--st-paused);
+}
+.mini-field {
+  display: block;
+}
+.mini-field-label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+/* Sticky footer */
+.run-panel-foot {
+  position: sticky;
+  bottom: 0;
+  padding: 16px 22px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.run-panel-error {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--st-failed);
+}
+.run-est {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  color: var(--st-done);
+}
+.run-est-text {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.run-est-text strong {
+  color: var(--text);
+}
+.run-est-pauses {
+  color: var(--st-paused);
+  font-weight: 600;
+}
+.run-panel-actions {
+  display: flex;
+  gap: 10px;
+}
+.run-queue-btn {
+  flex: none;
+}
+.run-go-btn {
+  flex: 1;
+  justify-content: center;
+  font-size: 14.5px;
+}
+.run-resolved-model {
+  margin: 8px 0 0;
+  text-align: center;
+}
+
+/* Loading / error states */
+.issue-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  text-align: center;
+}
+.issue-state-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+.issue-loading-bar {
+  width: 240px;
+}

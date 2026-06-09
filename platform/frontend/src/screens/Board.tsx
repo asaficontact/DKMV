@@ -17,6 +17,7 @@
  * are run-driven and reject drops.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import "./board.css";
 import {
@@ -45,6 +46,7 @@ export interface BoardProps {
 }
 
 export default function Board({ repoSlug }: BoardProps) {
+  const navigate = useNavigate();
   const [issues, setIssues] = useState<BoardIssue[]>([]);
   const [aggregate, setAggregate] = useState<BoardAggregate | null>(null);
   const [phase, setPhase] = useState<LoadPhase>("syncing");
@@ -123,6 +125,18 @@ export default function Board({ repoSlug }: BoardProps) {
     [repoSlug],
   );
 
+  // Open the issue-detail / launch screen (Screen 03 — slice 2.2). The actual
+  // dispatch happens there via the run panel, never from the board.
+  const openIssue = useCallback(
+    (issue: BoardIssue) => {
+      const [owner, name] = repoSlug.split("/");
+      navigate(
+        `/issues/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${issue.num}`,
+      );
+    },
+    [navigate, repoSlug],
+  );
+
   const isEmpty = phase === "ready" && issues.length === 0;
 
   return (
@@ -185,6 +199,7 @@ export default function Board({ repoSlug }: BoardProps) {
                         key={issue.num}
                         issue={issue}
                         githubUrl={`https://github.com/${repoSlug}/issues/${issue.num}`}
+                        onOpenIssue={openIssue}
                         onDragStart={(i) => {
                           dragged.current = i;
                         }}

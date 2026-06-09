@@ -1,0 +1,201 @@
+/**
+ * Run-launch API surface (Screen 03, FR-03 / §8.4, §8.9). Thin typed wrappers
+ * over the generic {@link apiGet}/{@link apiPost} client for the issue-detail +
+ * "Run this issue" panel:
+ *
+ *   - `GET  /issues/{owner}/{name}/{num}` — the issue detail (markdown body,
+ *     labels, author, comments, active-run block) (slice 2.1).
+ *   - `GET  /workflows`                   — the workflow picker source (slice 4.1).
+ *   - `POST /runs`                        — claim-lock launch → `{ run_id }` (slice 2.1).
+ *   - `GET  /runs/{id}`                   — the §8.9 run-detail baseline.
+ *
+ * **No hardcoded model labels (FR-03-2 / §6.1 drift).** The model strings come
+ * from the engine adapter defaults surfaced *through the API* — the workflow
+ * summary carries `agent`/`model` for each component (Codex default `gpt-5.4`,
+ * not the prototype's `gpt-5.1-codex`). We never inline a model constant here.
+ *
+ * **INV-2.** Nothing here ever places a token in a URL/query — the SSE stream
+ * (Phase 2 live view) rides the HttpOnly cookie; these are plain authed JSON
+ * requests via {@link apiGet}/{@link apiPost}.
+ */
+import { apiGet, apiPost } from "./client";
+
+/** A GitHub label on the issue detail (color is the GitHub hex, only for `--lc`). */
+export interface IssueLabel {
+  name: string;
+  /** GitHub's 6-hex label color (no leading `#`), or null. Used as a CSS var. */
+  color: string | null;
+}
+
+/** The issue author block (`{login, avatar}` or null). */
+export interface IssueAuthor {
+  login: string;
+  avatar: string | null;
+}
+
+/** One comment in the thread (§5.4). */
+export interface IssueComment {
+  id: string | null;
+  body: string;
+  created_at: string | null;
+  author: IssueAuthor | null;
+}
+
+/**
+ * The issue's **active run** block (or null) the existing-run alert renders. The
+ * run status drives the paused (amber/Review decision) vs running (blue/Watch
+ * live) variant; `run_id` links to the live run (§5.4 / FR-03-1, FR-03-4).
+ */
+export interface ActiveRun {
+  /** Platform UUID of the active run (addresses the live-run view). */
+  run_id?: string | null;
+  /** Engine `RunStatus` (`running`/`paused`/…); drives the alert variant. */
+  status: string | null;
+  pr_num: number | null;
+}
+
+/** The `GET /issues/{owner}/{name}/{num}` detail body (§5.4 / §8.9). */
+export interface IssueDetailResponse {
+  num: number;
+  title: string;
+  body: string;
+  /** GitHub issue state (`open`/`closed`) — lowercased by the backend. */
+  state: string;
+  url: string | null;
+  created_at: string | null;
+  author: IssueAuthor | null;
+  labels: IssueLabel[];
+  comments: IssueComment[];
+  active_run: ActiveRun | null;
+}
+
+/** One stage in a workflow's pipeline (`GET /workflows`, slice 4.1). */
+export interface WorkflowStage {
+  index: number;
+  name: string;
+  description: string;
+  /** This stage pauses after for a HITL decision (the "pauses" badge source). */
+  pause_after: boolean;
+  budget_usd: number | null;
+  for_each_item: string | null;
+}
+
+/**
+ * One workflow summary from `GET /workflows` (slice 4.1, §6.2). The picker is
+ * populated **from this list**, never a hardcoded constant (AC-6). `agent`/`model`
+ * are the engine adapter defaults for the workflow (the §6.1 drift source).
+ */
+export interface WorkflowSummary {
+  id: string;
+  name: string;
+  description: string;
+  is_builtin: boolean;
+  /** The workflow's default agent (`claude`/`codex`); `auto` resolves to this. */
+  agent: string | null;
+  /** The workflow's default model (engine adapter default — §6.1 drift note). */
+  model: string | null;
+  stages: WorkflowStage[];
+  stage_count: number;
+  pause_count: number;
+  pause_points: string[];
+  /** The authoritative est. total budget (component `max_budget_usd` or Σstages). */
+  est_total_usd: number | null;
+}
+
+/** The `POST /runs` request body (§8.4). `agent` may be `auto`; the backend
+ * resolves `auto → workflow.agent` and rejects Codex budget/turns (INV-8). */
+export interface CreateRunRequest {
+  issue_num: number;
+  repo: string;
+  workflow_id: string;
+  /** `claude | codex | auto`. The UI sends the already-resolved agent (FR-03-3). */
+  agent: string;
+  branch: string;
+  feature_name: string;
+  model?: string | null;
+  max_turns?: number | null;
+  timeout_minutes?: number | null;
+  max_budget_usd?: number | null;
+  memory?: string | null;
+  context?: string[];
+  keep_alive?: boolean;
+  start_task?: string | null;
+}
+
+/** The `POST /runs` `201` response — the **platform UUID** (§8.4). */
+export interface CreateRunResponse {
+  run_id: string;
+}
+
+/** A stage row in the run detail (§8.9 `RunStage`). */
+export interface RunStage {
+  idx: number;
+  name: string;
+  status: string;
+  cost_usd: number | null;
+  turns: number;
+  duration_s: number | null;
+}
+
+/** The `GET /runs/{id}` detail baseline (§8.9). */
+export interface RunDetailResponse {
+  id: string;
+  engine_run_id: string | null;
+  repo: string;
+  issue: { num: number; title: string } | null;
+  workflow_id: string | null;
+  agent: string | null;
+  model: string | null;
+  status: string;
+  branch: string;
+  /** Codex → null/"—" (FR-06-1a). */
+  cost_usd: number | null;
+  tokens_in: number;
+  tokens_out: number;
+  turns: number;
+  duration_s: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  pr: { num: number; title: string | null; checks: unknown } | null;
+  error: string | null;
+  stages: RunStage[];
+  config: Record<string, unknown>;
+  sandbox: { image: string; mem: string; vcpu: number; health: string };
+  artifacts: { name: string; size?: number; live?: boolean }[];
+}
+
+function encodeRepo(slug: string): string {
+  // The slug is "owner/name"; encode each segment so the "/" survives as the
+  // path separator (the backend routes on /issues/{owner}/{name}/{num}).
+  return slug
+    .split("/")
+    .map((s) => encodeURIComponent(s))
+    .join("/");
+}
+
+/** Fetch one issue's detail (slice 2.1 — `GET /issues/{owner}/{name}/{num}`). */
+export function getIssueDetail(slug: string, num: number): Promise<IssueDetailResponse> {
+  return apiGet<IssueDetailResponse>(`/issues/${encodeRepo(slug)}/${num}`);
+}
+
+/** Fetch the workflow picker source (slice 4.1 — `GET /workflows`). */
+export function listWorkflows(): Promise<WorkflowSummary[]> {
+  return apiGet<WorkflowSummary[]>("/workflows");
+}
+
+/**
+ * Launch a run for an issue (slice 2.1 — `POST /runs`) → the platform UUID.
+ *
+ * The UI sends the **resolved** agent (`agent === "auto" ? workflow.agent : agent`,
+ * FR-03-3); the backend re-validates (§8.10), claims the row (INV-5), starts the
+ * engine, and returns `{ run_id }`. A Codex budget/turns body is rejected
+ * `400 unsupported_for_agent` (INV-8) and surfaces as an {@link ApiError}.
+ */
+export function createRun(body: CreateRunRequest): Promise<CreateRunResponse> {
+  return apiPost<CreateRunResponse>("/runs", body);
+}
+
+/** Fetch the §8.9 run-detail baseline (slice 2.1 — `GET /runs/{id}`). */
+export function getRun(runId: string): Promise<RunDetailResponse> {
+  return apiGet<RunDetailResponse>(`/runs/${encodeURIComponent(runId)}`);
+}
