@@ -36,6 +36,7 @@ from app.api.errors import ApiError, run_not_found
 from app.db.repository import Repository
 from app.github.client import GitHubAuthError, GitHubError
 from app.github.provider import get_github_client
+from app.hitl import ConcurrencySlots, DecisionRegistry, PauseBridgeDeps, build_pause_bridge
 from app.runs.launch import LaunchRequest, launch_run
 from app.runs.service import build_run_detail, build_run_summaries
 from app.runtime import RunService
@@ -148,6 +149,39 @@ def _stream_tasks(request: Request) -> set[asyncio.Task[Any]]:
     return tasks
 
 
+def _decision_registry(request: Request) -> DecisionRegistry:
+    """Resolve the process-wide HITL :class:`DecisionRegistry` (composing if absent).
+
+    The pause bridge built per run registers its awaited future here; the answer
+    endpoint / timeout sweep fire it after winning the exactly-once DB guard. The
+    lifespan composes ONE on ``app.state.decision_registry`` so the bridge's awaited
+    future and the answer route's resolve share one rendezvous; a no-lifespan test
+    gets one lazily.
+    """
+    existing = getattr(request.app.state, "decision_registry", None)
+    if isinstance(existing, DecisionRegistry):
+        return existing
+    registry = DecisionRegistry()
+    request.app.state.decision_registry = registry
+    return registry
+
+
+def _concurrency_slots(request: Request) -> ConcurrencySlots:
+    """Resolve the process-wide :class:`ConcurrencySlots` accounting (T086).
+
+    The slot-release-on-pause / reacquire-on-resume primitive the pause bridge
+    drives. Phase 2 does not enforce a cap (Phase 5 does); the lifespan composes ONE
+    on ``app.state.concurrency_slots`` so all runs share the same accounting; a
+    no-lifespan test gets one lazily.
+    """
+    existing = getattr(request.app.state, "concurrency_slots", None)
+    if isinstance(existing, ConcurrencySlots):
+        return existing
+    slots = ConcurrencySlots()
+    request.app.state.concurrency_slots = slots
+    return slots
+
+
 def _run_service(request: Request) -> RunService:
     """Resolve the single lifespan-owned :class:`RunService` from ``app.state``.
 
@@ -191,11 +225,18 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
     cache = get_board_cache(request)
     run_service = _run_service(request)
 
-    # The per-run pump/supervisor outlive this request, so they hold the
-    # lifespan-owned (long-lived) Repository — not the per-request one below.
+    # The per-run pump/supervisor + the HITL pause bridge outlive this request, so
+    # they hold the lifespan-owned (long-lived) Repository — not the per-request one.
     stream_repository = await _stream_repository(request)
     registry = _stream_registry(request)
     tasks = _stream_tasks(request)
+    decisions = _decision_registry(request)
+    slots = _concurrency_slots(request)
+    # Resolved inside the launch try-block (below) before ``launch_run`` runs, so
+    # it is bound before the per-run ``_build_on_pause`` closure could ever be
+    # invoked (the bridge is only called by the engine at a pause point, long after
+    # launch returns). Initialized here so the closure has a definite binding.
+    current_labels: list[str] = []
 
     def _attach_stream(run_id: str, handle: RunHandle) -> None:
         """Register the run's observer + spawn its pump/supervisor (F8 / §8.3)."""
@@ -206,6 +247,31 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
             repository=stream_repository,
             tasks=tasks,
         )
+
+    def _build_on_pause(run_id: str) -> Any:
+        """Build the per-run HITL ``on_pause`` bridge once the UUID exists (slice 2.5).
+
+        Bound to the claimed platform UUID + the lifespan-owned singletons
+        (long-lived Repository, write-queue, GitHub client, stream registry,
+        decision rendezvous, slot accounting). On pause the bridge writes
+        ``pause_decisions``, sets ``agent:paused`` (write-queue, INV-11), releases
+        the slot (T086), emits ``pause_requested`` over SSE, and awaits the keyed
+        event resolved exactly-once by ``POST /runs/{id}/answer`` (INV-9 / §8.5).
+        """
+        deps = PauseBridgeDeps(
+            run_id=run_id,
+            repo=body.repo,
+            issue_num=body.issue_num,
+            repository=stream_repository,
+            github_client=client,
+            write_queue=write_queue,
+            stream_registry=registry,
+            decisions=decisions,
+            slots=slots,
+            cache=cache,
+            current_labels=tuple(current_labels),
+        )
+        return build_pause_bridge(deps)
 
     req = LaunchRequest(
         issue_num=body.issue_num,
@@ -238,6 +304,7 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
                 project_root=None,
                 default_memory=_default_memory(settings),
                 current_labels=current_labels,
+                build_on_pause=_build_on_pause,
                 attach_stream=_attach_stream,
             )
     except (GitHubAuthError, GitHubError) as exc:

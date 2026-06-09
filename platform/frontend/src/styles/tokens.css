@@ -26,6 +26,7 @@
   --st-done:     #34c98a; /* green  */
   --st-failed:   #f2666b; /* red    */
   --st-cancel:   #7c7a82; /* gray   */
+  --st-paused-fg: #3a2600; /* dark amber text on the paused "Approve & continue" button (run.jsx) */
 
   --font-ui: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;

@@ -37,6 +37,7 @@ from app.config import Settings, get_settings
 from app.db import Repository
 from app.github.provider import aclose_github_client, build_pat_github_client
 from app.github.write_queue import DEFAULT_DRAIN_GRACE_SECONDS, WriteQueue
+from app.hitl import ConcurrencySlots, DecisionRegistry
 from app.runtime import RunService
 from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
 from app.security import AccessControlMiddleware
@@ -123,6 +124,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # pump's publish target and the live connections share one fan-out point.
     if getattr(app.state, "stream_registry", None) is None:
         app.state.stream_registry = StreamRegistry()
+
+    # The HITL await/resume rendezvous + the concurrency-slot accounting (slice
+    # 2.5). The pause bridge registers a keyed future per decision here and awaits
+    # it; ``POST /runs/{id}/answer`` (and the timeout sweep) fire it after winning
+    # the exactly-once DB guard (INV-9). ``slots`` is the slot-release-on-pause /
+    # reacquire-on-resume primitive (T086) Phase 5's admission semaphore consumes;
+    # Phase 2 does not enforce the cap (it accounts only).
+    if getattr(app.state, "decision_registry", None) is None:
+        app.state.decision_registry = DecisionRegistry()
+    if getattr(app.state, "concurrency_slots", None) is None:
+        app.state.concurrency_slots = ConcurrencySlots(
+            capacity=settings.MAX_CONCURRENT_RUNS,
+        )
 
     # The set of live per-run pump/supervisor tasks (slice 2.3 / FIX-1). Each
     # launched run spawns one EventPump + one completion supervisor here; the set

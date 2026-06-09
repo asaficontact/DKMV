@@ -403,6 +403,7 @@ async def launch_run(
     default_memory: str,
     current_labels: list[str],
     on_pause: Callable[[Any], Awaitable[Any]] | None = None,
+    build_on_pause: Callable[[str], Callable[[Any], Awaitable[Any]]] | None = None,
     attach_stream: Callable[[str, Any], None] | None = None,
 ) -> LaunchResult:
     """Validate → resolve → claim-lock → start → move-label (the §8.11 launch flow).
@@ -411,9 +412,10 @@ async def launch_run(
     (§8.10), resolves the agent (``auto → workflow.agent``), **rejects** Codex
     budget/turn guardrails (INV-8), claims the run row via the INV-5
     ``ON CONFLICT DO NOTHING`` helper (``409 duplicate_dispatch`` on a lost race),
-    starts the engine through :class:`~app.runtime.RunService` (with the
-    ``on_pause`` bridge — a pass-through placeholder until slice 2.5), **wires the
-    run into the live SSE stream** via the ``attach_stream`` hook (registers the
+    starts the engine through :class:`~app.runtime.RunService` (with the slice-2.5
+    ``on_pause`` bridge, built per-run via ``build_on_pause(run_id)`` once the
+    claimed UUID exists), **wires the run into the live SSE stream** via the
+    ``attach_stream`` hook (registers the
     platform observer on the ``RunHandle`` + spawns the per-run pump/supervisor —
     F8/§8.3), and moves the issue to ``agent:in-progress`` via ``set_agent_state``
     on the write-queue (INV-11). Returns the **platform UUID**.
@@ -461,9 +463,19 @@ async def launch_run(
         raise duplicate_dispatch(run_id)
 
     # ── engine start (returns a RunHandle; the platform UUID is the address) ────
-    # The on_pause bridge is owned by slice 2.5; until then a pass-through
-    # placeholder is wired through so start() already carries the on_pause= seam.
-    pause_bridge = on_pause or _passthrough_on_pause
+    # The real HITL ``on_pause`` bridge (slice 2.5) is built per-run via
+    # ``build_on_pause(run_id)`` now that the claimed platform UUID exists — it
+    # writes ``pause_decisions``, sets ``agent:paused``, releases the slot, emits
+    # ``pause_requested``, and awaits the keyed event (INV-9 / §8.5). A direct
+    # ``on_pause`` (a test injecting a callback) takes precedence; absent both, the
+    # engine-default no-op pass-through is wired so ``start`` always carries the
+    # ``on_pause=`` seam.
+    if on_pause is not None:
+        pause_bridge: Callable[[Any], Awaitable[Any]] = on_pause
+    elif build_on_pause is not None:
+        pause_bridge = build_on_pause(run_id)
+    else:
+        pause_bridge = _passthrough_on_pause
     handle = await run_service.start(
         component=workflow_id,
         repo=repo,

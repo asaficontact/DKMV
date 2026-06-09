@@ -492,6 +492,108 @@ class Repository:
             )
             return dict(rows[0]) if rows else None
 
+    # === pause_decisions (HITL — INV-9 resolve-exactly-once) ==================
+
+    async def create_pause_decision(
+        self,
+        *,
+        run_id: str,
+        request_json: str,
+        task_name: str | None,
+        timeout_at: str,
+        decision_id: str | None = None,
+    ) -> str:
+        """Insert a ``pending`` ``pause_decisions`` row; return its ``decision_id``.
+
+        The durable half of the §8.5 HITL bridge: on pause the platform persists
+        the decision (``status='pending'``, the engine ``PauseRequest`` payload,
+        the UTC ``timeout_at``) BEFORE it awaits the human, so the decision
+        survives a backend restart even though the suspended run coroutine does
+        not (§8.5.5 — the run is re-launchable from the last pushed boundary, never
+        "resumed in place"). A generated UUID keys the in-memory event the answer
+        endpoint / timeout sweep fire, and is the ``id`` the answer guard targets.
+        Written through the single writer (INV-6).
+        """
+        new_id = decision_id or str(uuid.uuid4())
+        created_at = _utc_now_iso()
+
+        async def _job(conn: aiosqlite.Connection) -> str:
+            await conn.execute(
+                """
+                INSERT INTO pause_decisions (
+                    id, run_id, task_name, request_json, status, timeout_at, created_at
+                )
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (new_id, run_id, task_name, request_json, timeout_at, created_at),
+            )
+            return new_id
+
+        return await self._writer.submit(_job)
+
+    async def resolve_pause_decision(
+        self,
+        decision_id: str,
+        *,
+        answer_json: str,
+        resolved_by: str,
+    ) -> bool:
+        """Guarded transition ``…SET status='answered' WHERE id=? AND status='pending'``.
+
+        The INV-9 resolve-**exactly-once** primitive (§8.5): the ``UPDATE`` is
+        guarded on ``status='pending'`` so a double-click, two tabs, and a racing
+        timeout sweep can never all win — only the FIRST writer flips the row and
+        gets ``rowcount == 1``; every later attempt matches zero rows. Returns
+        ``True`` iff *this* call won the transition (the caller then — and only
+        then — fires the in-memory keyed event so the awaiting ``on_pause``
+        callback returns its :class:`PauseResponse`). ``resolved_by`` records who
+        resolved it (``'human'`` for the answer endpoint, ``'timeout'`` for the
+        expiry sweep). Written through the single writer (INV-6).
+        """
+
+        async def _job(conn: aiosqlite.Connection) -> bool:
+            cursor = await conn.execute(
+                "UPDATE pause_decisions "
+                "SET status = 'answered', answer_json = ?, resolved_by = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (answer_json, resolved_by, decision_id),
+            )
+            return bool(cursor.rowcount == 1)
+
+        return await self._writer.submit(_job)
+
+    async def get_pause_decision(self, decision_id: str) -> dict[str, Any] | None:
+        """Read one ``pause_decisions`` row by id (test/observability hook)."""
+        async with self._read_conn() as conn:
+            rows = list(
+                await conn.execute_fetchall(
+                    "SELECT * FROM pause_decisions WHERE id = ?",
+                    (decision_id,),
+                )
+            )
+            return dict(rows[0]) if rows else None
+
+    async def read_expired_pending_pauses(self, *, now_iso: str) -> list[dict[str, Any]]:
+        """Read every ``pending`` pause whose UTC ``timeout_at <= now`` (§8.5 sweep).
+
+        The auto-resolve sweep's read half (INV-9): the index
+        ``ix_pause_decisions_status_timeout_at`` serves ``WHERE status='pending'
+        AND timeout_at <= :now``. ``timeout_at`` is a UTC ISO-8601 string, so the
+        lexicographic comparison is a correct chronological comparison (the
+        platform writes every timestamp via :func:`_utc_now_iso`). The sweep then
+        resolves each via the same exactly-once guard (``resolved_by='timeout'``)
+        so a pause that a human answered in the same tick is never double-resolved.
+        """
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT id, run_id, task_name, timeout_at, created_at "
+                "FROM pause_decisions "
+                "WHERE status = 'pending' AND timeout_at IS NOT NULL AND timeout_at <= ? "
+                "ORDER BY timeout_at",
+                (now_iso,),
+            )
+            return [dict(r) for r in rows]
+
     async def list_runs(
         self, *, repo: str | None = None, limit: int = 100, offset: int = 0
     ) -> list[dict[str, Any]]:
