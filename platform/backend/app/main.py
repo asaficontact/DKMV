@@ -37,6 +37,7 @@ from app.github.write_queue import DEFAULT_DRAIN_GRACE_SECONDS, WriteQueue
 from app.runtime import RunService
 from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
 from app.security import AccessControlMiddleware
+from app.sse import StreamRegistry
 
 _log = logging.getLogger(__name__)
 
@@ -95,6 +96,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if getattr(app.state, "github_write_queue", None) is None:
         app.state.github_write_queue = WriteQueue()
+
+    # The process-wide per-run SSE fan-out registry (slice 2.3). One registry per
+    # process / event loop: the launch path registers a run's observer + pump on a
+    # hub here, and the SSE endpoint attaches subscribers to the same hub so the
+    # pump's publish target and the live connections share one fan-out point.
+    if getattr(app.state, "stream_registry", None) is None:
+        app.state.stream_registry = StreamRegistry()
 
     try:
         yield

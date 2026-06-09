@@ -123,8 +123,25 @@ def _is_token_exempt(path: str, *, expose_docs: bool) -> bool:
     return expose_docs and path in _DOCS_PATHS
 
 
+#: Name of the HttpOnly, ``SameSite=Strict`` cookie the SSE token rides in
+#: (INV-2 / §8.3). Browser ``EventSource`` cannot set an ``Authorization`` header,
+#: and a token in the URL/query would leak into logs and the append-only
+#: ``events`` table — so the cookie is the *only* SSE token carrier. The cookie is
+#: also accepted as a token source on ordinary requests (it is HttpOnly + Strict,
+#: so it carries the same trust as the bearer header while remaining unreadable by
+#: JS); the Host/Origin/CSRF gate above still applies to every request.
+SSE_TOKEN_COOKIE: str = "dkmv_sse_token"  # noqa: S105 - cookie NAME, not a secret
+
+
 def _extract_token(request: Request) -> str | None:
-    """Pull the presented token from ``Authorization`` or ``X-DKMV-Token``."""
+    """Pull the presented token from ``Authorization``, ``X-DKMV-Token``, or the cookie.
+
+    Header carriers win (the SPA's ``fetch`` calls set them); the HttpOnly
+    ``SameSite=Strict`` SSE cookie (:data:`SSE_TOKEN_COOKIE`) is the fallback for
+    browser ``EventSource`` connections that cannot set a header (INV-2). The
+    cookie's ``SameSite=Strict`` + the Host/Origin gate keep it from being a CSRF
+    vector; the token NEVER appears in a URL/query.
+    """
     auth = request.headers.get("authorization")
     if auth:
         scheme, _, value = auth.partition(" ")
@@ -133,6 +150,9 @@ def _extract_token(request: Request) -> str | None:
     header_token = request.headers.get("x-dkmv-token")
     if header_token:
         return header_token.strip()
+    cookie_token = request.cookies.get(SSE_TOKEN_COOKIE)
+    if cookie_token:
+        return cookie_token.strip()
     return None
 
 
