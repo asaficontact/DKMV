@@ -56,9 +56,32 @@ def _migrate(db_path: Path) -> str:
 
 
 class _FakeHandle:
-    """Engine ``RunHandle`` stand-in: ``run_id`` is None (back-fills later)."""
+    """Engine ``RunHandle`` stand-in: ``run_id`` is None (back-fills later).
+
+    Satisfies the minimal public ``RunHandle`` surface the slice-2.3 stream wiring
+    (``app.sse.run_stream.attach_run_stream``) consumes: ``add_observer`` (register
+    the platform observer) and ``wait``/``status``/``result`` (the completion
+    supervisor). The fake never emits events, so the pump idles and the supervisor
+    closes the (empty) stream immediately — exactly the no-op a launch-only test
+    wants. ``add_observer`` records the observer so a test can assert it was wired.
+    """
 
     run_id = None
+
+    def __init__(self) -> None:
+        self.observers: list[Any] = []
+        self.status = "running"
+        self.result = None
+
+    def add_observer(self, observer: Any) -> None:
+        self.observers.append(observer)
+
+    async def wait(self, timeout: float | None = None) -> None:
+        # A real run does NOT complete by the time POST /runs returns; mirror that
+        # by blocking until the completion supervisor is cancelled at shutdown, so
+        # the run stays ``running``/un-finalized at return time (the launch tests
+        # assert the just-claimed ``pending`` status before the stream finalizes).
+        await asyncio.Event().wait()
 
 
 class FakeRuntime:

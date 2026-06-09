@@ -13,7 +13,10 @@ What it returns (PRD §8.9):
         status, branch, cost_usd|null, tokens_in, tokens_out, turns,
         duration_s|null, started_at, finished_at|null, pr|null, error|null,
         stages:[RunStage], config:{...FR-04-5 keys}, sandbox:{...},
-        artifacts:[...] }
+        artifacts:[...], decision:{...}|null }
+
+  The ``decision`` block is the PauseCard rehydration source (slice 2.3, §8.3):
+  the run's open ``pause_decisions`` row when paused, else ``null``.
 
 * :func:`build_run_summary` → one ``GET /runs`` list row (the live-view spine;
   history filters/sort are Phase 3).
@@ -29,6 +32,7 @@ this read surfaces the same projection for the baseline shape.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.db.repository import COST_EXCLUDED_AGENT, Repository
@@ -119,6 +123,37 @@ def _sandbox_block(*, image: str, memory_limit: str) -> dict[str, Any]:
     }
 
 
+async def _decision_block(repository: Repository, run_id: str) -> dict[str, Any] | None:
+    """The ``decision:{...}|null`` PauseCard rehydration block (slice 2.3, §8.3).
+
+    If the SSE socket drops while a run is paused, the reconnect replay only reaches
+    ``pause_requested`` — so the client rehydrates the decision card from **state**
+    here, not the live push. Surfaces the run's open (``status='pending'``)
+    ``pause_decisions`` row: the ``decision_id``, ``task_name``, the engine-authored
+    ``request`` payload (the ``{question, context, options}`` the card renders —
+    slice 2.5 maps the option shape), and the UTC ``timeout_at``. ``None`` when the
+    run is not paused (no pending decision). The malformed-JSON guard degrades to
+    an empty request rather than failing the whole detail read.
+    """
+    row = await repository.read_pending_pause(run_id)
+    if row is None:
+        return None
+    raw = row.get("request_json")
+    request_payload: dict[str, Any]
+    try:
+        parsed = json.loads(raw) if raw else {}
+        request_payload = parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):  # pragma: no cover - persisted JSON is well-formed
+        request_payload = {}
+    return {
+        "decision_id": str(row["id"]),
+        "task_name": row.get("task_name"),
+        "status": row.get("status"),
+        "timeout_at": row.get("timeout_at"),
+        "request": request_payload,
+    }
+
+
 async def _stages(repository: Repository, run_id: str) -> list[dict[str, Any]]:
     """Read the ``run_stages`` rows for a run, ordered by stage index (§8.9).
 
@@ -198,6 +233,10 @@ async def build_run_detail(
         "config": build_run_config(row, sandbox_image=sandbox_image, memory_limit=memory_limit),
         "sandbox": _sandbox_block(image=sandbox_image, memory_limit=memory_limit),
         "artifacts": [],
+        # PauseCard rehydration source (slice 2.3, §8.3): the open pause decision,
+        # or null when the run is not paused. A reconnect after the socket dropped
+        # mid-pause rehydrates the card from this, not the live SSE push.
+        "decision": await _decision_block(repository, run_id),
     }
 
 

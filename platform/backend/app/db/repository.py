@@ -467,6 +467,31 @@ class Repository:
             )
             return [dict(r) for r in rows]
 
+    async def read_pending_pause(self, run_id: str) -> dict[str, Any] | None:
+        """Read a run's latest **pending** ``pause_decisions`` row, or ``None`` (§8.3).
+
+        The PauseCard rehydration source (slice 2.3): if the SSE socket drops while
+        a run is paused, the reconnect replay only reaches ``pause_requested`` — so
+        the client rehydrates the decision card from **state** (``GET /runs/{id}``),
+        not the live push. This read surfaces the open decision (``status='pending'``)
+        the card needs: ``id``, ``task_name``, the engine ``request_json`` payload,
+        and the UTC ``timeout_at``. Returns the most-recent pending row (highest
+        ``created_at``) so a run with at most one open pause resolves unambiguously;
+        a run with no open pause returns ``None``. A pure WAL read through the
+        repository seam — the resolve-exactly-once **write** path is slice 2.5.
+        """
+        async with self._read_conn() as conn:
+            rows = list(
+                await conn.execute_fetchall(
+                    "SELECT id, run_id, task_name, request_json, status, timeout_at, created_at "
+                    "FROM pause_decisions "
+                    "WHERE run_id = ? AND status = 'pending' "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1",
+                    (run_id,),
+                )
+            )
+            return dict(rows[0]) if rows else None
+
     async def list_runs(
         self, *, repo: str | None = None, limit: int = 100, offset: int = 0
     ) -> list[dict[str, Any]]:

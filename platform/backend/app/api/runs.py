@@ -24,7 +24,8 @@ Nothing here reaches into ``dkmv/`` except through the in-process
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -32,11 +33,18 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import get_board_cache, get_repository, get_write_queue
 from app.api.errors import ApiError, run_not_found
+from app.db.repository import Repository
 from app.github.client import GitHubAuthError, GitHubError
 from app.github.provider import get_github_client
 from app.runs.launch import LaunchRequest, launch_run
 from app.runs.service import build_run_detail, build_run_summaries
 from app.runtime import RunService
+from app.sse.auth import set_sse_cookie
+from app.sse.observer_bridge import StreamRegistry
+from app.sse.run_stream import RUN_STREAM_TASKS_ATTR, attach_run_stream
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from dkmv.runtime._handle import RunHandle
 
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
 # router in :mod:`app.api`, which this router attaches to.
@@ -93,6 +101,53 @@ def _map_github_error(exc: Exception) -> ApiError:
     )
 
 
+async def _stream_repository(request: Request) -> Repository:
+    """Return the long-lived :class:`Repository` the per-run pump/supervisor hold.
+
+    The event pump + completion supervisor (slice 2.3) outlive the ``POST /runs``
+    request — they run for the run's whole lifetime — so they must write through
+    the **lifespan-owned** ``app.state.repository`` (the single per-process writer,
+    INV-6), never a per-request Repository that ``get_repository`` would ``close``
+    when the request ends. **Test fallback only** (no lifespan): the per-request
+    resolver builds + starts one on the serving loop; the pump shares it for the
+    (short-lived) test run. Mirrors ``app.sse.endpoint._stream_repository``.
+    """
+    repo = getattr(request.app.state, "repository", None)
+    if isinstance(repo, Repository):
+        return repo
+    async with get_repository(request) as fallback:
+        return fallback
+
+
+def _stream_registry(request: Request) -> StreamRegistry:
+    """Resolve (composing on first use) the process-wide :class:`StreamRegistry`.
+
+    The app-lifespan composes ONE registry on ``app.state.stream_registry`` so the
+    launch path's pump publishes into the same hub the SSE endpoint subscribes to;
+    a no-lifespan test gets one lazily here.
+    """
+    existing = getattr(request.app.state, "stream_registry", None)
+    if isinstance(existing, StreamRegistry):
+        return existing
+    registry = StreamRegistry()
+    request.app.state.stream_registry = registry
+    return registry
+
+
+def _stream_tasks(request: Request) -> set[asyncio.Task[Any]]:
+    """The process-wide set of live per-run pump/supervisor tasks (``app.state``).
+
+    Tracked so the lifespan can cancel them on shutdown (and a test can await
+    them); each task removes itself when it completes (no unbounded growth).
+    """
+    existing = getattr(request.app.state, RUN_STREAM_TASKS_ATTR, None)
+    if isinstance(existing, set):
+        return existing
+    tasks: set[asyncio.Task[Any]] = set()
+    setattr(request.app.state, RUN_STREAM_TASKS_ATTR, tasks)
+    return tasks
+
+
 def _run_service(request: Request) -> RunService:
     """Resolve the single lifespan-owned :class:`RunService` from ``app.state``.
 
@@ -136,6 +191,22 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
     cache = get_board_cache(request)
     run_service = _run_service(request)
 
+    # The per-run pump/supervisor outlive this request, so they hold the
+    # lifespan-owned (long-lived) Repository — not the per-request one below.
+    stream_repository = await _stream_repository(request)
+    registry = _stream_registry(request)
+    tasks = _stream_tasks(request)
+
+    def _attach_stream(run_id: str, handle: RunHandle) -> None:
+        """Register the run's observer + spawn its pump/supervisor (F8 / §8.3)."""
+        attach_run_stream(
+            run_id=run_id,
+            handle=handle,
+            registry=registry,
+            repository=stream_repository,
+            tasks=tasks,
+        )
+
     req = LaunchRequest(
         issue_num=body.issue_num,
         repo=body.repo,
@@ -167,11 +238,34 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
                 project_root=None,
                 default_memory=_default_memory(settings),
                 current_labels=current_labels,
+                attach_stream=_attach_stream,
             )
     except (GitHubAuthError, GitHubError) as exc:
         raise _map_github_error(exc) from exc
 
-    return JSONResponse(status_code=201, content={"run_id": result.run_id})
+    # INV-2: install the HttpOnly SameSite=Strict SSE cookie on this authenticated
+    # POST /runs response so the browser holds it BEFORE opening the EventSource for
+    # the new run — the SSE handler then 200s with the cookie (and still 401s
+    # without it). The cookie carries the SAME loopback control-plane token; it is
+    # never put in the SSE URL (a URL token would leak into the append-only events
+    # table). ``secure`` follows the deployment's TLS posture (off for loopback dev).
+    response = JSONResponse(status_code=201, content={"run_id": result.run_id})
+    set_sse_cookie(
+        response,
+        settings.DKMV_PLATFORM_TOKEN.get_secret_value(),
+        secure=_cookie_secure(settings),
+    )
+    return response
+
+
+def _cookie_secure(settings: Any) -> bool:
+    """Whether the SSE cookie gets the ``Secure`` attribute (TLS deployments).
+
+    Defaults off for loopback ``http://127.0.0.1`` dev (a ``Secure`` cookie would
+    not be sent over plain http, breaking the local stream); a TLS-terminated
+    deployment opts in via ``DKMV_COOKIE_SECURE``.
+    """
+    return bool(getattr(settings, "DKMV_COOKIE_SECURE", False))
 
 
 def _default_memory(settings: Any) -> str:
