@@ -148,8 +148,10 @@ export interface RunDetailResponse {
   model: string | null;
   status: string;
   branch: string;
-  /** Codex → null/"—" (FR-06-1a). */
+  /** The segment-sum cost (INV-7). Codex → null/"—" (FR-06-1a). */
   cost_usd: number | null;
+  /** True when the run's cost is excluded from spend (Codex) → render "—". */
+  cost_excluded?: boolean;
   tokens_in: number;
   tokens_out: number;
   turns: number;
@@ -198,4 +200,41 @@ export function createRun(body: CreateRunRequest): Promise<CreateRunResponse> {
 /** Fetch the §8.9 run-detail baseline (slice 2.1 — `GET /runs/{id}`). */
 export function getRun(runId: string): Promise<RunDetailResponse> {
   return apiGet<RunDetailResponse>(`/runs/${encodeURIComponent(runId)}`);
+}
+
+/** The `POST /runs/{id}/stop` 202 body (§8.5). */
+export interface StopRunResponse {
+  run_id: string;
+  status: string;
+  /** True when a paused run was force-cancelled (R-7). */
+  forced: boolean;
+}
+
+/**
+ * Stop a running or paused run (slice 2.4 — `POST /runs/{id}/stop`, §8.5).
+ *
+ * A **paused** run is force-stopped server-side (`RunHandle.stop(force=True)` —
+ * the engine checks the cancel only between tasks, so a cooperative stop never
+ * fires at `await on_pause`); a running run stops cooperatively. The UI just calls
+ * this — the force/cooperative choice is the backend's (driven by run status).
+ */
+export function stopRun(runId: string): Promise<StopRunResponse> {
+  return apiPost<StopRunResponse>(`/runs/${encodeURIComponent(runId)}/stop`);
+}
+
+/** The `POST /runs/{id}/exec` 200 body — a one-shot command's stdout. */
+export interface ExecRunResponse {
+  run_id: string;
+  output: string;
+}
+
+/**
+ * Run ONE command in the run's container (slice 2.4 — `POST /runs/{id}/exec`).
+ *
+ * This is a **one-shot** exec (a single `docker exec`), NOT a PTY / interactive
+ * terminal: one command in, captured stdout out. Surfaces a 409 when the
+ * container is not running and a 400 when the command itself fails.
+ */
+export function execInRun(runId: string, command: string): Promise<ExecRunResponse> {
+  return apiPost<ExecRunResponse>(`/runs/${encodeURIComponent(runId)}/exec`, { command });
 }

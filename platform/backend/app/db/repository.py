@@ -635,6 +635,43 @@ class Repository:
                 return 0.0
             return await _project_run_spend(conn, run_id)
 
+    async def read_run_segments(self, run_id: str) -> list[dict[str, Any]]:
+        """Per-``task_index`` last-cumulative event (cost + raw payload) for a run.
+
+        The live-meter read (slice 2.4 / INV-7): for **each distinct**
+        ``task_index`` of the run, return the event with the highest ``id`` that
+        carries a non-NULL ``cost_usd`` — that row IS the segment's final/latest
+        cumulative cost (a completed task's final, or the active task's most-recent
+        line). The segment-sum meter (:mod:`app.runs.meters`) sums ``cost_usd``
+        across these rows (never a naive ``SUM`` over every event — that
+        double-counts the per-task cumulative line; never keep-latest-overall —
+        that resets to ~$0 at each stage boundary). ``payload_json`` is included
+        so the meter can also recover the engine's cumulative ``turns`` /
+        ``num_turns`` for the same segment without a second read. Rows are ordered
+        by ``task_index`` so the caller iterates segments in stage order. A pure
+        WAL read through the repository seam (NFR-PORT-1).
+        """
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                """
+                SELECT e.task_index AS task_index,
+                       e.cost_usd AS cost_usd,
+                       e.event_type AS event_type,
+                       e.payload_json AS payload_json
+                FROM events e
+                JOIN (
+                    SELECT task_index, MAX(id) AS max_id
+                    FROM events
+                    WHERE run_id = ? AND cost_usd IS NOT NULL
+                    GROUP BY task_index
+                ) m ON e.id = m.max_id
+                WHERE e.run_id = ?
+                ORDER BY e.task_index
+                """,
+                (run_id, run_id),
+            )
+            return [dict(r) for r in rows]
+
     async def run_spends(self, run_ids: Sequence[str]) -> dict[str, float]:
         """Bulk segment-sum spend for a **set** of runs in ONE query (PERF).
 
