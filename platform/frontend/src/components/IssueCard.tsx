@@ -5,9 +5,11 @@
  * bar with the running pulse) when a run is live; an assignee avatar; and a "⋯"
  * menu (Assign workflow, Run, Open on GitHub, Stop).
  *
- * **Phase boundary.** Run / Stop are **disabled placeholders** here — dispatch is
- * Phase 2 (OUT of scope). "Needs You" cards get amber treatment + a **Review
- * decision** button whose CTA target is also Phase 2 (disabled placeholder).
+ * **Phase 2 launch (slice 2.2).** The card menu's "Assign workflow" / "Run" now
+ * **navigate to the issue-detail / launch screen** (Screen 03) — the actual
+ * dispatch still happens there via the run panel's "Run with …" button, never
+ * from the board. "Needs You" cards' **Review decision** routes to the run too.
+ * Stop remains a disabled placeholder (the Stop action is slice 2.4).
  *
  * Drag: Backlog↔Queued cards are `draggable`; the column wires the actual
  * `dragstart`/`drop` (FR-02-3). All color is token-driven (INV-14).
@@ -25,12 +27,21 @@ export interface IssueCardProps {
   issue: BoardIssue;
   /** GitHub web URL for "Open on GitHub" (built from the repo slug + number). */
   githubUrl?: string;
+  /** Open the issue-detail / launch screen (Screen 03 — slice 2.2). Dispatch
+   *  itself happens there via the run panel, never from the board. */
+  onOpenIssue?: (issue: BoardIssue) => void;
   /** Begin a Backlog↔Queued drag (the column owns the drop side). */
   onDragStart?: (issue: BoardIssue) => void;
   onDragEnd?: () => void;
 }
 
-export default function IssueCard({ issue, githubUrl, onDragStart, onDragEnd }: IssueCardProps) {
+export default function IssueCard({
+  issue,
+  githubUrl,
+  onOpenIssue,
+  onDragStart,
+  onDragEnd,
+}: IssueCardProps) {
   const draggable = isDraggableColumn(issue.state);
   const running = issue.state === "in_progress";
   const needsYou = issue.state === "needs_you";
@@ -58,7 +69,7 @@ export default function IssueCard({ issue, githubUrl, onDragStart, onDragEnd }: 
     >
       <header className="issue-card-top">
         <span className="issue-num mono">#{issue.num}</span>
-        <CardMenu issue={issue} githubUrl={githubUrl} />
+        <CardMenu issue={issue} githubUrl={githubUrl} onOpenIssue={onOpenIssue} />
       </header>
 
       <h3 className="issue-title">{issue.title}</h3>
@@ -87,8 +98,12 @@ export default function IssueCard({ issue, githubUrl, onDragStart, onDragEnd }: 
         <button
           type="button"
           className="btn btn-soft btn-sm review-cta"
-          disabled
-          title="Review decision opens the run view (Phase 2)"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenIssue?.(issue);
+          }}
+          disabled={!onOpenIssue}
+          title="Review decision opens the issue / run view"
         >
           Review decision
         </button>
@@ -126,8 +141,20 @@ function LiveMiniMeter({ issue }: { issue: BoardIssue }) {
   );
 }
 
-/** The "⋯" card menu — Run/Stop are disabled placeholders in Phase 1. */
-function CardMenu({ issue, githubUrl }: { issue: BoardIssue; githubUrl?: string }) {
+/**
+ * The "⋯" card menu. "Assign workflow" / "Run" navigate to the issue-detail /
+ * launch screen (Screen 03 — slice 2.2); the actual dispatch happens there via
+ * the run panel, never from this menu. Stop is still a disabled placeholder.
+ */
+function CardMenu({
+  issue,
+  githubUrl,
+  onOpenIssue,
+}: {
+  issue: BoardIssue;
+  githubUrl?: string;
+  onOpenIssue?: (issue: BoardIssue) => void;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -157,7 +184,17 @@ function CardMenu({ issue, githubUrl }: { issue: BoardIssue; githubUrl?: string 
       </button>
       {open && (
         <div className="card-menu-pop card fade-in" role="menu">
-          <button type="button" className="card-menu-item" role="menuitem" disabled>
+          <button
+            type="button"
+            className="card-menu-item"
+            role="menuitem"
+            disabled={!onOpenIssue}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onOpenIssue?.(issue);
+            }}
+          >
             <FlowIcon size={15} />
             Assign workflow
           </button>
@@ -165,8 +202,13 @@ function CardMenu({ issue, githubUrl }: { issue: BoardIssue; githubUrl?: string 
             type="button"
             className="card-menu-item"
             role="menuitem"
-            disabled
-            title="Launching runs is Phase 2"
+            disabled={!onOpenIssue}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onOpenIssue?.(issue);
+            }}
+            title="Open the launch screen to run this issue"
           >
             <PlayIcon size={15} />
             Run

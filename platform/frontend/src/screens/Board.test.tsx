@@ -11,6 +11,7 @@
  * The `api/board` module is mocked so no real network is touched.
  */
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BoardAggregate, BoardIssue } from "../api/board";
@@ -27,6 +28,15 @@ vi.mock("../api/board", async (importOriginal) => {
 });
 
 import Board from "./Board";
+
+/** Render the Board inside a router (it uses `useNavigate` to open issues). */
+function renderBoard() {
+  return render(
+    <MemoryRouter>
+      <Board repoSlug="asaficontact/DKMV" />
+    </MemoryRouter>,
+  );
+}
 
 const AGG: BoardAggregate = {
   repo: "asaficontact/DKMV",
@@ -84,7 +94,7 @@ afterEach(() => {
 describe("Board columns (AC-15)", () => {
   it("renders exactly the six §5.3.1 columns in order", async () => {
     mocks.listBoardIssues.mockResolvedValue({ items: POPULATED, next_cursor: null });
-    render(<Board repoSlug="asaficontact/DKMV" />);
+    renderBoard();
 
     await screen.findByText("Issue 247");
     const board = document.querySelector(".board-columns") as HTMLElement;
@@ -96,7 +106,7 @@ describe("Board columns (AC-15)", () => {
 describe("Board states (AC-18)", () => {
   it("shows the Empty state with the verbatim copy when there are no issues", async () => {
     mocks.listBoardIssues.mockResolvedValue({ items: [], next_cursor: null });
-    render(<Board repoSlug="asaficontact/DKMV" />);
+    renderBoard();
 
     expect(
       await screen.findByText(/Create an issue on GitHub or import/i),
@@ -105,7 +115,7 @@ describe("Board states (AC-18)", () => {
 
   it("renders the populated board (hero) when issues are present", async () => {
     mocks.listBoardIssues.mockResolvedValue({ items: POPULATED, next_cursor: null });
-    render(<Board repoSlug="asaficontact/DKMV" />);
+    renderBoard();
 
     expect(await screen.findByText("Issue 247")).toBeInTheDocument();
   });
@@ -114,7 +124,7 @@ describe("Board states (AC-18)", () => {
 describe("Drag Backlog↔Queued (AC-16)", () => {
   it("posts target=queued when a Backlog card is dropped on Queued", async () => {
     mocks.listBoardIssues.mockResolvedValue({ items: POPULATED, next_cursor: null });
-    render(<Board repoSlug="asaficontact/DKMV" />);
+    renderBoard();
     await screen.findByText("Issue 263");
 
     const card = document.querySelector('.issue-card[data-num="263"]') as HTMLElement;
@@ -131,7 +141,7 @@ describe("Drag Backlog↔Queued (AC-16)", () => {
 
   it("posts target=none when a Queued card is dropped back on Backlog", async () => {
     mocks.listBoardIssues.mockResolvedValue({ items: POPULATED, next_cursor: null });
-    render(<Board repoSlug="asaficontact/DKMV" />);
+    renderBoard();
     await screen.findByText("Issue 233");
 
     const card = document.querySelector('.issue-card[data-num="233"]') as HTMLElement;
@@ -148,7 +158,7 @@ describe("Drag Backlog↔Queued (AC-16)", () => {
 
   it("does not post when a card is dropped on a run-driven column", async () => {
     mocks.listBoardIssues.mockResolvedValue({ items: POPULATED, next_cursor: null });
-    render(<Board repoSlug="asaficontact/DKMV" />);
+    renderBoard();
     await screen.findByText("Issue 263");
 
     const card = document.querySelector('.issue-card[data-num="263"]') as HTMLElement;
@@ -166,7 +176,7 @@ describe("Drag Backlog↔Queued (AC-16)", () => {
 
   it("only Backlog and Queued cards are draggable (AC-16)", async () => {
     mocks.listBoardIssues.mockResolvedValue({ items: POPULATED, next_cursor: null });
-    render(<Board repoSlug="asaficontact/DKMV" />);
+    renderBoard();
     await screen.findByText("Issue 247");
 
     const backlog = document.querySelector('.issue-card[data-num="263"]') as HTMLElement;
@@ -184,7 +194,7 @@ describe("In-Progress live cost (FR-02-1)", () => {
       i.num === 247 ? { ...i, agent: "claude", live_cost: 2.5 } : i,
     );
     mocks.listBoardIssues.mockResolvedValue({ items: withCost, next_cursor: null });
-    render(<Board repoSlug="asaficontact/DKMV" />);
+    renderBoard();
 
     const col = await screen.findByRole("listitem", { name: "In Progress" });
     const header = col.querySelector(".column-head") as HTMLElement;

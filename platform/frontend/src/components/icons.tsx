@@ -160,3 +160,32 @@ export const FilterIcon = (p: IcoProps) => (
     <path d="M3 5h18l-7 8v5l-4 2v-7z" />
   </svg>
 );
+export const BranchIcon = (p: IcoProps) => (
+  <svg {...base(p)} aria-hidden>
+    <circle cx="6" cy="6" r="2.5" />
+    <circle cx="6" cy="18" r="2.5" />
+    <circle cx="18" cy="7" r="2.5" />
+    <path d="M6 8.5v7M18 9.5v1a4 4 0 0 1-4 4H8.5" />
+  </svg>
+);
+export const ChevRightIcon = (p: IcoProps) => (
+  <svg {...base(p)} aria-hidden>
+    <path d="m9 6 6 6-6 6" />
+  </svg>
+);
+export const ArrowRightIcon = (p: IcoProps) => (
+  <svg {...base(p)} aria-hidden>
+    <path d="M5 12h14M13 6l6 6-6 6" />
+  </svg>
+);
+export const CoinIcon = (p: IcoProps) => (
+  <svg {...base(p)} aria-hidden>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v10M9.5 9.5c0-1 1-1.7 2.5-1.7s2.5.8 2.5 1.8-1 1.6-2.5 1.6-2.5.7-2.5 1.7 1 1.8 2.5 1.8 2.5-.7 2.5-1.7" />
+  </svg>
+);
+export const SparkleIcon = (p: IcoProps) => (
+  <svg {...baseFill(p)} aria-hidden>
+    <path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8z" />
+  </svg>
+);
