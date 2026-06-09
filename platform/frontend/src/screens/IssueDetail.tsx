@@ -30,8 +30,7 @@ import { BranchIcon, ExtIcon, GitHubIcon } from "../components/icons";
 import Markdown from "../components/Markdown";
 import RunPanel from "../components/RunPanel";
 import StateBadge from "../components/StateBadge";
-import Sidebar from "../chrome/Sidebar";
-import TopBar from "../chrome/TopBar";
+import AppLayout from "../chrome/AppLayout";
 
 type LoadPhase = "loading" | "ready" | "error";
 
@@ -87,31 +86,28 @@ export default function IssueDetail({
   }, [load]);
 
   return (
-    <div className="app-shell">
-      <Sidebar repoSlug={repoSlug} aggregate={null} />
-      <div className="app-main">
-        <TopBar
-          title={`${repoSlug} · #${issueNum}`}
-          lastSyncedSeconds={null}
-          onRefresh={() => void load()}
-        />
-        {phase === "loading" && <LoadingState />}
-        {phase === "error" && <ErrorState onRetry={() => void load()} />}
-        {phase === "ready" && issue && (
-          <div className="issue-detail">
-            <IssueColumn issue={issue} repoSlug={repoSlug} onOpenRun={onOpenRun} />
-            <RunPanel
-              issueNum={issue.num}
-              issueTitle={issue.title}
-              repo={repoSlug}
-              workflows={workflows}
-              onLaunched={onOpenRun}
-              onQueueForLater={onBack}
-            />
-          </div>
-        )}
-      </div>
-    </div>
+    <AppLayout
+      repoSlug={repoSlug}
+      title={`${repoSlug} · #${issueNum}`}
+      lastSyncedSeconds={null}
+      onRefresh={() => void load()}
+    >
+      {phase === "loading" && <LoadingState />}
+      {phase === "error" && <ErrorState onRetry={() => void load()} />}
+      {phase === "ready" && issue && (
+        <div className="issue-detail">
+          <IssueColumn issue={issue} repoSlug={repoSlug} onOpenRun={onOpenRun} />
+          <RunPanel
+            issueNum={issue.num}
+            issueTitle={issue.title}
+            repo={repoSlug}
+            workflows={workflows}
+            onLaunched={onOpenRun}
+            onQueueForLater={onBack}
+          />
+        </div>
+      )}
+    </AppLayout>
   );
 }
 

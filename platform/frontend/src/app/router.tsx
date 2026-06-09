@@ -21,6 +21,7 @@ import {
 import Board from "../screens/Board";
 import Connect from "../screens/Connect";
 import IssueDetail from "../screens/IssueDetail";
+import LiveRun from "../screens/LiveRun";
 import { initTheme } from "./theme";
 
 // Apply the persisted (or default dark/indigo) theme before the first render.
@@ -68,8 +69,32 @@ function IssueDetailRoute() {
     <IssueDetail
       repoSlug={repoSlug}
       issueNum={issueNum}
-      onOpenRun={(runId) => navigate(`/runs/${encodeURIComponent(runId)}`)}
+      onOpenRun={(runId) =>
+        navigate(`/runs/${encodeURIComponent(runId)}?repo=${encodeURIComponent(repoSlug)}`)
+      }
       onBack={() => navigate(`/board?repo=${encodeURIComponent(repoSlug)}`)}
+    />
+  );
+}
+
+/**
+ * Live-run route (Screen D, slice 2.4). The platform UUID is carried in the path
+ * (`/runs/:id`); the connected repo slug rides `?repo=` (for the chrome + PR
+ * links) — falling back to the run's own `repo` once the detail loads if absent
+ * (a direct `/runs/:id` visit). This route is the recorded 2.2 gap: a launch
+ * navigates here instead of falling through to `/connect`.
+ */
+function LiveRunRoute() {
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const { id } = useParams();
+  const repo = params.get("repo") ?? "";
+  if (!id) return <Navigate to="/connect" replace />;
+  return (
+    <LiveRun
+      runId={id}
+      repoSlug={repo}
+      onGoBoard={() => navigate(`/board?repo=${encodeURIComponent(repo)}`)}
     />
   );
 }
@@ -81,6 +106,7 @@ export default function AppRouter() {
       <Route path="/connect" element={<ConnectRoute />} />
       <Route path="/board" element={<BoardRoute />} />
       <Route path="/issues/:owner/:name/:num" element={<IssueDetailRoute />} />
+      <Route path="/runs/:id" element={<LiveRunRoute />} />
       <Route path="*" element={<Navigate to="/connect" replace />} />
     </Routes>
   );

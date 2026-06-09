@@ -32,8 +32,7 @@ import { COLUMNS, groupByColumn, isCostExcludedAgent } from "../components/board
 import AggregateStrip from "../components/AggregateStrip";
 import FilterBar, { applyFilters, EMPTY_FILTERS, type BoardFilters } from "../components/FilterBar";
 import IssueCard from "../components/IssueCard";
-import Sidebar from "../chrome/Sidebar";
-import TopBar from "../chrome/TopBar";
+import AppLayout from "../chrome/AppLayout";
 
 /** Poll cadence for the board + aggregate (FR-NAV-2 "last synced"). */
 const POLL_MS = 10_000;
@@ -140,16 +139,15 @@ export default function Board({ repoSlug }: BoardProps) {
   const isEmpty = phase === "ready" && issues.length === 0;
 
   return (
-    <div className="app-shell">
-      <Sidebar repoSlug={repoSlug} aggregate={aggregate} />
-      <div className="app-main">
-        <TopBar
-          title={`${repoSlug} · Board`}
-          lastSyncedSeconds={lastSyncedSeconds}
-          onRefresh={() => void poll(true)}
-          refreshing={refreshing}
-        />
-        <div className="board-toolbar">
+    <AppLayout
+      repoSlug={repoSlug}
+      title={`${repoSlug} · Board`}
+      aggregate={aggregate}
+      lastSyncedSeconds={lastSyncedSeconds}
+      onRefresh={() => void poll(true)}
+      refreshing={refreshing}
+    >
+      <div className="board-toolbar">
           <FilterBar
             filters={filters}
             onChange={setFilters}
@@ -215,8 +213,7 @@ export default function Board({ repoSlug }: BoardProps) {
             })}
           </div>
         )}
-      </div>
-    </div>
+    </AppLayout>
   );
 }
 
