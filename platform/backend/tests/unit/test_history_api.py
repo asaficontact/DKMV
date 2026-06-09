@@ -57,6 +57,8 @@ async def _seed_run(
     agent: str,
     status: str = "completed",
     cost: float | None = None,
+    pr_num: int | None = None,
+    issue_title: str | None = None,
 ) -> str:
     repository = Repository(url)
     await repository.start()
@@ -71,8 +73,13 @@ async def _seed_run(
             branch=f"dkmv/issue-{issue_num}",
             feature_name=f"issue-{issue_num}",
         )
-        await repository.update_run_fields(run_id, status=status)
-        await repository.upsert_issue(repo="o/r", num=issue_num, title=f"Issue {issue_num}")
+        fields: dict[str, object] = {"status": status}
+        if pr_num is not None:
+            fields["pr_num"] = pr_num
+        await repository.update_run_fields(run_id, **fields)
+        await repository.upsert_issue(
+            repo="o/r", num=issue_num, title=issue_title or f"Issue {issue_num}"
+        )
         if cost is not None:
             await repository.append_events(
                 [
@@ -151,6 +158,68 @@ def test_combined_filters_intersect(tmp_path: Path) -> None:
     items = resp.json()["items"]
     assert len(items) == 1
     assert items[0]["issue_num"] == 1
+
+
+# ── FR-06-4: the Issue-title + PR columns are populated in the summary ────────
+
+
+def test_summary_carries_issue_title_and_pr_num(tmp_path: Path) -> None:
+    """GET /runs RunSummary exposes ``issue_title`` (from the issues cache) + ``pr_num``.
+
+    The history RunsTable renders an "Issue (#num title)" column and a "PR" badge;
+    the projection must surface the joined title + the run's linked PR number, not
+    just ``issue_num`` (FR-06-4).
+    """
+    client, url = _client(tmp_path / "t.db")
+    _run(
+        _seed_run(
+            url,
+            key="a",
+            issue_num=7,
+            workflow_id="qa",
+            agent="claude",
+            pr_num=314,
+            issue_title="Add OAuth flow",
+        )
+    )
+    items = client.get("/api/v1/runs", headers=auth_headers()).json()["items"]
+    assert len(items) == 1
+    row = items[0]
+    assert row["issue_num"] == 7
+    assert row["issue_title"] == "Add OAuth flow"
+    assert row["pr_num"] == 314
+
+
+async def _seed_repo_only_run(url: str) -> None:
+    """Seed a run with no linked issue (issue_num NULL) — a repo-only ad-hoc run."""
+    repository = Repository(url)
+    await repository.start()
+    try:
+        run_id, _won = await repository.claim_run(
+            idempotency_key="repo-only",
+            repo="o/r",
+            issue_num=None,
+            workflow_id="dev",
+            agent="claude",
+            model="claude-sonnet-4-6",
+            branch="dkmv/adhoc",
+            feature_name="adhoc",
+        )
+        await repository.update_run_fields(run_id, status="completed")
+    finally:
+        await repository.close()
+
+
+def test_summary_issue_title_null_for_repo_only_run(tmp_path: Path) -> None:
+    """A run with no issue (issue_num NULL) carries ``issue_title``/``pr_num`` as null."""
+    client, url = _client(tmp_path / "t.db")
+    _run(_seed_repo_only_run(url))
+    items = client.get("/api/v1/runs", headers=auth_headers()).json()["items"]
+    assert len(items) == 1
+    row = items[0]
+    assert row["issue_num"] is None
+    assert row["issue_title"] is None
+    assert row["pr_num"] is None
 
 
 # ── AC-1: cursor pagination ───────────────────────────────────────────────────

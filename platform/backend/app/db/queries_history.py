@@ -116,15 +116,27 @@ async def list_runs_filtered(
     where: list[str] = []
     params: list[Any] = []
     if repo is not None:
-        where.append("repo = ?")
+        where.append("r.repo = ?")
         params.append(repo)
     for column, value in filters.items():
-        where.append(f"{column} = ?")
+        where.append(f"r.{column} = ?")
         params.append(value)
-    sql = "SELECT * FROM runs"
+    # Fold the issue-title lookup into the page query as a single LEFT JOIN on the
+    # ``issues`` cache (keyed on (repo, num) — the issues PK) so the FR-06-4
+    # "Issue (#num title)" column has its title in the **same** read as the page —
+    # NO per-row ``read_issue`` (no N+1). ``r.*`` keeps every existing run column
+    # (cost projection / config / pr_num) so the summary projection is unchanged
+    # apart from the added ``issue_title``. The join is title-only and LEFT (a run
+    # whose issue is not yet cached still returns, with a NULL title that degrades
+    # to "" in the projection).
+    sql = (
+        "SELECT r.*, i.title AS issue_title "
+        "FROM runs r "
+        "LEFT JOIN issues i ON i.repo = r.repo AND i.num = r.issue_num"
+    )
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?"
+    sql += " ORDER BY r.started_at DESC, r.id DESC LIMIT ? OFFSET ?"
     params.extend((limit, offset))
     async with repository.read_connection() as conn:
         rows = await conn.execute_fetchall(sql, params)  # noqa: S608 — columns are literals; values bound
