@@ -38,6 +38,7 @@ from app.db import Repository
 from app.github.provider import aclose_github_client, build_pat_github_client
 from app.github.write_queue import DEFAULT_DRAIN_GRACE_SECONDS, WriteQueue
 from app.hitl import ConcurrencySlots, DecisionRegistry
+from app.orchestrator.tick import OrchestratorHandle, start_orchestrator
 from app.runtime import RunService
 from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
 from app.security import AccessControlMiddleware
@@ -61,6 +62,30 @@ async def _cancel_stream_tasks(tasks: set[asyncio.Task[Any]]) -> None:
     for task in pending:
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
+
+
+async def _resolve_orchestrator_repo(repository: Repository) -> str | None:
+    """Resolve the connected project's repo for the tick loop, or ``None`` (slice 3.3).
+
+    The orchestrator polls **one** project's board (v1 connects a single project,
+    §8.8). The repo is resolved from the first ``projects`` row through the
+    repository's public WAL read seam (INV-6 — no second connection, no write). When
+    no project is connected yet (a fresh install before ``POST /connect``), this
+    returns ``None`` and the lifespan skips starting the loop — there is nothing to
+    poll; the loop is started on the next boot once a project exists. A read failure
+    (e.g. a partially-migrated DB) is swallowed to ``None`` so a boot is never wedged
+    by orchestrator startup.
+    """
+    try:
+        async with repository.read_connection() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT repo FROM projects ORDER BY created_at LIMIT 1"
+            )
+    except Exception:  # noqa: BLE001 - never wedge boot on orchestrator repo resolution
+        _log.warning("orchestrator repo resolution failed; tick loop not started", exc_info=True)
+        return None
+    row = next(iter(rows), None)
+    return str(row["repo"]) if row is not None else None
 
 
 def _build_secret_store(repository: Repository, settings: Settings) -> SecretStore:
@@ -145,9 +170,27 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     if getattr(app.state, RUN_STREAM_TASKS_ATTR, None) is None:
         setattr(app.state, RUN_STREAM_TASKS_ATTR, set())
 
+    # The in-process orchestrator tick loop (slice 3.3 / §8.2 — AC-10). Started as
+    # a tracked asyncio.Task on the serving loop ONCE a project repo is known
+    # (resolved from the connected ``projects`` row), and cancelled on shutdown.
+    # It reconciles running runs (stall / authority-rule labels / orphan sweep),
+    # polls candidate ``agent:queued`` issues, and dispatches through the EXISTING
+    # ``launch_run`` boundary (ADR-P001 — no second launch path). Skipped when no
+    # project is connected yet (nothing to poll); the loop is also driven directly
+    # in tests via ``run_tick`` without entering the lifespan.
+    app.state.orchestrator = None
+    orchestrator_repo = await _resolve_orchestrator_repo(repository)
+    if orchestrator_repo is not None:
+        app.state.orchestrator = start_orchestrator(app, orchestrator_repo)
+
     try:
         yield
     finally:
+        # Stop + cancel + await the tick loop first so it stops dispatching new
+        # runs and reconciling before the singletons it depends on are torn down.
+        orchestrator = getattr(app.state, "orchestrator", None)
+        if isinstance(orchestrator, OrchestratorHandle):
+            await orchestrator.shutdown()
         # Cancel any in-flight per-run pump/supervisor tasks (slice 2.3 / FIX-1) so
         # a draining process doesn't leak a pump blocked on its hub. This is the
         # graceful-shutdown path; orphan-container recovery on a HARD crash is
