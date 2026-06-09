@@ -63,10 +63,10 @@ def start_of_utc_day(now: datetime | None = None) -> str:
 async def _repository(request: Request) -> AsyncIterator[Repository]:
     """Yield the platform :class:`Repository` for this request (INV-6 writer).
 
-    Mirrors :func:`app.api.issues._repository`: reuse an injected, lifespan-owned
-    Repository when present (Phase-2 wiring / a test) and do not close it; else
-    build + ``start()`` one scoped to **this request** on the serving event loop
-    and ``close()`` it on exit (the single-writer contract stays loop-correct).
+    Mirrors :func:`app.api.issues._repository`: reuse the lifespan-owned
+    ``app.state.repository`` (slice 2.0 — the single per-process writer task) and
+    do not close it; **as a test fallback only** (no lifespan) build + ``start()``
+    one scoped to this request on the serving loop and ``close()`` it on exit.
     """
     injected = getattr(request.app.state, _REPO_ATTR, None)
     if injected is not None:

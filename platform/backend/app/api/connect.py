@@ -122,20 +122,21 @@ def _validate_pat_shape(token: str) -> None:
 
 
 def _get_secret_store(request: Request) -> SecretStore:
-    """Return the app's :class:`SecretStore`, lazily building one if unset.
+    """Return the single lifespan-owned :class:`SecretStore` from ``app.state``.
 
-    Phase 0 wires the store's dependencies (the encrypted ``secrets`` table) but
-    does not yet attach a :class:`SecretStore` to ``app.state`` (that happens
-    when the DB lifecycle is composed in Phase 2). To keep this slice
-    self-contained and testable, we read ``app.state.secret_store`` when present
-    and otherwise construct an in-process store from the host key in
-    ``DKMV_SECRET_KEY`` (or a generated dev key), caching it on ``app.state`` so
-    repeated connects reuse the same instance. The store always encrypts at rest
-    (INV-4); only the *persistence backend* (DB vs. in-memory) varies.
+    The app-lifespan (slice 2.0) composes exactly ONE :class:`SecretStore` on
+    ``app.state.secret_store`` at startup (real host key, persisted through the
+    shared :class:`Repository` — INV-4), so this handler **reuses** it rather than
+    building an ephemeral per-request store. As a *test fallback only* (a
+    :class:`~fastapi.testclient.TestClient` that did not enter the lifespan), it
+    builds an in-memory store from the env/dev key once and caches it on
+    ``app.state`` — the store always encrypts at rest (INV-4); only the
+    persistence backend (DB vs. in-memory) varies.
     """
     existing: SecretStore | None = getattr(request.app.state, "secret_store", None)
     if existing is not None:
         return existing
+    # Test-only fallback: no lifespan ran, so build a store on the dev key once.
     settings: Settings = request.app.state.settings
     repository = getattr(request.app.state, "repository", None)
     store = SecretStore(repository, key=_resolve_secret_key(settings))
@@ -144,11 +145,12 @@ def _get_secret_store(request: Request) -> SecretStore:
 
 
 def _resolve_secret_key(settings: Settings) -> str:
-    """Resolve the Fernet host key for the store (env key, else a dev key).
+    """Resolve the Fernet host key for the test-fallback store (env key, else dev key).
 
-    In prod ``DKMV_SECRET_KEY`` comes from the OS keychain / sealed secret
-    (§8.6). When unset (dev / tests) a fresh key is generated so encryption is
-    never silently disabled — the PAT is *always* stored as ciphertext.
+    In prod the lifespan-owned store is used and this is never reached; only the
+    no-lifespan test fallback resolves a key here. ``DKMV_SECRET_KEY`` (prod: OS
+    keychain / sealed secret, §8.6) wins; otherwise a generated dev key is cached
+    on ``settings`` so encryption is never silently disabled (INV-4).
     """
     import os
 

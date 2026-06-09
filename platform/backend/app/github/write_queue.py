@@ -240,6 +240,34 @@ class WriteQueue:
         if self._worker is None or self._worker.done():
             self._worker = asyncio.ensure_future(self._run())
 
+    async def stop(self) -> None:
+        """Cancel the drain worker for a clean app shutdown (slice 2.0 lifespan).
+
+        Cancels the single FIFO worker (if running) and cancels any still-pending
+        job futures so a caller awaiting ``submit`` does not hang past shutdown.
+        Idempotent: a queue that never spawned a worker (no ``submit`` yet) is a
+        no-op. After ``stop`` a fresh ``submit`` re-spawns a worker on the live
+        loop (the worker already exits when idle), so this is teardown, not a
+        permanent close.
+        """
+        worker = self._worker
+        if worker is not None and not worker.done():
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+        self._worker = None
+        # Fail any jobs still queued so their awaiting ``submit`` calls unblock.
+        while not self._queue.empty():
+            try:
+                job = self._queue.get_nowait()
+            except asyncio.QueueEmpty:  # pragma: no cover - race-safe guard
+                break
+            if not job.future.done():
+                job.future.cancel()
+            self._queue.task_done()
+
     async def submit[T](self, factory: Callable[[], Awaitable[T]], *, label: str = "mutation") -> T:
         """Enqueue a mutating call; await its result (serialized + paced).
 

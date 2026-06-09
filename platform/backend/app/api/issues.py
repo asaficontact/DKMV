@@ -72,18 +72,17 @@ def _board_cache(request: Request) -> HashCache[BoardPage]:
 async def _repository(request: Request) -> AsyncIterator[Repository]:
     """Yield the platform :class:`Repository` for this request (INV-6 writer).
 
-    Phase 0 left the DB lifecycle out of ``app.main`` (a Phase-2 lifespan task —
-    see the TODO in ``app.main``), so there is not yet a long-lived, app-loop-bound
-    writer task to reuse. Resolution:
+    The app-lifespan (slice 2.0) composes ONE long-lived, app-loop-bound
+    :class:`Repository` on ``app.state.repository`` (the single writer task per
+    process, INV-6), so the serving path **reuses** it. Resolution:
 
-    * if ``app.state.repository`` is injected (Phase-2 lifespan wiring, or a test),
-      use it as-is and do **not** close it — its owner manages its lifecycle;
-    * otherwise build + ``start()`` a Repository from ``settings.DATABASE_URL``
-      scoped to **this request** and ``close()`` it on exit. The writer task is
-      thus created and torn down on the same event loop that serves the request,
-      which is what keeps the single-writer contract correct here (a cached
-      cross-request writer would be bound to a stale loop). Phase 2 replaces this
-      with one lifespan-scoped Repository.
+    * if ``app.state.repository`` is present (the lifespan wiring, or a test that
+      injected one), use it as-is and do **not** close it — its owner (the
+      lifespan) manages its lifecycle;
+    * **test fallback only** (a ``TestClient`` that did not enter the lifespan):
+      build + ``start()`` a Repository scoped to this request and ``close()`` it
+      on exit, so the writer task is created and torn down on the serving loop
+      (a cached cross-request writer would be bound to a stale loop).
     """
     injected = getattr(request.app.state, _REPO_ATTR, None)
     if injected is not None:

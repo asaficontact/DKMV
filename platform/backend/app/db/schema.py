@@ -119,6 +119,11 @@ runs = Table(
     Index("ix_runs_status_started_at", "status", "started_at"),
     # issue → runs lookup
     Index("ix_runs_issue_num", "issue_num"),
+    # active-runs-per-repo (authority rule, §8.1): index-backs
+    # Repository.read_active_runs / board_aggregate's WHERE repo=? AND status IN (…)
+    # so the per-poll board read does not table-scan runs (added in migration
+    # 75c6c8e45770).
+    Index("ix_runs_repo_status", "repo", "status"),
 )
 
 # --- run_stages (mutable read model) ------------------------------------------

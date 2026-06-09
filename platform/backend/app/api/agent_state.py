@@ -104,11 +104,13 @@ def _board_cache(request: Request) -> HashCache[BoardPage]:
 
 
 def _write_queue(request: Request) -> WriteQueue:
-    """Return (building+caching once) the single process-wide GitHub write-queue.
+    """Return the single process-wide GitHub write-queue from ``app.state``.
 
-    All mutating GitHub calls route through this one serialized, token-bucket-paced
-    queue (§8.1, INV-11), so it is a singleton on ``app.state``. Tests may inject
-    their own via ``app.state.github_write_queue`` before the first request.
+    The app-lifespan (slice 2.0) composes ONE serialized, token-bucket-paced
+    :class:`WriteQueue` on ``app.state.github_write_queue`` (§8.1, INV-11) every
+    mutating GitHub call shares, and drains it on shutdown. The serving path
+    reuses it; **as a test fallback only** (no lifespan) a queue is built and
+    cached on first use. Tests may also inject their own before the first request.
     """
     existing = getattr(request.app.state, _WRITE_QUEUE_ATTR, None)
     if existing is not None:
@@ -123,11 +125,10 @@ def _write_queue(request: Request) -> WriteQueue:
 async def _repository(request: Request) -> AsyncIterator[Repository]:
     """Yield the platform :class:`Repository` for this request (INV-6 writer).
 
-    Mirrors :mod:`app.api.issues`: reuse an injected ``app.state.repository``
-    (Phase-2 lifespan / a test) without closing it, else build + ``start()`` a
-    request-scoped Repository from ``settings.DATABASE_URL`` on the serving loop and
-    ``close()`` it on exit (keeping the single-writer contract correct here until
-    Phase 2's lifespan-scoped writer lands).
+    Mirrors :mod:`app.api.issues`: reuse the lifespan-owned ``app.state.repository``
+    (slice 2.0 — the single per-process writer task, INV-6) without closing it;
+    **as a test fallback only** (no lifespan), build + ``start()`` a request-scoped
+    Repository on the serving loop and ``close()`` it on exit.
     """
     injected = getattr(request.app.state, _REPO_ATTR, None)
     if injected is not None:
