@@ -1,0 +1,356 @@
+/*
+ * Screen 07 — Workflows viewer (read-only) styles (F12 / §7.2, §7).
+ * Built to the Screen F read-only subset: a level-1 list rail + a detail column
+ * (pipeline summary + the read-only "compiles to YAML" peek). Tokens only — every
+ * color is a CSS variable ported into tokens.css (no hex here — INV-14). Type /
+ * radii / motion come from the ported tokens; numerics use `.mono` (tnum).
+ */
+
+.workflows-screen {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  gap: 18px;
+  padding: 22px 26px 30px;
+  align-items: start;
+  min-height: 0;
+}
+
+/* ── level-1 list ─────────────────────────────────────────────────────────── */
+
+.workflows-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workflow-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.14s var(--ease), background 0.14s var(--ease);
+}
+
+.workflow-row:hover {
+  border-color: var(--border-2);
+  background: var(--surface-2);
+}
+
+.workflow-row.is-active {
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+}
+
+.workflow-row-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.workflow-row-emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.workflow-row-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.workflow-row-pauses {
+  margin-left: auto;
+  gap: 4px;
+  color: var(--st-paused);
+  background: color-mix(in oklab, var(--st-paused) 16%, transparent);
+}
+
+.workflow-row-purpose {
+  line-height: 1.4;
+}
+
+.workflow-row-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-3);
+}
+
+.workflow-row-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workflow-row-step-name {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+/* ── detail column ────────────────────────────────────────────────────────── */
+
+.workflows-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-radius: var(--r-xl);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 20px 22px;
+  box-shadow: var(--shadow-sm);
+}
+
+.workflows-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workflows-detail-emoji {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.workflows-detail-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workflows-detail-name {
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--text);
+}
+
+.workflows-custom-badge {
+  margin-left: auto;
+}
+
+.workflows-detail-empty,
+.workflows-yaml-loading {
+  padding: 8px 0;
+}
+
+/* ── pipeline summary rail ────────────────────────────────────────────────── */
+
+.pipeline-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pipeline-summary-title {
+  letter-spacing: 0.04em;
+}
+
+.pipeline-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pipeline-stage {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.pipeline-stage-num {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-fg);
+  background: var(--accent);
+}
+
+.pipeline-stage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.pipeline-stage-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.pipeline-stage-desc {
+  line-height: 1.35;
+}
+
+.pipeline-stage-pause {
+  align-self: flex-start;
+  gap: 4px;
+  color: var(--st-paused);
+  background: color-mix(in oklab, var(--st-paused) 16%, transparent);
+}
+
+.pipeline-stage-budget {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  padding-top: 2px;
+}
+
+.pipeline-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 2px 0 0;
+}
+
+.pipeline-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.pipeline-stat dt {
+  letter-spacing: 0.03em;
+}
+
+.pipeline-stat dd {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ── read-only YAML peek ──────────────────────────────────────────────────── */
+
+.yaml-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.yaml-view-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.yaml-view-title {
+  letter-spacing: 0.04em;
+}
+
+.yaml-readonly-badge {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.yaml-authoring-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 13px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.yaml-authoring-note svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.yaml-docs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.yaml-doc {
+  margin: 0;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.yaml-doc-name {
+  display: block;
+  padding: 8px 13px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+
+.yaml-code {
+  margin: 0;
+  padding: 13px 15px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 320px;
+}
+
+.yaml-empty {
+  padding: 8px 0;
+}
+
+/* ── states ───────────────────────────────────────────────────────────────── */
+
+.workflows-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 80px 26px;
+  text-align: center;
+  color: var(--text-3);
+}
+
+.workflows-state-title {
+  margin: 4px 0 0;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.workflows-loading-bar {
+  width: 200px;
+}
+
+@media (max-width: 900px) {
+  .workflows-screen {
+    grid-template-columns: 1fr;
+  }
+}

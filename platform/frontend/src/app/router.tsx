@@ -24,6 +24,7 @@ import History from "../screens/History";
 import IssueDetail from "../screens/IssueDetail";
 import LiveRun from "../screens/LiveRun";
 import RunDetail from "../screens/RunDetail";
+import Workflows from "../screens/Workflows";
 import { initTheme } from "./theme";
 
 // Apply the persisted (or default dark/indigo) theme before the first render.
@@ -120,6 +121,19 @@ function HistoryRoute() {
 }
 
 /**
+ * Workflows viewer route (Screen 07, slice 4.2). Read-only — lists built-in +
+ * registered components with a pipeline summary + the read-only YAML peek. The
+ * connected repo slug rides `?repo=` (scopes the chrome only — the workflow list
+ * itself is project-wide). A direct visit with no `?repo=` still renders the
+ * viewer (the components resolve independent of the connected repo).
+ */
+function WorkflowsRoute() {
+  const [params] = useSearchParams();
+  const repo = params.get("repo") ?? "";
+  return <Workflows repoSlug={repo} />;
+}
+
+/**
  * Read-only finished-run route (slice 3.2). The platform UUID rides the path
  * (`/runs/:id/detail`); the repo slug rides `?repo=` (chrome + PR link), falling
  * back to the run's own `repo`. Distinct from the live `/runs/:id` view (2.4): this
@@ -151,6 +165,7 @@ export default function AppRouter() {
       <Route path="/runs" element={<HistoryRoute />} />
       <Route path="/runs/:id" element={<LiveRunRoute />} />
       <Route path="/runs/:id/detail" element={<RunDetailRoute />} />
+      <Route path="/workflows" element={<WorkflowsRoute />} />
       <Route path="*" element={<Navigate to="/connect" replace />} />
     </Routes>
   );

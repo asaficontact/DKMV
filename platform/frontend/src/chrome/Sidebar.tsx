@@ -8,9 +8,9 @@
  *
  * **Route-aware nav (3.2 — the recorded 2.4 nit).** The current screen is passed
  * as `activeNav`; the matching nav item highlights (`is-active` + `aria-current`).
- * **Board** and (now, Phase 3) **Runs** are live nav targets — clicking navigates
- * via the router (carrying the connected `?repo=` so the chrome stays scoped).
- * **Workflows / Settings** remain disabled placeholders (Phase 4 / later screens).
+ * **Board**, **Runs** (Phase 3), and **Workflows** (Phase 4) are live nav targets —
+ * clicking navigates via the router (carrying the connected `?repo=` so the chrome
+ * stays scoped). **Settings** remains a disabled placeholder (a later screen).
  * The chip is **poll-driven** (AC-20) — it reads the aggregate the parent polls.
  */
 import { useInRouterContext, useNavigate } from "react-router-dom";
@@ -43,7 +43,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: "board", label: "Board", Icon: BoardIcon, enabled: true },
   { id: "runs", label: "Runs", Icon: RunsIcon, enabled: true },
-  { id: "workflows", label: "Workflows", Icon: FlowIcon, enabled: false },
+  { id: "workflows", label: "Workflows", Icon: FlowIcon, enabled: true },
   { id: "settings", label: "Settings", Icon: SettingsIcon, enabled: false },
 ];
 
@@ -130,6 +130,7 @@ function RouterNav({ repoSlug, activeNav }: { repoSlug: string; activeNav: NavId
   const go = (id: NavId) => {
     if (id === "board") navigate(`/board${repoQuery}`);
     else if (id === "runs") navigate(`/runs${repoQuery}`);
+    else if (id === "workflows") navigate(`/workflows${repoQuery}`);
   };
   return <NavList activeNav={activeNav} go={go} />;
 }
