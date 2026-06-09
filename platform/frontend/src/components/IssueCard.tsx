@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { BoardIssue } from "../api/board";
-import { isDraggableColumn } from "./board-model";
+import { isCostExcludedAgent, isDraggableColumn } from "./board-model";
 import { AgentChip, Avatar, GhLabel, WfChip } from "./chips";
 import { DotsIcon, ExtIcon, FlowIcon, PlayIcon, StopIcon } from "./icons";
 
@@ -107,7 +107,7 @@ function LiveMiniMeter({ issue }: { issue: BoardIssue }) {
   const cost = issue.live_cost;
   const progress = Math.max(0, Math.min(1, issue.progress ?? 0));
   // Codex reports $0 cost → render "—" not "$0.00" (INV-8 / FR-06-1a).
-  const isCodex = (issue.agent ?? "").toLowerCase() === "codex";
+  const isCodex = isCostExcludedAgent(issue.agent);
   const costText = isCodex || cost == null ? "—" : `$${cost.toFixed(2)}`;
   return (
     <div className="mini-meter">

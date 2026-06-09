@@ -42,3 +42,19 @@ export function groupByColumn(issues: readonly BoardIssue[]): Map<BoardState, Bo
 export function isDraggableColumn(state: BoardState): boolean {
   return state === "backlog" || state === "queued";
 }
+
+/**
+ * The single agent name whose runs are **excluded from the spend figure**
+ * (INV-8 / FR-06-1a): Codex reports $0 cost, so its runs contribute $0 to the
+ * In-Progress live-cost header / `spent_today` and render "—" instead of a
+ * dollar figure (their tokens still count). Single-sourced here (mirrors the
+ * backend's `COST_EXCLUDED_AGENT`) so the literal isn't duplicated across the
+ * Board header, the card mini-meter, and (Phase 2/3) the run header + history
+ * spend columns.
+ */
+export const COST_EXCLUDED_AGENT = "codex";
+
+/** Whether `agent` is the cost-excluded agent (INV-8). Case/space-insensitive. */
+export function isCostExcludedAgent(agent: string | null | undefined): boolean {
+  return (agent ?? "").trim().toLowerCase() === COST_EXCLUDED_AGENT;
+}

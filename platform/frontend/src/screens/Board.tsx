@@ -27,7 +27,7 @@ import {
   listBoardIssues,
   setAgentState,
 } from "../api/board";
-import { COLUMNS, groupByColumn } from "../components/board-model";
+import { COLUMNS, groupByColumn, isCostExcludedAgent } from "../components/board-model";
 import AggregateStrip from "../components/AggregateStrip";
 import FilterBar, { applyFilters, EMPTY_FILTERS, type BoardFilters } from "../components/FilterBar";
 import IssueCard from "../components/IssueCard";
@@ -209,7 +209,7 @@ export default function Board({ repoSlug }: BoardProps) {
 function sumLiveCost(cards: readonly BoardIssue[]): number {
   return cards.reduce((acc, c) => {
     // Codex contributes $0 to the spend figure (INV-8 / FR-06-1a).
-    if ((c.agent ?? "").toLowerCase() === "codex") return acc;
+    if (isCostExcludedAgent(c.agent)) return acc;
     return acc + (c.live_cost ?? 0);
   }, 0);
 }
