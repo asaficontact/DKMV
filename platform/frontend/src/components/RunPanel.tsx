@@ -33,6 +33,7 @@ import {
   createRun,
 } from "../api/runs";
 import { BranchIcon, ChevRightIcon, CoinIcon, PlayIcon, SparkleIcon } from "./icons";
+import RunGuardrails from "./RunGuardrails";
 import WorkflowPicker, { formatBudget } from "./WorkflowPicker";
 
 /** The agent choices in the segmented control (FR-03-2). */
@@ -287,44 +288,18 @@ export default function RunPanel({
           </button>
           {advanced && (
             <div className="advanced-grid fade-in">
-              {/* INV-8: Max budget + Max turns are Claude-only — hidden for Codex. */}
-              {!isCodex && (
-                <>
-                  <MiniField label="Max budget ($)">
-                    <input
-                      className="input mono"
-                      aria-label="Max budget"
-                      inputMode="decimal"
-                      placeholder={budgetLabel ? budgetLabel.replace(/[~$]/g, "") : ""}
-                      value={maxBudget}
-                      onChange={(e) => setMaxBudget(e.target.value)}
-                    />
-                  </MiniField>
-                  <MiniField label="Max turns">
-                    <input
-                      className="input mono"
-                      aria-label="Max turns"
-                      inputMode="numeric"
-                      value={maxTurns}
-                      onChange={(e) => setMaxTurns(e.target.value)}
-                    />
-                  </MiniField>
-                </>
-              )}
-              {isCodex && (
-                <p className="cap advanced-codex-note" data-testid="codex-time-bounded">
-                  Codex runs are time-bounded, not cost-bounded.
-                </p>
-              )}
-              <MiniField label="Timeout (min)">
-                <input
-                  className="input mono"
-                  aria-label="Timeout in minutes"
-                  inputMode="numeric"
-                  value={timeout}
-                  onChange={(e) => setTimeout(e.target.value)}
-                />
-              </MiniField>
+              {/* INV-8: capability-aware cost guardrails (budget/turns Claude-only;
+                  Codex shows "time-bounded, not cost-bounded"). Timeout always shown. */}
+              <RunGuardrails
+                isCodex={isCodex}
+                maxBudget={maxBudget}
+                onMaxBudgetChange={setMaxBudget}
+                budgetPlaceholder={budgetLabel ? budgetLabel.replace(/[~$]/g, "") : ""}
+                maxTurns={maxTurns}
+                onMaxTurnsChange={setMaxTurns}
+                timeout={timeout}
+                onTimeoutChange={setTimeout}
+              />
               <MiniField label="Memory">
                 <input
                   className="input mono"

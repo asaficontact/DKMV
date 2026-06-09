@@ -100,6 +100,20 @@ def build_retry_scheduler(app: Starlette) -> RetryScheduler:
         branch = str(row.get("branch") or "")
         default_feature = f"issue-{issue_num}" if issue_num else "retry"
         feature_name = str(row.get("feature_name") or default_feature)
+        # Re-populate the original cost-governance caps from the stored ``runs``
+        # row (FIX-5.2 / INV-8). The launch path persisted ``max_budget_usd`` /
+        # ``max_turns`` / ``timeout_minutes`` at ``claim_run`` (the §8.9 config
+        # block source); a retry MUST carry them forward so a RETRIED Claude run
+        # keeps the SAME hard budget/turn cap its first dispatch enforced — without
+        # this the row's enforced caps were silently dropped and the retry ran with
+        # only the default timeout (a cost-governance escape). The capability layer
+        # still runs inside ``launch_run``: ``resolve_enforced_caps`` force-drops
+        # budget/turns to ``None`` for a Codex agent, so threading them here is safe
+        # for Codex (no smuggle on retry) and correct for Claude (caps preserved) —
+        # a retry is equivalent to the first dispatch.
+        stored_max_budget_usd = row.get("max_budget_usd")
+        stored_max_turns = row.get("max_turns")
+        stored_timeout_minutes = row.get("timeout_minutes")
         req = LaunchRequest(
             issue_num=int(issue_num) if issue_num is not None else 0,
             repo=repo,
@@ -108,6 +122,13 @@ def build_retry_scheduler(app: Starlette) -> RetryScheduler:
             branch=branch,
             feature_name=feature_name,
             model=row.get("model"),
+            max_turns=int(stored_max_turns) if stored_max_turns is not None else None,
+            timeout_minutes=(
+                int(stored_timeout_minutes) if stored_timeout_minutes is not None else None
+            ),
+            max_budget_usd=(
+                float(stored_max_budget_usd) if stored_max_budget_usd is not None else None
+            ),
             memory=row.get("memory_limit") or DEFAULT_MEMORY,
             start_task=start_task,
         )

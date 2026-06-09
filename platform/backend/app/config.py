@@ -25,6 +25,34 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# --- Capability-aware default run timeouts (5.2 / ADR-P009, NFR-COST-1, §7.2) ---
+#
+# For Codex (``supports_budget``/``supports_max_turns`` both false) the
+# ``timeout_minutes`` is the **only** runtime guardrail (ADR-P009) — there is no
+# budget or turn cap to stop a runaway run, so the Codex default timeout is
+# **strictly tighter** than the Claude default. The Phase-2 prototype's per-
+# workflow timeouts (``dev=40``/``docs=20``, §7.2) are the *Claude-style*
+# defaults; §7.2 footnote 3 says a Codex workflow defaults to a tighter bound
+# because timeout is its sole guardrail. These are the fallbacks applied at
+# launch when the operator pins no explicit ``timeout_minutes`` — never an
+# override of an explicit value.
+#
+# INV-8 binding: the gap (``CLAUDE_DEFAULT_TIMEOUT_MINUTES`` >
+# ``CODEX_DEFAULT_TIMEOUT_MINUTES``) is asserted by ``test_cost_governance`` —
+# Codex MUST be strictly tighter. Keep this invariant if either value changes.
+
+#: Default ``timeout_minutes`` for a Claude (capable) run when none is supplied.
+CLAUDE_DEFAULT_TIMEOUT_MINUTES = 40
+
+#: Default ``timeout_minutes`` for a Codex (timeout-only) run when none is
+#: supplied — **strictly tighter** than the Claude default (ADR-P009 / §7.2 fn3).
+CODEX_DEFAULT_TIMEOUT_MINUTES = 20
+
+assert CODEX_DEFAULT_TIMEOUT_MINUTES < CLAUDE_DEFAULT_TIMEOUT_MINUTES, (
+    "INV-8/ADR-P009: the Codex default timeout must be strictly tighter than the "
+    "Claude default (timeout is Codex's only runtime guardrail)."
+)
+
 
 class Settings(BaseSettings):
     """Typed view over the consolidated PRD §8.8 config/env surface.
@@ -242,6 +270,24 @@ class Settings(BaseSettings):
             if host:
                 seen[host] = None
         return list(seen)
+
+
+def default_timeout_minutes(agent: str) -> int:
+    """The capability-aware fallback ``timeout_minutes`` for *agent* (ADR-P009).
+
+    Returns the **strictly tighter** :data:`CODEX_DEFAULT_TIMEOUT_MINUTES` for a
+    Codex (timeout-only) agent and :data:`CLAUDE_DEFAULT_TIMEOUT_MINUTES` for any
+    capable agent (Claude). Applied at launch *only* when the operator pins no
+    explicit ``timeout_minutes`` — it never overrides an explicit value (§8.10).
+    Codex is the only agent whose ``supports_budget``/``supports_max_turns`` are
+    both false, so timeout is its sole runtime guardrail; the tighter default is
+    the §7.2-footnote-3 mitigation for a runaway, budget-less Codex run.
+    """
+    return (
+        CODEX_DEFAULT_TIMEOUT_MINUTES
+        if agent.strip().lower() == "codex"
+        else CLAUDE_DEFAULT_TIMEOUT_MINUTES
+    )
 
 
 @lru_cache(maxsize=1)
