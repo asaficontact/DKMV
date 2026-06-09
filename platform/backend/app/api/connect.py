@@ -27,16 +27,11 @@ the live token→GitHub validation + repo-scope/write-permission probe is 1.1's
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, SecretStr
 
+from app.api.deps import get_secret_store
 from app.api.errors import validation_error
-from app.secrets import SecretStore
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from app.config import Settings
 
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
 # router in :mod:`app.api`, which this router attaches to.
@@ -121,49 +116,6 @@ def _validate_pat_shape(token: str) -> None:
         )
 
 
-def _get_secret_store(request: Request) -> SecretStore:
-    """Return the app's :class:`SecretStore`, lazily building one if unset.
-
-    Phase 0 wires the store's dependencies (the encrypted ``secrets`` table) but
-    does not yet attach a :class:`SecretStore` to ``app.state`` (that happens
-    when the DB lifecycle is composed in Phase 2). To keep this slice
-    self-contained and testable, we read ``app.state.secret_store`` when present
-    and otherwise construct an in-process store from the host key in
-    ``DKMV_SECRET_KEY`` (or a generated dev key), caching it on ``app.state`` so
-    repeated connects reuse the same instance. The store always encrypts at rest
-    (INV-4); only the *persistence backend* (DB vs. in-memory) varies.
-    """
-    existing: SecretStore | None = getattr(request.app.state, "secret_store", None)
-    if existing is not None:
-        return existing
-    settings: Settings = request.app.state.settings
-    repository = getattr(request.app.state, "repository", None)
-    store = SecretStore(repository, key=_resolve_secret_key(settings))
-    request.app.state.secret_store = store
-    return store
-
-
-def _resolve_secret_key(settings: Settings) -> str:
-    """Resolve the Fernet host key for the store (env key, else a dev key).
-
-    In prod ``DKMV_SECRET_KEY`` comes from the OS keychain / sealed secret
-    (§8.6). When unset (dev / tests) a fresh key is generated so encryption is
-    never silently disabled — the PAT is *always* stored as ciphertext.
-    """
-    import os
-
-    env_key = os.environ.get("DKMV_SECRET_KEY")
-    if env_key:
-        return env_key
-    # Cache a generated dev key on settings so the same process reuses it (a new
-    # key per call would make stored ciphertext undecryptable on read-back).
-    cached: str | None = getattr(settings, "_dkmv_dev_secret_key", None)
-    if cached is None:
-        cached = SecretStore.generate_key()
-        object.__setattr__(settings, "_dkmv_dev_secret_key", cached)
-    return cached
-
-
 @router.post("/connect/github", response_model=ConnectGitHubResponse)
 async def connect_github(body: ConnectGitHubRequest, request: Request) -> ConnectGitHubResponse:
     """Accept + persist the fine-grained GitHub PAT (FR-01-3, AC-10/AC-14).
@@ -176,7 +128,7 @@ async def connect_github(body: ConnectGitHubRequest, request: Request) -> Connec
     token = body.token.get_secret_value()
     _validate_pat_shape(token)
 
-    store = _get_secret_store(request)
+    store = get_secret_store(request)
     await store.put(GITHUB_PAT_KEY, token)
 
     return ConnectGitHubResponse(

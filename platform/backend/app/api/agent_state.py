@@ -29,34 +29,21 @@ with slice 1.2's read path.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
+from app.api.deps import get_board_cache, get_repository, get_write_queue
 from app.api.errors import ApiError, validation_error
 from app.db.repository import Repository
 from app.github.client import GitHubAuthError, GitHubError
-from app.github.graphql import BoardPage
-from app.github.hash_cache import HashCache
 from app.github.provider import get_github_client
 from app.github.state_machine import set_agent_state
-from app.github.write_queue import WriteQueue
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from app.config import Settings
 
 # No prefix here: the ``/api/v1`` version prefix is owned by the single parent
 # router in :mod:`app.api`, which this router attaches to.
 router = APIRouter(tags=["github"])
-
-#: ``app.state`` attribute names so concurrent slices agree on the seam (the cache
-#: name matches :mod:`app.api.issues` so the read + write share one hash-cache).
-_CACHE_ATTR = "github_hash_cache"
-_REPO_ATTR = "repository"
-_WRITE_QUEUE_ATTR = "github_write_queue"
 
 #: The only targets the Backlog↔Queued drag may post (FR-02-3): ``queued`` sets
 #: ``agent:queued`` (→ Queued); ``none`` clears it (→ Backlog). The other columns
@@ -86,61 +73,6 @@ class AgentStateResponse(BaseModel):
     #: The issue's full label set after the replace-all ``PUT`` (non-agent labels
     #: preserved), echoed from GitHub.
     labels: list[str]
-
-
-def _board_cache(request: Request) -> HashCache[BoardPage]:
-    """Return (building+caching once) the shared GraphQL board hash-cache (§8.1).
-
-    The same cache slice 1.2 reads through, so invalidating it here makes the next
-    board read reflect the label write (no stale page).
-    """
-    existing = getattr(request.app.state, _CACHE_ATTR, None)
-    if existing is not None:
-        assert isinstance(existing, HashCache)
-        return existing
-    cache: HashCache[BoardPage] = HashCache()
-    setattr(request.app.state, _CACHE_ATTR, cache)
-    return cache
-
-
-def _write_queue(request: Request) -> WriteQueue:
-    """Return (building+caching once) the single process-wide GitHub write-queue.
-
-    All mutating GitHub calls route through this one serialized, token-bucket-paced
-    queue (§8.1, INV-11), so it is a singleton on ``app.state``. Tests may inject
-    their own via ``app.state.github_write_queue`` before the first request.
-    """
-    existing = getattr(request.app.state, _WRITE_QUEUE_ATTR, None)
-    if existing is not None:
-        assert isinstance(existing, WriteQueue)
-        return existing
-    queue = WriteQueue()
-    setattr(request.app.state, _WRITE_QUEUE_ATTR, queue)
-    return queue
-
-
-@asynccontextmanager
-async def _repository(request: Request) -> AsyncIterator[Repository]:
-    """Yield the platform :class:`Repository` for this request (INV-6 writer).
-
-    Mirrors :mod:`app.api.issues`: reuse an injected ``app.state.repository``
-    (Phase-2 lifespan / a test) without closing it, else build + ``start()`` a
-    request-scoped Repository from ``settings.DATABASE_URL`` on the serving loop and
-    ``close()`` it on exit (keeping the single-writer contract correct here until
-    Phase 2's lifespan-scoped writer lands).
-    """
-    injected = getattr(request.app.state, _REPO_ATTR, None)
-    if injected is not None:
-        assert isinstance(injected, Repository)
-        yield injected
-        return
-    settings: Settings = request.app.state.settings
-    repository = Repository(settings.DATABASE_URL)
-    await repository.start()
-    try:
-        yield repository
-    finally:
-        await repository.close()
 
 
 def _map_github_error(exc: Exception) -> ApiError:
@@ -220,12 +152,12 @@ async def post_agent_state(
     repo = f"{owner}/{name}"
     settings = request.app.state.settings
     client = await get_github_client(request.app, settings)
-    cache = _board_cache(request)
-    queue = _write_queue(request)
+    cache = get_board_cache(request)
+    queue = get_write_queue(request)
     state_target: str | None = None if target == "none" else target
 
     try:
-        async with _repository(request) as repository:
+        async with get_repository(request) as repository:
             row = await _read_issue_row(repository, repo, num)
             current = _current_labels(row)
             result = await set_agent_state(

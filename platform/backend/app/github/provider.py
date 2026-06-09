@@ -47,6 +47,37 @@ def set_github_client(app: Starlette, client: GitHubClient) -> None:
     setattr(app.state, _CLIENT_ATTR, client)
 
 
+async def build_pat_github_client(store: SecretStore, settings: Settings) -> PatGitHubClient:
+    """Construct the cached :class:`PatGitHubClient` once (app-lifespan seam).
+
+    Built at app startup over the lifespan-owned encrypted :class:`SecretStore`
+    so the long-lived ``httpx.AsyncClient`` it owns is created **once** and is
+    ``aclose()``-d on shutdown (slice 2.0 lifespan), instead of being lazily
+    rebuilt per request. Seeds the dev-ingress ``GITHUB_TOKEN`` into the store
+    (idempotently, only if absent) so the token lives at rest as ciphertext, not
+    read from env ad hoc at call time (INV-4).
+    """
+    if await store.get(GITHUB_PAT_SECRET_KEY) is None:
+        dev_token = settings.GITHUB_TOKEN.get_secret_value()
+        if dev_token:
+            await store.put(GITHUB_PAT_SECRET_KEY, dev_token)
+    return PatGitHubClient(store)
+
+
+async def aclose_github_client(app: Starlette) -> None:
+    """Close the cached GitHub client's owned ``httpx.AsyncClient`` (lifespan).
+
+    Resolves the 1.1 ``aclose()`` seam (provider TODO): at app shutdown the
+    cached :class:`PatGitHubClient`'s long-lived HTTP client must be released so
+    no socket/file-descriptor leaks across restarts. A no-op when no client was
+    cached or it exposes no ``aclose`` (an injected test fake).
+    """
+    client = getattr(app.state, _CLIENT_ATTR, None)
+    aclose = getattr(client, "aclose", None)
+    if callable(aclose):
+        await aclose()
+
+
 def get_secret_store(app: Starlette, settings: Settings) -> SecretStore | None:
     """Return (building+caching once) the app's encrypted SecretStore, or None.
 

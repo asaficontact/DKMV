@@ -21,14 +21,93 @@ The container entrypoint reads ``Settings.DKMV_PLATFORM_BIND`` (default
 
 from __future__ import annotations
 
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api import api_router
+from app.api.deps import resolve_secret_key
 from app.api.errors import install_error_handlers
 from app.config import Settings, get_settings
+from app.db import Repository
+from app.github.provider import aclose_github_client, build_pat_github_client
+from app.github.write_queue import DEFAULT_DRAIN_GRACE_SECONDS, WriteQueue
 from app.runtime import RunService
-from app.secrets import Redactor, install_log_redaction
+from app.secrets import Redactor, SecretStore, SecretStoreError, install_log_redaction
 from app.security import AccessControlMiddleware
+
+_log = logging.getLogger(__name__)
+
+
+def _build_secret_store(repository: Repository, settings: Settings) -> SecretStore:
+    """Build the single lifespan-owned :class:`SecretStore` over the repository.
+
+    Persists ciphertext through the shared :class:`Repository` (the encrypted
+    ``secrets`` table) so the PAT survives restarts; falls back to an env key or
+    a generated dev key (:func:`app.api.deps.resolve_secret_key`) so encryption is
+    always on (INV-4). One store per process replaces the slice-1.4 lazy
+    per-request build.
+    """
+    try:
+        return SecretStore(repository, key=resolve_secret_key(settings))
+    except SecretStoreError:  # pragma: no cover - defensive; key is always resolvable
+        return SecretStore(repository, key=SecretStore.generate_key())
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Compose + tear down the process-wide singletons on ``app.state`` (slice 2.0).
+
+    On **startup**, build exactly ONE of each long-lived component on the serving
+    event loop so Phase 2's per-run SSE pump (2.3) writes through ONE shared
+    :class:`Repository` and the SQLite single-writer contract holds (INV-6 — one
+    writer task per process):
+
+    * ``app.state.repository`` — one :class:`Repository` seeded with
+      ``Redactor.from_settings`` so the **events** path scrubs the platform's own
+      concrete secret VALUES (not just shapes), the INV-4 backstop slice 0.5
+      deferred to here;
+    * ``app.state.secret_store`` — one encrypted :class:`SecretStore` (real host
+      key, not a per-request ephemeral one);
+    * ``app.state.github_client`` — the cached :class:`PatGitHubClient` (built
+      once unless a test already injected a client) whose owned ``httpx`` client
+      is ``aclose()``-d on shutdown (the 1.1 seam);
+    * ``app.state.github_write_queue`` — one serialized :class:`WriteQueue`
+      (INV-11) every mutating GitHub call shares.
+
+    On **shutdown**, tear them down cleanly (drain the write-queue, aclose the
+    GitHub client, close the Repository → stop the single writer task).
+    """
+    settings: Settings = app.state.settings
+
+    repository = Repository(settings.DATABASE_URL, redactor=Redactor.from_settings(settings))
+    await repository.start()
+    app.state.repository = repository
+
+    secret_store = _build_secret_store(repository, settings)
+    app.state.secret_store = secret_store
+
+    # Build the GitHub client once unless a test/connect already injected one.
+    if getattr(app.state, "github_client", None) is None:
+        app.state.github_client = await build_pat_github_client(secret_store, settings)
+
+    if getattr(app.state, "github_write_queue", None) is None:
+        app.state.github_write_queue = WriteQueue()
+
+    try:
+        yield
+    finally:
+        write_queue = getattr(app.state, "github_write_queue", None)
+        if isinstance(write_queue, WriteQueue):
+            # Graceful, BOUNDED drain (INV-11): flush any in-flight / queued
+            # ``agent:*`` label PUT so the GitHub label and the DB row stay
+            # consistent, but cancel any remainder after the grace window so a
+            # token-bucket-paced backlog cannot wedge shutdown forever.
+            await write_queue.stop(grace=DEFAULT_DRAIN_GRACE_SECONDS)
+        await aclose_github_client(app)
+        await repository.close()
 
 
 def create_app(
@@ -61,23 +140,17 @@ def create_app(
         title="DKMV Platform",
         version="0.1.0",
         description="Self-hostable control plane wrapping the DKMV engine.",
+        lifespan=_lifespan,
     )
     app.state.settings = settings
     app.state.run_service = run_service or RunService(settings)
 
-    # ── PHASE 2 LIFESPAN HANDOFF (events-path known-value backstop) ───────────
-    # TODO(Phase 2 lifespan): pass Redactor.from_settings(settings) into
-    # Repository(...) when the DB lifecycle is composed into the app lifespan
-    # here. Slice 0.3 deliberately kept the Repository OUT of main.py, so the
-    # events-path redactor is currently the Repository's pattern-only default
-    # Redactor() — correct, but it does NOT scrub the platform's OWN concrete
-    # secret VALUES (only their shapes). The log path above already has the
-    # settings-seeded known-value scrub; the events path must get the SAME
-    # backstop when Repository is wired:
-    #     repository = Repository(settings.DATABASE_URL,
-    #                             redactor=Redactor.from_settings(settings))
-    # Do NOT silently rely on the pattern-only default — activate the known-value
-    # backstop on the append-only events table here in Phase 2 (INV-4 / §8.6).
+    # The DB / SecretStore / GitHub-client / write-queue singletons are composed
+    # on ``app.state`` by ``_lifespan`` at startup (and torn down at shutdown) —
+    # see slice 2.0. The lifespan seeds the Repository with
+    # ``Redactor.from_settings(settings)`` so the append-only ``events`` path
+    # scrubs the platform's OWN concrete secret VALUES, not just their shapes
+    # (the INV-4 events-path backstop slice 0.5 deferred here).
 
     # INV-1: the access-control stack wraps the whole app. Added last so it is
     # the outermost middleware (it runs before routing on every request).

@@ -28,6 +28,7 @@ Nothing here reaches into ``dkmv/`` or shells the CLI.
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -44,6 +45,12 @@ from fastapi.testclient import TestClient
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from dkmv.runtime import CapabilityReport
+
+#: TestClients that ``build_client`` entered (ran startup on). The autouse
+#: :func:`_close_entered_clients` fixture runs each one's shutdown after the test
+#: so the lifespan-owned Repository writer task / GitHub client are torn down and
+#: do not leak across tests (INV-6: exactly one writer per app instance).
+_ENTERED_CLIENTS: list[TestClient] = []
 
 
 # ── App / API fixtures (slice 0.2) ───────────────────────────────────────────
@@ -100,19 +107,66 @@ def build_client(
     handlers turn an uncaught error into the §8.9 500 envelope so a test can
     assert a request reached the inner app (vs. being rejected at 401/403).
     """
-    settings = settings or make_settings()
+    if settings is None:
+        settings = make_settings()
+    if settings.DATABASE_URL == Settings.model_fields["DATABASE_URL"].default:
+        # The caller did not pin a DATABASE_URL (it is still the dev default
+        # ``./data/dkmv.db``). Entering the lifespan (below) starts a real
+        # Repository, so swap in an isolated, migrated temp DB per client — never
+        # touch the dev DB, never share one DB across two clients. A caller that
+        # pins its own DATABASE_URL (e.g. the issues/board API tests) keeps it.
+        settings = settings.model_copy(update={"DATABASE_URL": _temp_migrated_url()})
     run_service = RunService(settings, runtime=runtime or StubRuntime())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed runtime stub/fake
     app = create_app(settings, run_service=run_service)
-    return TestClient(
+    client = TestClient(
         app,
         base_url=f"http://{host}",
         raise_server_exceptions=raise_server_exceptions,
     )
+    # Enter the lifespan (run startup) so the shared Repository / SecretStore /
+    # GitHub client / write-queue are composed on ``app.state`` on the serving
+    # portal loop — exercising the real slice-2.0 wiring, not the per-request
+    # fallback. The autouse ``_close_entered_clients`` fixture runs shutdown.
+    client.__enter__()
+    _ENTERED_CLIENTS.append(client)
+    return client
+
+
+def _temp_migrated_url() -> str:
+    """Create an isolated, migrated SQLite DB file and return its DATABASE_URL.
+
+    Used by :func:`build_client` when no settings are supplied so a lifespan-entered
+    TestClient has a real schema to query. The file lives in a process-temp dir and
+    is cleaned up by the OS / test teardown; each call is a fresh DB.
+    """
+    fd, path = tempfile.mkstemp(prefix="dkmvp-test-", suffix=".db")
+    import os
+
+    os.close(fd)
+    return _migrate(Path(path))
 
 
 def auth_headers() -> dict[str, str]:
     """``Authorization: Bearer`` header for :data:`TEST_TOKEN`."""
     return {"Authorization": f"Bearer {TEST_TOKEN}"}
+
+
+@pytest.fixture(autouse=True)
+def _close_entered_clients() -> Iterator[None]:
+    """Run lifespan shutdown for every client :func:`build_client` entered.
+
+    ``build_client`` runs startup (``__enter__``) so tests exercise the slice-2.0
+    shared-singleton path; this autouse fixture runs the matching shutdown
+    (``__exit__``) after each test so the lifespan-owned single writer task and
+    GitHub client are released — no writer/loop leaks across tests (INV-6).
+    """
+    yield
+    while _ENTERED_CLIENTS:
+        entered = _ENTERED_CLIENTS.pop()
+        try:
+            entered.__exit__(None, None, None)
+        except Exception:  # noqa: BLE001 - best-effort teardown; never fail a test on cleanup
+            pass
 
 
 # ── DB fixtures (slice 0.3) ──────────────────────────────────────────────────

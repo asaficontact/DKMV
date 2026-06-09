@@ -155,6 +155,107 @@ async def test_token_bucket_paces_steady_state() -> None:
     assert any(s > 0 for s in clock.sleeps)
 
 
+@pytest.mark.asyncio
+async def test_graceful_shutdown_flushes_queued_mutation() -> None:
+    """A queued ``agent:*`` mutation is FLUSHED on graceful shutdown, not dropped (INV-11).
+
+    Dropping an enqueued (or in-flight) label PUT would leave the GitHub label and
+    the active-run DB row inconsistent — the single-occupancy invariant this queue
+    protects (§8.1). So ``stop`` must DRAIN: the in-flight job and every queued job
+    run to completion before the queue stops.
+    """
+    clock = FakeClock()
+    queue = WriteQueue(rate_per_minute=6000.0, sleep=clock.sleep, time_source=clock.now)
+
+    executed: list[str] = []
+    gate = asyncio.Event()
+
+    async def slow_first() -> str:
+        # Hold the in-flight slot until released, so a second job is genuinely
+        # QUEUED (not yet started) when we call stop().
+        await gate.wait()
+        executed.append("first")
+        return "first"
+
+    async def queued_second() -> str:
+        executed.append("second")
+        return "second"
+
+    task1 = asyncio.ensure_future(queue.submit(slow_first, label="first"))
+    task2 = asyncio.ensure_future(queue.submit(queued_second, label="second"))
+    # Let the worker pick up the first job and block on the gate, with the second
+    # job sitting in the FIFO behind it.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    # Begin a graceful drain in parallel, then release the in-flight job. Both the
+    # in-flight AND the queued mutation must FLUSH (execute) before stop returns.
+    stop_task = asyncio.ensure_future(queue.stop(grace=5.0))
+    gate.set()
+    await stop_task
+
+    assert await task1 == "first"
+    assert await task2 == "second"
+    # BOTH ran, in order — the queued mutation was flushed, not cancelled.
+    assert executed == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_rejects_new_submissions_while_draining() -> None:
+    """Once draining, a fresh ``submit`` is rejected so the backlog can flush cleanly."""
+    clock = FakeClock()
+    queue = WriteQueue(rate_per_minute=6000.0, sleep=clock.sleep, time_source=clock.now)
+
+    async def noop() -> str:
+        return "ok"
+
+    await queue.submit(noop)
+    await queue.stop(grace=1.0)
+    with pytest.raises(RuntimeError):
+        await queue.submit(noop)
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_bounded_backlog_terminates_within_grace() -> None:
+    """An undrainable backlog still terminates within the grace window (no hang).
+
+    The queue is token-bucket-paced, so a graceful shutdown must not block forever
+    on a large backlog. A job that never completes (mid-PUT, wedged) must not wedge
+    shutdown past the grace window: ``stop`` returns within ``grace`` and fails the
+    remainder so awaiting ``submit`` calls unblock.
+    """
+    # Real time here (no fake sleep) so the grace bound is exercised end-to-end.
+    queue = WriteQueue(rate_per_minute=6000.0)
+
+    never = asyncio.Event()  # never set → the in-flight job blocks forever
+
+    async def wedged() -> str:
+        await never.wait()
+        return "never"
+
+    async def queued() -> str:  # pragma: no cover - never reached (drops on cancel)
+        return "queued"
+
+    task1 = asyncio.ensure_future(queue.submit(wedged, label="wedged"))
+    task2 = asyncio.ensure_future(queue.submit(queued, label="queued"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await queue.stop(grace=0.2)  # bounded grace
+    elapsed = loop.time() - start
+
+    # Terminated within (a small multiple of) the grace window — did NOT hang on
+    # the wedged job.
+    assert elapsed < 2.0
+    # The wedged in-flight job was cancelled and the queued one's future cancelled,
+    # so both awaiting submit() calls unblock rather than hanging past shutdown.
+    for task in (task1, task2):
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
 def test_rate_limit_state_observes_primary_headers() -> None:
     """X-RateLimit-* headers fold into the accounting (FR-06-2)."""
     state = RateLimitState()
