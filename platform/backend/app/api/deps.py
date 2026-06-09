@@ -41,7 +41,9 @@ from app.db.repository import Repository
 from app.github.graphql import BoardPage
 from app.github.hash_cache import HashCache
 from app.github.write_queue import WriteQueue
+from app.hitl import ConcurrencySlots, DecisionRegistry
 from app.secrets import SecretStore
+from app.sse.observer_bridge import StreamRegistry
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.config import Settings
@@ -52,6 +54,13 @@ REPO_ATTR = "repository"
 WRITE_QUEUE_ATTR = "github_write_queue"
 SECRET_STORE_ATTR = "secret_store"
 BOARD_CACHE_ATTR = "github_hash_cache"
+#: HITL + SSE singletons composed by the lifespan (slices 2.3 / 2.5). Centralized
+#: here so ``runs.py`` (launch), ``answer.py`` (resolve), and ``sse/endpoint.py``
+#: (subscribe) resolve the SAME process-wide registries through one seam — never a
+#: private per-module string-literal ``getattr`` helper (FIX-2 consolidation).
+DECISION_REGISTRY_ATTR = "decision_registry"
+CONCURRENCY_SLOTS_ATTR = "concurrency_slots"
+STREAM_REGISTRY_ATTR = "stream_registry"
 
 
 def resolve_secret_key(settings: Settings) -> str:
@@ -139,6 +148,62 @@ def get_secret_store(request: Request) -> SecretStore:
     store = SecretStore(repository, key=resolve_secret_key(settings))
     setattr(request.app.state, SECRET_STORE_ATTR, store)
     return store
+
+
+def get_decision_registry(request: Request) -> DecisionRegistry:
+    """Return (composing on first use) the process-wide HITL :class:`DecisionRegistry`.
+
+    The app-lifespan composes ONE registry on ``app.state.decision_registry`` (slice
+    2.5) so the per-run pause bridge's awaited future and the answer route's resolve
+    share **one** rendezvous — winning the exactly-once DB guard then fires the
+    awaiting future and the engine resumes (INV-9). The serving path reuses it; **as
+    a test fallback only** (no lifespan) one is built and cached on first use. The
+    single shared resolver ``runs.py`` (registers) and ``answer.py`` (fires) both
+    route through (replaces the verbatim ``_decision_registry`` copies).
+    """
+    existing = getattr(request.app.state, DECISION_REGISTRY_ATTR, None)
+    if isinstance(existing, DecisionRegistry):
+        return existing
+    registry = DecisionRegistry()
+    setattr(request.app.state, DECISION_REGISTRY_ATTR, registry)
+    return registry
+
+
+def get_concurrency_slots(request: Request) -> ConcurrencySlots:
+    """Return (composing on first use) the process-wide :class:`ConcurrencySlots`.
+
+    The slot-release-on-pause / reacquire-on-resume accounting (T086) the pause
+    bridge drives — a paused run RELEASES its slot (INV-9) so an idle parked
+    container does not hold admission. The app-lifespan composes ONE on
+    ``app.state.concurrency_slots`` so all runs share one accounting; **as a test
+    fallback only** (no lifespan) one is built and cached on first use. Replaces the
+    verbatim ``_concurrency_slots`` copy in ``runs.py``.
+    """
+    existing = getattr(request.app.state, CONCURRENCY_SLOTS_ATTR, None)
+    if isinstance(existing, ConcurrencySlots):
+        return existing
+    slots = ConcurrencySlots()
+    setattr(request.app.state, CONCURRENCY_SLOTS_ATTR, slots)
+    return slots
+
+
+def get_stream_registry(request: Request) -> StreamRegistry:
+    """Return (composing on first use) the process-wide SSE :class:`StreamRegistry`.
+
+    The app-lifespan composes ONE registry on ``app.state.stream_registry`` (slice
+    2.3) so the launch path's per-run pump publishes into the SAME hub the SSE
+    endpoint subscribes to (one fan-out point per run — INV-12). The serving path
+    reuses it; **as a test fallback only** (no lifespan) one is built and cached on
+    first use (a test streaming a finished run from the durable backlog needs only
+    the replay path, not a live hub). Replaces the verbatim ``_stream_registry`` /
+    ``_registry`` copies in ``runs.py`` and ``sse/endpoint.py``.
+    """
+    existing = getattr(request.app.state, STREAM_REGISTRY_ATTR, None)
+    if isinstance(existing, StreamRegistry):
+        return existing
+    registry = StreamRegistry()
+    setattr(request.app.state, STREAM_REGISTRY_ATTR, registry)
+    return registry
 
 
 def get_board_cache(request: Request) -> HashCache[BoardPage]:
