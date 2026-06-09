@@ -48,22 +48,16 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 export default function Sidebar({ repoSlug, aggregate, activeNav = "board" }: SidebarProps) {
-  // `useNavigate` throws outside a `<Router>`; the production app always mounts the
-  // chrome under `<BrowserRouter>`, but rendering a screen standalone (some unit
-  // tests) has no router — `useInRouterContext` lets us degrade the nav to inert
-  // buttons rather than crash. Hooks stay unconditional (rules-of-hooks safe).
-  const inRouter = useInRouterContext();
-  const navigate = inRouter ? useNavigate() : null;
   const [org, name] = repoSlug.includes("/") ? repoSlug.split("/") : ["", repoSlug];
   const initials = (name || repoSlug).slice(0, 2).toUpperCase();
 
-  // Carry the connected repo so the destination screen stays scoped to the project.
-  const repoQuery = repoSlug ? `?repo=${encodeURIComponent(repoSlug)}` : "";
-  const go = (id: NavId) => {
-    if (!navigate) return;
-    if (id === "board") navigate(`/board${repoQuery}`);
-    else if (id === "runs") navigate(`/runs${repoQuery}`);
-  };
+  // `useNavigate` throws outside a `<Router>` (the production chrome always mounts
+  // under `<BrowserRouter>`, but a standalone screen render in some unit tests has
+  // no router). `useInRouterContext` is a single, **unconditional** hook (called
+  // every render, rules-of-hooks safe) that selects which nav variant to render:
+  // the route-aware `RouterNav` (which calls `useNavigate` unconditionally within
+  // itself, only ever mounted under a Router) or the inert `InertNav` (standalone).
+  const inRouter = useInRouterContext();
 
   return (
     <nav className="sidebar" aria-label="Primary">
@@ -85,32 +79,69 @@ export default function Sidebar({ repoSlug, aggregate, activeNav = "board" }: Si
         New run
       </button>
 
-      <ul className="sidebar-nav">
-        {NAV_ITEMS.map(({ id, label, Icon, enabled }) => {
-          const active = id === activeNav;
-          return (
-            <li key={id}>
-              <button
-                type="button"
-                className={`nav-item${active ? " is-active" : ""}`}
-                aria-current={active ? "page" : undefined}
-                disabled={!enabled}
-                onClick={enabled ? () => go(id) : undefined}
-                title={enabled ? label : `${label} (coming soon)`}
-              >
-                <Icon size={17} />
-                <span>{label}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+      {inRouter ? (
+        <RouterNav repoSlug={repoSlug} activeNav={activeNav} />
+      ) : (
+        <InertNav activeNav={activeNav} />
+      )}
 
       <div className="sidebar-foot">
         <LiveStatusChip aggregate={aggregate} />
       </div>
     </nav>
   );
+}
+
+/** The shared nav `<ul>` markup — a single source for the router-aware + inert variants. */
+function NavList({ activeNav, go }: { activeNav: NavId; go: (id: NavId) => void }) {
+  return (
+    <ul className="sidebar-nav">
+      {NAV_ITEMS.map(({ id, label, Icon, enabled }) => {
+        const active = id === activeNav;
+        return (
+          <li key={id}>
+            <button
+              type="button"
+              className={`nav-item${active ? " is-active" : ""}`}
+              aria-current={active ? "page" : undefined}
+              disabled={!enabled}
+              onClick={enabled ? () => go(id) : undefined}
+              title={enabled ? label : `${label} (coming soon)`}
+            >
+              <Icon size={17} />
+              <span>{label}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/**
+ * The route-aware nav. **Only rendered under a `<Router>`**, so `useNavigate` is
+ * called **unconditionally** here (rules-of-hooks safe) — never guarded behind a
+ * `useInRouterContext` branch in the same component. Clicking a live nav item
+ * navigates, carrying the connected `?repo=` so the destination stays scoped.
+ */
+function RouterNav({ repoSlug, activeNav }: { repoSlug: string; activeNav: NavId }) {
+  const navigate = useNavigate();
+  const repoQuery = repoSlug ? `?repo=${encodeURIComponent(repoSlug)}` : "";
+  const go = (id: NavId) => {
+    if (id === "board") navigate(`/board${repoQuery}`);
+    else if (id === "runs") navigate(`/runs${repoQuery}`);
+  };
+  return <NavList activeNav={activeNav} go={go} />;
+}
+
+/**
+ * The inert nav variant for a **standalone** (no-Router) render — some unit tests
+ * mount a screen without a `<BrowserRouter>`. It calls **no** router hook, so it
+ * never throws; live nav items render as inert (a no-op `go`) rather than crash.
+ */
+function InertNav({ activeNav }: { activeNav: NavId }) {
+  const go = () => {};
+  return <NavList activeNav={activeNav} go={go} />;
 }
 
 /**

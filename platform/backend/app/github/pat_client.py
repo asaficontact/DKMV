@@ -338,6 +338,33 @@ class PatGitHubClient(GitHubClient):
             return list(labels)
         return [str(item.get("name", "")) for item in payload if isinstance(item, dict)]
 
+    async def find_open_pr_for_branch(self, repo: str, branch: str) -> int | None:
+        """Return the number of an **open** PR for head ``branch``, else ``None`` (INV-5).
+
+        Queries ``GET /repos/{owner}/{name}/pulls?state=open&head={owner}:{branch}``
+        — GitHub's list-PRs filter by head ref — and returns the ``number`` of the
+        first open PR (DKMV pushes the branch into the same repo, so the head owner
+        is the repo owner). ``None`` when GitHub returns no open PR for that head.
+        This closes the "PR exists on GitHub but ``runs.pr_num`` not yet
+        back-filled" window for the retry's no-duplicate-PR guard (R-15); a
+        non-2xx surfaces as :class:`GitHubError`/:class:`GitHubAuthError` via
+        :meth:`_request` for the retry caller to swallow (degrading to the
+        claim-lock backstop), never silently a false "no PR".
+        """
+        owner_name = _split_repo(repo)
+        owner = owner_name.split("/", 1)[0]
+        response = await self._request(
+            "GET",
+            f"/repos/{owner_name}/pulls",
+            params={"state": "open", "head": f"{owner}:{branch}", "per_page": 1},
+        )
+        payload = response.json()
+        if not isinstance(payload, list) or not payload:
+            return None
+        first = payload[0]
+        number = first.get("number") if isinstance(first, dict) else None
+        return int(number) if number is not None else None
+
     async def aclose(self) -> None:
         """Close the owned HTTP client (no-op when one was injected)."""
         if self._owns_client and self._client is not None:

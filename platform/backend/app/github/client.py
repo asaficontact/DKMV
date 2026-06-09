@@ -169,6 +169,27 @@ class GitHubClient(abc.ABC):
         issue after the write.
         """
 
+    async def find_open_pr_for_branch(self, repo: str, branch: str) -> int | None:
+        """Return the number of an **open** PR whose head is ``branch``, else ``None``.
+
+        The typed idempotency seam for the retry re-dispatch (INV-5 / R-15): before
+        a retry re-runs an issue, it asks GitHub whether an open PR already exists
+        for the run's deterministic head branch — closing the window where a PR
+        exists on GitHub but ``runs.pr_num`` has not been back-filled yet, so the
+        no-duplicate-PR guarantee does not depend on the DB signal alone. ``repo`` is
+        the ``owner/name`` slug, ``branch`` the head ref (the head owner is inferred
+        as the repo owner — DKMV pushes the branch into the same repo, not a fork).
+
+        Returns the **PR number** (``int``) of the first matching open PR, or
+        ``None`` when none is open for that head. The base implementation returns
+        ``None`` (a backend that cannot cheaply answer degrades to the DB ``pr_num``
+        signal + the launch claim-lock backstop, INV-5); :class:`PatGitHubClient`
+        overrides it with the real query. A transport/GitHub error is the
+        implementation's to raise — the retry caller treats any failure as "not
+        detected" and falls back to the claim-lock, never to a duplicate dispatch.
+        """
+        return None
+
     async def aclose(self) -> None:
         """Release any underlying transport resources. No-op by default."""
         return None

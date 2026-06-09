@@ -265,11 +265,21 @@ def _summary_row(row: dict[str, Any], cost_usd: float | None) -> dict[str, Any]:
     Shared by the single- and bulk-cost paths so the wire shape is identical
     regardless of how ``cost_usd`` was projected.
     """
+    issue_num = row.get("issue_num")
+    # ``issue_title`` / ``pr_num`` complete the FR-06-4 history columns: the title
+    # rides in from the ``list_runs_filtered`` LEFT JOIN on ``issues`` (one read,
+    # no N+1) and degrades to ``None`` for a repo-only run (issue_num NULL) or an
+    # uncached issue; ``pr_num`` is the run row's persisted linked-PR number for
+    # the "PR" badge. Both are optional in the frontend RunSummary (history.ts) —
+    # RunsTable renders the title + PR badge when present and the bare number /
+    # em-dash otherwise.
     return {
         "id": str(row["id"]),
         "engine_run_id": row.get("engine_run_id"),
         "repo": row.get("repo"),
-        "issue_num": row.get("issue_num"),
+        "issue_num": issue_num,
+        "issue_title": (row.get("issue_title") or None) if issue_num is not None else None,
+        "pr_num": row.get("pr_num"),
         "workflow_id": row.get("workflow_id"),
         "agent": row.get("agent"),
         "model": row.get("model"),

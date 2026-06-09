@@ -317,11 +317,15 @@ class RetryScheduler:
         repo = row.get("repo")
         if client is None or not branch or not repo:
             return False
-        detector = getattr(client, "find_open_pr_for_branch", None)
-        if not callable(detector):
-            return False
+        # Typed idempotency seam (INV-5 / R-15): ask GitHub whether an open PR
+        # already exists for the run's deterministic head branch, closing the
+        # "PR exists but runs.pr_num not yet back-filled" window. This is a typed
+        # method on the GitHubClient ABC (returns the PR number or None) — no more
+        # getattr duck-typing. A detection error is NOT a duplicate-PR risk by
+        # itself: degrade to "not detected via GitHub" and rely on the launch
+        # claim-lock backstop, never on a second dispatch.
         try:
-            pr = await detector(str(repo), str(branch))
+            pr_number = await client.find_open_pr_for_branch(str(repo), str(branch))
         except Exception:  # noqa: BLE001 - a detection error is not a duplicate-PR risk by itself
             _log.warning(
                 "orchestrator.retry PR detection failed for %s@%s; relying on DB pr_num",
@@ -330,7 +334,7 @@ class RetryScheduler:
                 exc_info=True,
             )
             return False
-        return pr is not None
+        return pr_number is not None
 
     async def _last_completed_stage(self, run_id: str) -> str | None:
         """The last **completed** stage name, for an optional ``start_task=`` retry.
