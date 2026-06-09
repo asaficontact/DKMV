@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_repository
 from app.api.errors import ApiError, run_not_found
 from app.runtime import RunService
+from app.secrets import Redactor
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from dkmv.runtime._handle import RunHandle
@@ -83,6 +84,30 @@ def _run_service(request: Request) -> RunService:
     service = getattr(request.app.state, "run_service", None)
     assert isinstance(service, RunService)
     return service
+
+
+def _exec_redactor(request: Request) -> Redactor:
+    """Resolve (building+caching once) the :class:`Redactor` for the exec response.
+
+    A one-shot ``exec`` returns container stdout **verbatim**, so an operator
+    command like ``env`` could surface a live model/GitHub token in the live UI
+    (INV-4 defense-in-depth — the same backstop the append-only ``events`` path
+    uses, applied to this synchronous response). The redactor is seeded from
+    :class:`~app.config.Settings` via :meth:`Redactor.from_settings` so it scrubs
+    BOTH the known credential *shapes* (the structural patterns) AND the platform's
+    own concrete secret VALUES. Cached on ``app.state`` so we don't rebuild the
+    known-value set per request; never logs or persists the values it holds.
+    """
+    existing = getattr(request.app.state, _EXEC_REDACTOR_ATTR, None)
+    if isinstance(existing, Redactor):
+        return existing
+    redactor = Redactor.from_settings(request.app.state.settings)
+    setattr(request.app.state, _EXEC_REDACTOR_ATTR, redactor)
+    return redactor
+
+
+#: ``app.state`` attribute name for the cached exec-response redactor (FIX-3).
+_EXEC_REDACTOR_ATTR = "exec_redactor"
 
 
 def _resolve_handle(request: Request, engine_run_id: str | None) -> RunHandle | None:
@@ -163,6 +188,7 @@ async def exec_in_run(run_id: str, body: ExecRequest, request: Request) -> ExecR
             message="The run has no live container to exec into.",
         )
 
+    redactor = _exec_redactor(request)
     service = _run_service(request)
     try:
         output = service.runtime.execute_in_container(str(engine_run_id), body.command)
@@ -177,22 +203,29 @@ async def exec_in_run(run_id: str, body: ExecRequest, request: Request) -> ExecR
                 code="container_unavailable",
                 message="The container is not running.",
             ) from exc
+        # INV-4 defense-in-depth: the failed-command stderr (carried in the engine
+        # error) is operator-controlled output, so scrub any token shape/value out
+        # of the ``details.reason`` before it reaches the response.
         raise ApiError(
             status_code=400,
             code="exec_failed",
             message="The command failed in the container.",
-            details={"reason": _safe_reason(message)},
+            details={"reason": _safe_reason(message, redactor)},
         ) from exc
 
-    return ExecResponse(run_id=run_id, output=output)
+    # INV-4 defense-in-depth: the container stdout is returned VERBATIM, so an
+    # operator command (e.g. ``env``) could otherwise surface a live model/GitHub
+    # token in the live UI. Scrub it through the platform redactor (the same
+    # backstop used for the append-only events path) before returning it.
+    return ExecResponse(run_id=run_id, output=redactor.text(output))
 
 
-def _safe_reason(message: str) -> Any:
-    """Trim an engine error message for the §8.9 ``details`` (never a secret value).
+def _safe_reason(message: str, redactor: Redactor) -> Any:
+    """Trim + scrub an engine error message for the §8.9 ``details`` (no secret value).
 
     The engine's exec error carries the command's stderr; we cap its length so a
-    noisy failure doesn't bloat the envelope. It is operator-facing diagnostic
-    text, not a credential (the run token never appears in a shell command's
-    stderr).
+    noisy failure doesn't bloat the envelope, then run it through the platform
+    redactor so any token shape/value the failing command echoed is scrubbed
+    (INV-4 defense-in-depth) before it reaches the operator-facing envelope.
     """
-    return message[:500]
+    return redactor.text(message[:500])

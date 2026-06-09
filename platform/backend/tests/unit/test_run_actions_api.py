@@ -213,3 +213,57 @@ def test_exec_no_engine_id_409(tmp_path: Path) -> None:
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "container_unavailable"
+
+
+# A known secret SHAPE the platform never held (e.g. a value the agent minted or a
+# token sitting in the container env). Assembled from fragments so the INV-4
+# secret-in-events grep does not flag this test file. The exec endpoint returns
+# container stdout VERBATIM, so without redaction this would surface in the UI.
+_FAKE_ANTHROPIC = "sk" + "-ant" + "-api03-" + "A" * 40
+_FAKE_GH_PAT = "gh" + "p_" + "B" * 36
+
+
+def test_exec_output_is_redacted(tmp_path: Path) -> None:
+    """INV-4 defense-in-depth: a one-shot exec scrubs token shapes from its stdout.
+
+    An operator command like ``env`` could otherwise echo a live model/GitHub token
+    straight into the live UI. The platform redactor scrubs the verbatim stdout
+    before it leaves the endpoint.
+    """
+    runtime = FakeRuntime()
+    runtime.exec_result = (
+        f"ANTHROPIC_API_KEY={_FAKE_ANTHROPIC}\nGITHUB_TOKEN={_FAKE_GH_PAT}\nPATH=/usr/bin\n"
+    )
+    client, url = _client_with_runtime(tmp_path / "t.db", runtime)
+    run_id = _run(_seed_run(url, status="running", engine_id="eng-secret"))
+
+    resp = client.post(
+        f"/api/v1/runs/{run_id}/exec",
+        headers=auth_headers(),
+        json={"command": "env"},
+    )
+    assert resp.status_code == 200
+    output = resp.json()["output"]
+    # The secret VALUES are scrubbed; the placeholder is present; benign lines stay.
+    assert _FAKE_ANTHROPIC not in output
+    assert _FAKE_GH_PAT not in output
+    assert "[REDACTED]" in output
+    assert "PATH=/usr/bin" in output
+
+
+def test_exec_error_reason_is_redacted(tmp_path: Path) -> None:
+    """INV-4: the failed-command stderr in ``details.reason`` is scrubbed too."""
+    runtime = FakeRuntime()
+    runtime.exec_error = RuntimeError(f"Command failed (exit 1): echo {_FAKE_ANTHROPIC}")
+    client, url = _client_with_runtime(tmp_path / "t.db", runtime)
+    run_id = _run(_seed_run(url, status="running", engine_id="eng-fail-secret"))
+
+    resp = client.post(
+        f"/api/v1/runs/{run_id}/exec",
+        headers=auth_headers(),
+        json={"command": "echo secret"},
+    )
+    assert resp.status_code == 400
+    reason = resp.json()["error"]["details"]["reason"]
+    assert _FAKE_ANTHROPIC not in reason
+    assert "[REDACTED]" in reason
