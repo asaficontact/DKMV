@@ -24,6 +24,7 @@ from app.api.retry_queue import router as retry_queue_router
 from app.api.run_actions import router as run_actions_router
 from app.api.runs import router as runs_router
 from app.api.runs_retry import router as runs_retry_router
+from app.api.settings import router as settings_router
 from app.api.stats import router as stats_router
 from app.api.workflows import router as workflows_router
 from app.sse.endpoint import router as sse_router
@@ -51,6 +52,7 @@ api_router.include_router(answer_router)
 api_router.include_router(run_actions_router)
 api_router.include_router(runs_retry_router)
 api_router.include_router(workflows_router)
+api_router.include_router(settings_router)
 api_router.include_router(sse_router)
 
 __all__ = ["api_router"]

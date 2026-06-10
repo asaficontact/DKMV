@@ -85,6 +85,17 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return decode<T>(resp);
 }
 
+/** PUT `path` with a JSON `body` → decoded JSON. JSON content type satisfies CSRF. */
+export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
+  const resp = await fetch(`${API_BASE}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: "same-origin",
+  });
+  return decode<T>(resp);
+}
+
 /**
  * Open a Server-Sent-Events stream against the API.
  *
