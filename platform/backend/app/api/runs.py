@@ -47,6 +47,7 @@ from app.github.provider import get_github_client
 from app.hitl import PauseBridgeDeps, build_pause_bridge
 from app.runs.launch import LaunchRequest, launch_run
 from app.runs.service import DEFAULT_MEMORY
+from app.runs.settings_store import persisted_default_memory
 from app.runtime import RunService
 from app.sse.auth import set_sse_cookie
 from app.sse.run_stream import RUN_STREAM_TASKS_ATTR, LifecycleDeps, attach_run_stream
@@ -255,6 +256,12 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
     try:
         async with get_repository(request) as repository:
             current_labels = await _issue_labels(repository, body.repo, body.issue_num)
+            # G6 launch-path seam: consult the persisted Settings ``default_memory``
+            # override as the "config defaults" layer of the precedence (the body's
+            # explicit ``memory`` always still wins inside ``launch_run``). Degrades to
+            # the built-in ``DEFAULT_MEMORY`` constant when unset — a no-op for a fresh
+            # install, so a never-touched Settings screen cannot change launch behavior.
+            default_memory = await persisted_default_memory(repository) or DEFAULT_MEMORY
             result = await launch_run(
                 req,
                 repository=repository,
@@ -264,7 +271,7 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
                 cache=cache,
                 connected_repo=_connected_repo(request, body.repo),
                 project_root=get_project_root(request),
-                default_memory=DEFAULT_MEMORY,
+                default_memory=default_memory,
                 current_labels=current_labels,
                 build_on_pause=_build_on_pause,
                 attach_stream=_attach_stream,

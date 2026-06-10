@@ -24,6 +24,7 @@ import History from "../screens/History";
 import IssueDetail from "../screens/IssueDetail";
 import LiveRun from "../screens/LiveRun";
 import RunDetail from "../screens/RunDetail";
+import Settings from "../screens/Settings";
 import Workflows from "../screens/Workflows";
 import { initTheme } from "./theme";
 
@@ -155,6 +156,18 @@ function RunDetailRoute() {
   );
 }
 
+/**
+ * Settings route (Screen Settings, G6 / FR-SET-1 — §5.9). The connected repo slug
+ * rides `?repo=` (scopes the chrome + the GitHub section). **Switch repo** routes
+ * back to Connect (re-pick a project). Editing run defaults `PUT`s `/settings`.
+ */
+function SettingsRoute() {
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const repo = params.get("repo") ?? "";
+  return <Settings repoSlug={repo} onSwitchRepo={() => navigate("/connect")} />;
+}
+
 export default function AppRouter() {
   return (
     <Routes>
@@ -166,6 +179,7 @@ export default function AppRouter() {
       <Route path="/runs/:id" element={<LiveRunRoute />} />
       <Route path="/runs/:id/detail" element={<RunDetailRoute />} />
       <Route path="/workflows" element={<WorkflowsRoute />} />
+      <Route path="/settings" element={<SettingsRoute />} />
       <Route path="*" element={<Navigate to="/connect" replace />} />
     </Routes>
   );
