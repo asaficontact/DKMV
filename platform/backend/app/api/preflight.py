@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Query, Request
 
+from app.api.deps import secret_key_is_ephemeral
 from app.executor.runtime_policy import isolation_status
 from app.github.client import GitHubAuthError, GitHubError, WritePermission
 from app.github.provider import get_github_client
@@ -175,6 +176,28 @@ async def preflight(
     if not ok:
         payload["blockers"].append(runtime_row["label"])
         payload["ready"] = False
+
+    # ── Secret-key persistence (G8, informational — NOT a blocker) ─────────────
+    # Surface whether the SecretStore encryption key is durable or a generated
+    # EPHEMERAL per-process key. An ephemeral key means the connected GitHub PAT is
+    # undecryptable after a restart (a day-2 data-losing surprise — see the loud boot
+    # WARN), so the operator should see it on the standing checklist. It is NOT a
+    # hard requirement (a fresh install with no connected PAT runs fine), so it never
+    # flips ``ready``. The row reports presence/absence only — never the key value
+    # (INV-4).
+    ephemeral = secret_key_is_ephemeral(settings)
+    payload["checks"].append(
+        {
+            "id": "secret_key",
+            "label": "Secret-store encryption key",
+            "sub": (
+                "ephemeral — set DKMV_SECRET_KEY so the connected PAT survives a restart"
+                if ephemeral
+                else "persistent (DKMV_SECRET_KEY set)"
+            ),
+            "ok": not ephemeral,
+        }
+    )
 
     if repo is None:
         return payload

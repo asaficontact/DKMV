@@ -117,14 +117,37 @@ class AuditSink(Protocol):
         ...
 
 
+@runtime_checkable
+class ReadableAuditSink(Protocol):
+    """An :class:`AuditSink` that can also be **read back** (G10 — the ``/audit`` feed).
+
+    The audit trail is collected durably but was unreachable; the ``GET /audit``
+    read endpoint surfaces it. Only a sink that can replay its records implements
+    this (the file + memory sinks do); a write-only sink need not. Records come back
+    NEWEST-FIRST + paginated (``limit``/``offset``) so the read is bounded — the file
+    can grow unboundedly. The records are **already redacted** at write time (INV-4),
+    so the read returns them as-is — no secret can appear.
+    """
+
+    def read_records(self, *, limit: int, offset: int) -> tuple[list[AuditRecord], int]:
+        """Return ``(records_newest_first, total_count)`` for one page."""
+        ...
+
+
 class MemoryAuditSink:
-    """In-memory :class:`AuditSink` for tests — keeps records on a list."""
+    """In-memory :class:`AuditSink` for tests — keeps records on a list (+ readable)."""
 
     def __init__(self) -> None:
         self.records: list[AuditRecord] = []
 
     def write(self, record: AuditRecord) -> None:
         self.records.append(record)
+
+    def read_records(self, *, limit: int, offset: int) -> tuple[list[AuditRecord], int]:
+        """Return one newest-first page over the in-memory list (G10 read seam)."""
+        newest_first = list(reversed(self.records))
+        total = len(newest_first)
+        return newest_first[offset : offset + limit], total
 
 
 class FileAuditSink:
@@ -142,6 +165,37 @@ class FileAuditSink:
     @property
     def path(self) -> Path:
         return self._path
+
+    def read_records(self, *, limit: int, offset: int) -> tuple[list[AuditRecord], int]:
+        """Read one newest-first page of the JSONL trail (G10 — the ``/audit`` feed).
+
+        Reads the whole ``audit.log`` (one JSON object per line), reverses to
+        newest-first, and slices ``[offset : offset + limit]``. Records are already
+        redacted at write time (INV-4), so this returns them verbatim — no secret can
+        appear. A missing file (nothing audited yet) → ``([], 0)`` gracefully. A
+        malformed line (a partial write on a crash) is skipped rather than failing the
+        whole read. ``total`` is the count of well-formed records (the pagination
+        denominator).
+        """
+        try:
+            with open(self._path, encoding="utf-8") as handle:
+                raw_lines = handle.readlines()
+        except FileNotFoundError:
+            return [], 0
+        except OSError:  # pragma: no cover - defensive: a read error degrades to empty
+            _log.warning("audit read failed for %s", self._path, exc_info=True)
+            return [], 0
+        records: list[AuditRecord] = []
+        for raw in raw_lines:
+            text = raw.strip()
+            if not text:
+                continue
+            record = _record_from_json_line(text)
+            if record is not None:
+                records.append(record)
+        records.reverse()  # newest-first
+        total = len(records)
+        return records[offset : offset + limit], total
 
     def write(self, record: AuditRecord) -> None:
         line = json.dumps(record.to_json(), default=str, ensure_ascii=False)
@@ -163,6 +217,41 @@ class FileAuditSink:
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _record_from_json_line(text: str) -> AuditRecord | None:
+    """Parse one JSONL line back into an :class:`AuditRecord`, or ``None`` if malformed.
+
+    The inverse of :meth:`AuditRecord.to_json`. A line whose ``kind`` is not a known
+    :class:`AuditEventKind` (a forward-compat / corrupt line) or that does not parse
+    is skipped (returns ``None``) so a single bad line never breaks the whole read.
+    The line was redacted before it was written (INV-4), so the reconstructed record
+    is already secret-free.
+    """
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_kind = data.get("kind")
+    if not isinstance(raw_kind, str):
+        return None
+    try:
+        kind = AuditEventKind(raw_kind)
+    except ValueError:
+        return None
+    timestamp = data.get("timestamp")
+    if not isinstance(timestamp, str):
+        return None
+    details = data.get("details")
+    return AuditRecord(
+        kind=kind,
+        timestamp=timestamp,
+        run_id=data.get("run_id"),
+        actor=data.get("actor"),
+        details=details if isinstance(details, dict) else {},
+    )
 
 
 class AuditLog:
@@ -196,6 +285,19 @@ class AuditLog:
         """
         path = _audit_path_for_database_url(database_url)
         return cls(FileAuditSink(path), redactor=redactor)
+
+    def read_records(self, *, limit: int, offset: int) -> tuple[list[AuditRecord], int]:
+        """Return one newest-first page of the trail, or ``([], 0)`` if not readable (G10).
+
+        The ``GET /audit`` read seam: delegates to the underlying sink when it is a
+        :class:`ReadableAuditSink` (the file + memory sinks). The records were redacted
+        before they were written (INV-4), so they are returned verbatim — no secret can
+        appear. A write-only / future sink that cannot replay degrades to an empty page
+        (the endpoint then reports "no audit trail available") rather than erroring.
+        """
+        if isinstance(self._sink, ReadableAuditSink):
+            return self._sink.read_records(limit=limit, offset=offset)
+        return [], 0
 
     def _record(
         self,

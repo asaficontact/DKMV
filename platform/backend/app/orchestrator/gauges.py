@@ -105,12 +105,15 @@ class TickGauges:
     def heartbeat(self) -> None:
         """Emit a structured heartbeat log line for the current gauges (AC-10).
 
-        A single ``DEBUG`` line carrying the tick count + last duration so a wedged
-        loop is visible in the structured logs (NFR-OBS-1) even without a health
-        endpoint. Cheap and side-effect-free beyond the log.
+        A single ``INFO`` line carrying the tick count + last duration so a wedged
+        loop is visible in the structured logs (NFR-OBS-1) by default even without a
+        health endpoint. It was ``DEBUG`` — below the INFO default → invisible (G10);
+        at ``INFO`` an operator tailing the logs sees the loop alive (the counter
+        climbing) or wedged (it stops) without raising the log level. Cheap and
+        side-effect-free beyond the log.
         """
         snap = self.snapshot()
-        _log.debug(
+        _log.info(
             "orchestrator.tick heartbeat tick=%d duration_s=%s age_s=%s",
             snap.tick_count,
             snap.last_tick_duration_s,

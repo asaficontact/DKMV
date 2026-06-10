@@ -140,6 +140,24 @@ services:
       MAX_CONCURRENT_RUNS: "${MAX_CONCURRENT_RUNS:-3}"
       DAILY_SPEND_CAP: "${DAILY_SPEND_CAP:-}"
       EGRESS_ALLOWLIST: "${EGRESS_ALLOWLIST:-api.github.com,github.com,api.anthropic.com,api.openai.com}"
+      # ── Admission / governance (G8 — were documented but dropped from compose) ──
+      # Total host memory budget for sandbox admission (e.g. "32g"); empty disables.
+      HOST_MEMORY_BUDGET: "${HOST_MEMORY_BUDGET:-}"
+      # Optional per-tick dispatch throttle per agent:* state, e.g. "agent:queued:2".
+      PER_STATE_CAPS: "${PER_STATE_CAPS:-}"
+      # Local on-disk working copy of the connected project (the dir holding .dkmv/),
+      # so the Workflows viewer + launch path resolve registered custom components by
+      # name. Empty → built-in workflows only. Mount the checkout as a volume + point
+      # this at its in-container path to use it.
+      DKMV_PROJECT_ROOT: "${DKMV_PROJECT_ROOT:-}"
+      # ── Orchestrator timing (G8 — were documented but dropped from compose) ─────
+      TICK_INTERVAL_S: "${TICK_INTERVAL_S:-10}"
+      STALL_TIMEOUT_S: "${STALL_TIMEOUT_S:-300}"
+      PAUSE_TIMEOUT_S: "${PAUSE_TIMEOUT_S:-3600}"
+      # ── Events retention (G9 / G8 — bound the unbounded append-only events table) ─
+      # 0 = disabled (conservative default); >0 prunes events of terminal+snapshotted
+      # runs finished more than N days ago (spend survives via the run_totals fast-path).
+      EVENTS_RETENTION_DAYS: "${EVENTS_RETENTION_DAYS:-0}"
       # ── Egress network enforcement (G1, §11.3 passthrough) ──────────────────
       # The internal Docker network the engine joins each sandbox to (--network).
       # `dkmv-egress` has NO internet route; the only way out is the egress-proxy.
