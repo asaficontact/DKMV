@@ -43,6 +43,7 @@ from app.github.graphql import BoardPage
 from app.github.hash_cache import HashCache
 from app.github.write_queue import WriteQueue
 from app.hitl import ConcurrencySlots, DecisionRegistry
+from app.orchestrator.loop_metrics import LoopMetrics
 from app.secrets import SecretStore
 from app.sse.observer_bridge import StreamRegistry
 
@@ -121,26 +122,86 @@ def get_project_root(request: Request) -> Path | None:
     return project_root_from_state(request.app.state)
 
 
-def resolve_secret_key(settings: Settings) -> str:
-    """Resolve the Fernet host key for a **test-fallback** :class:`SecretStore`.
+def _settings_secret_key(settings: Settings) -> str:
+    """Read the configured ``DKMV_SECRET_KEY`` off settings as a plain ``str``.
 
-    In production the lifespan-owned store is reused and this is never reached;
-    only the no-lifespan test fallback resolves a key here. ``DKMV_SECRET_KEY``
-    (prod: OS keychain / sealed secret, §8.6) wins; otherwise a generated dev key
-    is cached on ``settings`` so encryption is **never** silently disabled (INV-4)
-    and the same process reuses one key (a new key per call would make stored
-    ciphertext undecryptable on read-back).
+    The field is a ``SecretStr`` (so it never accidentally prints), so an empty
+    value is ``SecretStr("")`` whose ``get_secret_value()`` is ``""`` — and a bare
+    ``not SecretStr(...)`` is ALWAYS falsy (SecretStr is truthy regardless), so the
+    presence check must go through the unwrapped value. Returns ``""`` when unset.
+    """
+    configured = getattr(settings, "DKMV_SECRET_KEY", None)
+    if configured is None:
+        return ""
+    getter = getattr(configured, "get_secret_value", None)
+    return getter() if callable(getter) else str(configured)
+
+
+def secret_key_is_ephemeral(settings: Settings) -> bool:
+    """Return ``True`` when no durable ``DKMV_SECRET_KEY`` is configured (G8).
+
+    The SecretStore Fernet key persists the connected GitHub PAT's ciphertext. When
+    ``DKMV_SECRET_KEY`` is unset (env or settings), :func:`resolve_secret_key`
+    GENERATES a fresh per-process key — so any secret encrypted under the previous
+    boot's key becomes **undecryptable** after a restart (a day-2 data-losing
+    surprise). This is the one predicate the loud boot WARN (``app.main``) and the
+    informational preflight row (``app.api.preflight``) both branch on; it reads the
+    env / settings presence only — it NEVER touches or returns the key value (INV-4).
+    """
+    import os
+
+    if os.environ.get("DKMV_SECRET_KEY"):
+        return False
+    return not _settings_secret_key(settings)
+
+
+def resolve_secret_key(settings: Settings) -> str:
+    """Resolve the Fernet host key for the :class:`SecretStore`.
+
+    ``DKMV_SECRET_KEY`` (prod: OS keychain / sealed secret, §8.6) wins; otherwise a
+    generated dev key is cached on ``settings`` so encryption is **never** silently
+    disabled (INV-4) and the same process reuses one key (a new key per call would
+    make stored ciphertext undecryptable on read-back). The generated key is
+    EPHEMERAL — it does not survive a restart, so the connected GitHub PAT's
+    ciphertext is undecryptable after one (the G8 foot-gun the boot WARN +
+    :func:`secret_key_is_ephemeral` surface). Returns the key value to the SINGLE
+    caller that needs it (the store constructor); the value is never logged.
     """
     import os
 
     env_key = os.environ.get("DKMV_SECRET_KEY")
     if env_key:
         return env_key
+    configured = _settings_secret_key(settings)
+    if configured:
+        return configured
     cached: str | None = getattr(settings, "_dkmv_dev_secret_key", None)
     if cached is None:
         cached = SecretStore.generate_key()
         object.__setattr__(settings, "_dkmv_dev_secret_key", cached)
     return cached
+
+
+def get_loop_metrics(request: Request) -> LoopMetrics | None:
+    """Return the live orchestrator loop-metrics gauges, or ``None`` (G10).
+
+    The orchestrator tick updates ONE :class:`~app.orchestrator.loop_metrics.LoopMetrics`
+    singleton every pass (the heartbeat tick counter, the last-success age — the
+    wedge detector — slots-in-use, queue depth, dispatch latency). It lives on the
+    running :class:`~app.orchestrator.tick.OrchestratorHandle` the lifespan published
+    on ``app.state.orchestrator`` (``handle.deps.gauges``). The
+    ``GET /health/orchestrator`` reader resolves it through this ONE seam (mirroring
+    :func:`get_audit`): a strict **read** of an in-memory gauge — no DB write, no
+    engine call (INV-13). Returns ``None`` when no orchestrator is running (no project
+    connected yet, or a bare no-lifespan test client) so the endpoint degrades
+    gracefully rather than 500-ing.
+    """
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+    deps = getattr(orchestrator, "deps", None)
+    gauges = getattr(deps, "gauges", None)
+    if isinstance(gauges, LoopMetrics):
+        return gauges
+    return None
 
 
 @asynccontextmanager

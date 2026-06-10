@@ -131,12 +131,14 @@ class LoopMetrics(TickGauges):
         """Emit a structured heartbeat carrying the full gauge set (AC-5).
 
         Overrides :class:`TickGauges.heartbeat` to log the workload gauges alongside
-        the liveness ones, so a single ``DEBUG`` line answers "alive? saturated?
-        thrashing?" without a health endpoint (NFR-OBS-1). Cheap + side-effect-free
-        beyond the log.
+        the liveness ones, so a single ``INFO`` line answers "alive? saturated?
+        thrashing?" without a health endpoint (NFR-OBS-1). Raised from ``DEBUG`` to
+        ``INFO`` (G10) so the heartbeat is visible at the default log level — a wedged
+        loop is then detectable just by tailing the logs (the line stops). Cheap +
+        side-effect-free beyond the log.
         """
         snap = self.loop_snapshot()
-        _log.debug(
+        _log.info(
             "orchestrator.loop heartbeat tick=%d duration_s=%s age_s=%s "
             "slots=%d/%d queue_depth=%d reconcile_actions=%d dispatch_latency_s=%s",
             snap.tick_count,

@@ -12,6 +12,7 @@ from fastapi import APIRouter
 
 from app.api.agent_state import router as agent_state_router
 from app.api.answer import router as answer_router
+from app.api.audit import router as audit_router
 from app.api.board import router as board_router
 from app.api.connect import router as connect_router
 from app.api.health import router as health_router
@@ -53,6 +54,7 @@ api_router.include_router(run_actions_router)
 api_router.include_router(runs_retry_router)
 api_router.include_router(workflows_router)
 api_router.include_router(settings_router)
+api_router.include_router(audit_router)
 api_router.include_router(sse_router)
 
 __all__ = ["api_router"]

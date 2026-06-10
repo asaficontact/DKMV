@@ -127,6 +127,20 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         description="Codex API key for Codex runs.",
     )
+    DKMV_SECRET_KEY: SecretStr = Field(
+        default=SecretStr(""),
+        description=(
+            "Fernet key encrypting the SecretStore at rest (the connected GitHub "
+            "PAT — §8.6 / INV-4). MUST be set in any real deployment: when unset, "
+            "the backend GENERATES an EPHEMERAL per-process key, so the stored PAT "
+            "becomes undecryptable after a restart (G8 — a day-2 data-losing "
+            "surprise). Boot emits a loud WARN + the preflight surfaces an "
+            "ephemeral/persistent row. Generate one with "
+            "``python -c 'from app.secrets import SecretStore; "
+            "print(SecretStore.generate_key())'`` and source it from the OS "
+            "keychain / a sealed secret in production."
+        ),
+    )
 
     # --- Sandbox image / runtime (INV-3) ---
     DKMV_IMAGE: str = Field(

@@ -33,7 +33,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from app.api import api_router
-from app.api.deps import resolve_secret_key
+from app.api.deps import resolve_secret_key, secret_key_is_ephemeral
 from app.api.errors import install_error_handlers
 from app.config import Settings, get_settings
 from app.db import Repository
@@ -237,7 +237,24 @@ def _build_secret_store(repository: Repository, settings: Settings) -> SecretSto
     a generated dev key (:func:`app.api.deps.resolve_secret_key`) so encryption is
     always on (INV-4). One store per process replaces the slice-1.4 lazy
     per-request build.
+
+    G8 — when ``DKMV_SECRET_KEY`` is unset the resolved key is a freshly-GENERATED
+    EPHEMERAL key, so any secret encrypted under a previous boot (the connected
+    GitHub PAT) is undecryptable after a restart. That is a silent day-2 data-losing
+    foot-gun, so we emit a LOUD ``WARNING`` here (the resolve seam) — naming the
+    consequence and the fix — **without ever logging the key value** (INV-4). When a
+    durable key IS configured this is silent.
     """
+    if secret_key_is_ephemeral(settings):
+        _log.warning(
+            "DKMV_SECRET_KEY is not set: the SecretStore is using a GENERATED "
+            "EPHEMERAL encryption key. Encrypted secrets (the connected GitHub PAT) "
+            "will NOT survive a restart and must be re-connected after every reboot. "
+            "Set DKMV_SECRET_KEY to a durable key to persist them: "
+            "python -c 'from app.secrets import SecretStore; "
+            "print(SecretStore.generate_key())' (source it from the OS keychain / a "
+            "sealed secret; see platform/.env.example)."
+        )
     try:
         return SecretStore(repository, key=resolve_secret_key(settings))
     except SecretStoreError:  # pragma: no cover - defensive; key is always resolvable
