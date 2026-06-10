@@ -41,7 +41,8 @@ from pathlib import Path
 import aiosqlite
 
 from app.db.connection import connect
-from app.db.repository import COST_EXCLUDED_AGENT, Repository
+from app.db.repository import Repository
+from app.db.spend_sql import COST_EXCLUDED_AGENT, total_spend_sql
 
 #: Tables whose row counts a snapshot↔restore round-trip must preserve (the
 #: spend/audit-relevant projection tables — §6.5). ``events`` + ``runs`` carry the
@@ -231,30 +232,14 @@ async def restore(
 async def _total_spend(conn: aiosqlite.Connection) -> float:
     """Codex-excluded segment-sum total spend over a raw connection (round-trip checksum).
 
-    Mirrors :meth:`Repository.total_spend` exactly (per ``(run_id, task_index)``
-    last-cumulative ``cost_usd``, Codex excluded — INV-7/INV-8) but against a plain
-    read connection so it can be computed over a snapshot/restore file without
-    standing up a full :class:`Repository`.
+    The backup checksum intentionally segment-sums the **events** of every run (the
+    full-scan total — :func:`app.db.spend_sql.total_spend_sql`), NOT the run_totals
+    fast-path: a snapshot/restore must verify the actual event-level spend source of
+    truth round-trips byte-for-byte, independent of whether a snapshot exists.
+    Composes the ONE canonical ``last_per_task`` CTE (Codex excluded — INV-7/INV-8)
+    so the checksum can never drift from the live spend definition. Runs against a
+    plain read connection so it works over a snapshot/restore file without standing
+    up a full :class:`Repository`.
     """
-    rows = list(
-        await conn.execute_fetchall(
-            """
-            WITH last_per_task AS (
-                SELECT e.run_id AS run_id, e.cost_usd AS cost_usd
-                FROM events e
-                JOIN (
-                    SELECT run_id, task_index, MAX(id) AS max_id
-                    FROM events
-                    WHERE cost_usd IS NOT NULL
-                    GROUP BY run_id, task_index
-                ) m ON e.run_id = m.run_id AND e.id = m.max_id
-            )
-            SELECT COALESCE(SUM(lpt.cost_usd), 0.0) AS total
-            FROM last_per_task lpt
-            JOIN runs r ON r.id = lpt.run_id
-            WHERE COALESCE(LOWER(r.agent), '') != ?
-            """,
-            (COST_EXCLUDED_AGENT,),
-        )
-    )
+    rows = list(await conn.execute_fetchall(total_spend_sql(), (COST_EXCLUDED_AGENT,)))
     return float(rows[0][0] or 0.0) if rows else 0.0

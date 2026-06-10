@@ -109,11 +109,20 @@ async def test_read_events_after_cursor(repo: Repository) -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_update_or_delete_path_on_events(repo: Repository) -> None:
-    """The repository exposes no UPDATE/DELETE on events (append-only contract)."""
+async def test_no_update_path_on_events_only_guarded_prune(repo: Repository) -> None:
+    """Events are never UPDATEd; the only DELETE is the guarded G9 retention prune.
+
+    The append-only contract for the LIVE event log still holds — there is no
+    UPDATE on events anywhere, and ``events.id`` is never reused (AUTOINCREMENT).
+    G9 adds exactly ONE DELETE path — :meth:`Repository.prune_events_for_terminal_runs`
+    — which only removes events of TERMINAL runs that have a ``run_totals`` snapshot
+    and finished past the retention horizon (spend survives via the fast-path).
+    """
     src = Path("app/db/repository.py").read_text()
     assert "UPDATE events" not in src
-    assert "DELETE FROM events" not in src
+    # The sole DELETE on events is the guarded retention prune (no other delete path).
+    assert src.count("DELETE FROM events") == 1
+    assert "prune_events_for_terminal_runs" in src
 
 
 @pytest.mark.asyncio

@@ -181,6 +181,28 @@ def derive_issue_state(issue: BoardIssue, active_run: ActiveRun | None = None) -
     )
 
 
+def derive_agent_state(labels: Sequence[str]) -> str | None:
+    """Derive the indexed ``agent_state`` suffix from an issue's labels (G12).
+
+    Returns the precedence-resolved ``agent:*`` **suffix** (``"queued"`` /
+    ``"in-progress"`` / ``"paused"`` / ``"review"``), or ``None`` for Backlog (no
+    ``agent:*`` label). This is the value persisted into the indexed
+    ``issues.agent_state`` column so the per-tick dispatch-candidate read is an
+    index-backed ``WHERE agent_state='queued'`` instead of a full-board JSON parse
+    (:meth:`app.db.repository.Repository.read_candidate_issues`). Reuses the SAME
+    :data:`_LABEL_PRECEDENCE` ordering as :func:`_label_state` (the board
+    derivation) so the indexed column can never disagree with the board column —
+    one precedence table, two projections. Pure (no DB / GitHub).
+    """
+    present = {lbl for lbl in labels if lbl in _LABEL_TO_STATE}
+    if not present:
+        return None
+    for label in _LABEL_PRECEDENCE:
+        if label in present:
+            return label.split(":", 1)[1]
+    return None  # pragma: no cover - present ⊆ the precedence set
+
+
 # ── import: GraphQL board read → issues cache (through the repository) ─────────
 
 
@@ -233,6 +255,10 @@ async def sync_issues(
             ),
             labels=list(issue.labels),
             pr_num=issue.merged_pr_num,
+            # G12: persist the derived ``agent:*`` suffix into the indexed
+            # ``agent_state`` column alongside labels_json, so the per-tick
+            # candidate read is an index-backed WHERE agent_state='queued'.
+            agent_state=derive_agent_state(issue.labels),
         )
         for issue in page.issues
     ]

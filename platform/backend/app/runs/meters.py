@@ -43,7 +43,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from app.db.repository import COST_EXCLUDED_AGENT, Repository
+from app.db.repository import Repository
+from app.db.spend_sql import COST_EXCLUDED_AGENT
 
 #: ``event_type`` values that carry a **completed** segment's final cumulative
 #: cost/turns (INV-7 meter-critical). They are the per-task finals the segment-sum

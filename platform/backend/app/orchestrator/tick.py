@@ -45,6 +45,7 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from app.orchestrator.deadlines import Clock, utc_now
@@ -223,7 +224,14 @@ async def run_tick(deps: TickDeps) -> TickOutcome:
         deps.repo,
     )
 
-    # 2. validate preflight — do not dispatch into a broken environment.
+    # 2. events-retention prune (G9): bound the unbounded append-only events table.
+    #    Deletes events of TERMINAL+snapshotted runs finished before the horizon
+    #    (spend survives via the run_totals fast-path); a no-op when disabled
+    #    (EVENTS_RETENTION_DAYS=0) or nothing is due. Routed through the single
+    #    writer (INV-6); a transient failure must not kill the tick.
+    await _prune_events(deps)
+
+    # 3. validate preflight — do not dispatch into a broken environment.
     preflight_ok = _preflight_ok(deps.run_service)
 
     dispatched: list[LaunchResult] = []
@@ -334,19 +342,25 @@ async def _refresh_board(deps: TickDeps) -> None:
 
 
 async def _read_candidates(deps: TickDeps) -> list[Candidate]:
-    """Read ``agent:queued`` issues with an assigned workflow from the cache (§8.2).
+    """Read ``agent:queued`` issues with an assigned workflow via the index (§8.2 / G12).
 
     A candidate is an issue carrying the ``agent:queued`` label **and** an assigned
     ``workflow_id`` (no workflow → nothing to dispatch). An issue that already has
     an active run is excluded (it is in progress, not queued) so a re-poll does not
     re-dispatch a live run — the claim-lock would reject it anyway (INV-5), but
-    skipping it here avoids a wasted launch attempt. Read through the repository
-    seam; the launch params are built from the stored ``workflow_id`` + config
-    defaults.
+    skipping it here avoids a wasted launch attempt.
+
+    G12: the queued set comes from the **index-backed**
+    :meth:`Repository.read_candidate_issues` (``WHERE repo=? AND agent_state='queued'``
+    over the derived, indexed ``agent_state`` column) instead of reading the ENTIRE
+    board and JSON-parsing ``labels_json`` for ``agent:queued`` in Python every tick.
+    The candidate set is small (only queued issues), so the per-tick read no longer
+    scales with total board size. The launch params are built from the stored
+    ``workflow_id`` + config defaults.
     """
     from app.github.sync import ACTIVE_RUN_STATUSES
 
-    issues = await deps.repository.read_issues(deps.repo)
+    issues = await deps.repository.read_candidate_issues(deps.repo)
     active_rows = await deps.repository.read_active_runs(deps.repo, sorted(ACTIVE_RUN_STATUSES))
     active_issue_nums = {int(r["issue_num"]) for r in active_rows if r.get("issue_num") is not None}
     candidates: list[Candidate] = []
@@ -354,6 +368,9 @@ async def _read_candidates(deps: TickDeps) -> list[Candidate]:
         num = int(issue["num"])
         if num in active_issue_nums:
             continue
+        # The index already narrowed to agent_state='queued'; re-confirm the label
+        # is present (defensive — labels_json is authoritative) and require a
+        # workflow to dispatch.
         labels = _decode_labels(issue.get("labels_json"))
         if QUEUED_LABEL not in labels:
             continue
@@ -370,6 +387,33 @@ async def _read_candidates(deps: TickDeps) -> list[Candidate]:
             )
         )
     return candidates
+
+
+async def _prune_events(deps: TickDeps) -> int:
+    """Prune events of terminal+snapshotted runs older than the retention horizon (G9).
+
+    A no-op when ``EVENTS_RETENTION_DAYS == 0`` (disabled — the conservative
+    default). Otherwise computes the UTC horizon ``now - retention_days`` and routes
+    the bounded DELETE through :meth:`Repository.prune_events_for_terminal_runs`
+    (single writer — INV-6), which only touches events of runs that are terminal,
+    have a ``run_totals`` snapshot, and finished before the horizon — never an
+    active run's events, never a snapshot-less run's. Spend/history survive the
+    prune via the run_totals fast-path. The horizon uses :attr:`TickDeps.now` so a
+    frozen-clock test drives it deterministically. A transient prune failure is
+    logged and swallowed so it never kills the tick. Returns the row count pruned
+    (0 when disabled / nothing due).
+    """
+    retention_days = deps.settings.EVENTS_RETENTION_DAYS
+    if retention_days <= 0:
+        return 0
+    horizon = deps.now() - timedelta(days=retention_days)
+    try:
+        return await deps.repository.prune_events_for_terminal_runs(
+            older_than_iso=horizon.isoformat()
+        )
+    except Exception:  # noqa: BLE001 - a prune failure must not kill the tick
+        _log.warning("orchestrator.tick events prune failed; continuing", exc_info=True)
+        return 0
 
 
 #: Default base branch a tick-dispatched run targets when the project pins none.

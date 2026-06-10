@@ -50,6 +50,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from app.db.spend_sql import TERMINAL_RUN_STATUSES as TERMINAL_RUN_STATUSES
 from app.github.sync import ACTIVE_RUN_STATUSES
 from app.orchestrator.deadlines import Clock, seconds_since, utc_now
 
@@ -65,13 +66,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 _log = logging.getLogger(__name__)
 
-#: ``runs.status`` values that are **terminal** — the run is finished and its DB
-#: row no longer overrides the label (the complement of the §8.1 active set, which
-#: is the single source of "is this run live?" reconcile shares with board
-#: derivation, so the two never disagree).
-TERMINAL_RUN_STATUSES: frozenset[str] = frozenset(
-    {"completed", "failed", "cancelled", "timed_out", "interrupted"}
-)
+# ``TERMINAL_RUN_STATUSES`` (the §8.1-active complement) is re-exported above from
+# the db layer (:data:`app.db.spend_sql.TERMINAL_RUN_STATUSES`) so the reconcile
+# pass, the G9 spend fast-path, and the events-retention prune all agree on "is
+# this run finished?" from ONE definition.
 
 #: Reason codes carried on a :class:`StallSignal` so 3.4's retry scheduler (and the
 #: structured logs) can branch on *why* a kill happened.
