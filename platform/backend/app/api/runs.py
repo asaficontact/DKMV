@@ -49,7 +49,7 @@ from app.runs.launch import LaunchRequest, launch_run
 from app.runs.service import DEFAULT_MEMORY
 from app.runtime import RunService
 from app.sse.auth import set_sse_cookie
-from app.sse.run_stream import RUN_STREAM_TASKS_ATTR, attach_run_stream
+from app.sse.run_stream import RUN_STREAM_TASKS_ATTR, LifecycleDeps, attach_run_stream
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from dkmv.runtime._handle import RunHandle
@@ -193,6 +193,12 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
     # launch returns). Initialized here so the closure has a definite binding.
     current_labels: list[str] = []
 
+    # G5 — the board-completion seam the per-run supervisor uses to link the PR +
+    # move the issue to review (success) or demote it off in-progress (failure) via
+    # the write-queue (INV-11). Built from the same lifespan singletons this handler
+    # already resolved (client / write-queue / board cache).
+    lifecycle = LifecycleDeps(github_client=client, write_queue=write_queue, cache=cache)
+
     def _attach_stream(run_id: str, handle: RunHandle) -> None:
         """Register the run's observer + spawn its pump/supervisor (F8 / §8.3)."""
         attach_run_stream(
@@ -201,6 +207,7 @@ async def create_run(body: CreateRunRequest, request: Request) -> JSONResponse:
             registry=registry,
             repository=stream_repository,
             tasks=tasks,
+            lifecycle=lifecycle,
         )
 
     def _build_on_pause(run_id: str) -> Any:
