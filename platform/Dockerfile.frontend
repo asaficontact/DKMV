@@ -1,34 +1,63 @@
-# DKMV Platform frontend image (React 18 + Vite + TypeScript).
+# DKMV Platform frontend image — HARDENED PRODUCTION STATIC BUILD (G14).
 #
-# This image runs the Vite DEV server (it proxies `/api` → the backend and injects
-# the local control-plane token — see vite.config.ts). A hardened production static
-# build (multi-stage + a static file server behind the loopback bind) is a post-v1
-# deployment hardening item; v1 ships the dev server, which is sufficient for the
-# loopback, single-operator control plane.
+# This is the PRODUCTION path: a multi-stage build that produces the static Vite
+# bundle (`vite build` → dist/) and serves it from a minimal nginx:alpine, which
+# also reverse-proxies `/api` → the backend (mirroring the verified dev proxy).
+# It does NOT run the Vite dev server (no HMR/websocket churn, no dev error
+# overlay, minified assets, smaller attack surface).
+#
+# LOCAL DEV is unchanged and uses a DIFFERENT path — `npm run dev` (the Vite dev
+# server + its `/api` proxy in frontend/vite.config.ts). See platform/docs/setup.md
+# §6a "Local dev". Do NOT use this image for the inner dev loop; use it for deploy.
 #
 # Build context is the repo root (matches docker-compose.yml `context: ..`):
 #   docker build -f platform/Dockerfile.frontend -t dkmv-platform-frontend .
 
-FROM node:20-slim
-
-ENV NODE_ENV=development
+# ── Stage 1: build the static bundle ─────────────────────────────────────────
+FROM node:20-slim AS build
 
 WORKDIR /app
 
-# Install deps first for layer caching. Copy ONLY the manifest + lockfile so this
-# layer stays cached as long as dependencies are unchanged. `npm ci` is
-# deterministic (installs the committed package-lock.json exactly) and fails fast
-# if the manifest and lockfile are out of sync — no `|| npm install` fallback,
-# which would silently paper over a drifted/missing lockfile.
+# Install deps first for layer caching. `npm ci` is deterministic (installs the
+# committed package-lock.json exactly) and fails fast on a drifted/missing
+# lockfile — no `|| npm install` fallback that would paper over drift.
+# `--include=dev` is explicit because the BUILD needs the dev deps (vite + tsc +
+# @vitejs/plugin-react all live in devDependencies); `vite build` itself still
+# emits a production, minified bundle (`vite build` defaults to mode=production).
 COPY platform/frontend/package.json platform/frontend/package-lock.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 # Copy the frontend source over the cached deps. The repo-root `.dockerignore`
-# excludes `node_modules`, so this COPY no longer drags the host-built (wrong
-# arch, ~74M) node_modules into the image and clobbers the deps installed above.
+# excludes node_modules + dist, so this COPY does not drag host build artifacts in.
 COPY platform/frontend/ ./
 
+# `npm run build` runs `tsc --noEmit && vite build` → /app/dist (minified,
+# content-hashed assets). The build fails the image if typecheck fails.
+RUN npm run build
+
+# ── Stage 2: minimal hardened static server ──────────────────────────────────
+FROM nginx:1.27-alpine AS serve
+
+# `envsubst` ships in the nginx:alpine image (gettext). The entrypoint uses it to
+# render the config template with the runtime backend origin + token.
+
+# Remove the stock default server; ship only our hardened config template.
+RUN rm -f /etc/nginx/conf.d/default.conf
+
+# Copy the built static bundle into nginx's web root.
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Config TEMPLATE (rendered at start by the entrypoint) + the entrypoint itself.
+COPY platform/nginx.conf.template /etc/nginx/templates/nginx.conf.template
+COPY platform/frontend-entrypoint.sh /docker-entrypoint.d/dkmv-render.sh
+RUN chmod +x /docker-entrypoint.d/dkmv-render.sh
+
+# The compose service publishes 5173 (kept stable so compose + the loopback bind
+# are unchanged from the dev-server image). nginx listens on 5173 (see template).
 EXPOSE 5173
 
-# Bind to 0.0.0.0 inside the container; compose publishes to host loopback only.
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+# Render the template (DKMV_BACKEND_ORIGIN + DKMV_PLATFORM_TOKEN) then run nginx
+# in the foreground. We invoke our renderer explicitly as the entrypoint so the
+# config exists + validates (`nginx -t`) before nginx starts.
+ENTRYPOINT ["/docker-entrypoint.d/dkmv-render.sh"]
+CMD ["nginx", "-g", "daemon off;"]

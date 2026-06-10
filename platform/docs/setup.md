@@ -177,10 +177,95 @@ docker compose up
 ```
 
 `docker compose up` brings up the brokered Docker socket proxy, runs the schema
-migration, starts the backend, and starts the frontend (its Vite proxy targets the
-`backend` service and injects `DKMV_PLATFORM_TOKEN`). Both services publish to the
-host loopback only (`127.0.0.1`). The backend additionally requires the local token
-+ Host/Origin validation + CSRF (INV-1); loopback alone is not sufficient.
+migration, starts the backend, and starts the frontend (the hardened static build
+— see §7a). Both services publish to the host loopback only (`127.0.0.1`). The
+backend additionally requires the local token + Host/Origin validation + CSRF
+(INV-1); loopback alone is not sufficient.
+
+<a name="prod-frontend"></a>
+## 7a. Frontend: production static build vs. local dev (G14)
+
+There are now **two distinct frontend paths** — do not confuse them:
+
+| Path | Command / image | When |
+|---|---|---|
+| **Production** (deploy) | `platform/Dockerfile.frontend` — multi-stage `vite build` → **nginx:alpine** static server | `docker compose up` |
+| **Local dev** (inner loop) | `npm run dev` — Vite dev server + its `/api` proxy (`vite.config.ts`) | §6a "Local dev" |
+
+**What the production image is.** A hardened multi-stage build: stage 1 runs
+`npm ci && npm run build` (`tsc --noEmit && vite build` → a minified, content-hashed
+`dist/`); stage 2 serves `dist/` from `nginx:1.27-alpine`. No HMR/websocket, no dev
+error overlay, no dev-server perf, smaller attack surface — none of the dev-server
+posture ships to a deployed host.
+
+**How nginx mirrors the verified dev proxy** (`platform/nginx.conf.template`,
+rendered at container start by `platform/frontend-entrypoint.sh`):
+
+- **Reverse-proxies `/api` → the backend** (`DKMV_BACKEND_ORIGIN`, default
+  `http://backend:8787` in compose). The entrypoint strips the scheme to derive the
+  nginx `upstream`.
+- **Preserves the loopback `Host`** (`proxy_set_header Host $http_host`) — the
+  nginx equivalent of the dev proxy's `changeOrigin: false`. The backend's INV-1
+  access-control middleware **rejects** a non-loopback Host, so the Host is **not**
+  rewritten to the `backend` service name (that would 403).
+- **Injects the control-plane token server-side** as `Authorization: Bearer
+  <DKMV_PLATFORM_TOKEN>` (only when the request carries none — mirroring the dev
+  proxy's `if (!getHeader('authorization'))`), so the token **never ships in the
+  static bundle** (INV-1). Verified: `grep DKMV_PLATFORM_TOKEN` over the served
+  `/usr/share/nginx/html` finds nothing.
+- **SSE passes through un-buffered** (`proxy_buffering off`, long `proxy_read_timeout`,
+  `proxy_http_version 1.1` + cleared `Connection`) so `GET /api/v1/runs/{id}/events`
+  streams immediately. The backend also sets `X-Accel-Buffering: no`, which nginx
+  honors.
+- **Security headers** on every response: a restrictive CSP (`default-src 'self'`;
+  `connect-src 'self'` for fetch + `EventSource`), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `server_tokens off`,
+  `autoindex off`, gzip on, and an SPA fallback (`try_files … /index.html`) so
+  client-side routes resolve.
+
+**Build-time verification (run in CI / locally).**
+
+```bash
+cd platform/frontend
+npx tsc --noEmit && npx vitest run     # gates
+npm run build                          # → dist/ (minified, content-hashed)
+ls dist/index.html dist/assets         # assert the bundle was produced
+```
+
+**Operator runbook — validate the running container live.** The full
+static-serve + proxy + token-injection + SSE chain can only be confirmed against a
+live backend; it is **operator-validated-live** (like `egress.md`), not asserted by
+CI here:
+
+```bash
+# 1. Bring the stack up (frontend = the prod nginx image now).
+cd platform && docker compose up -d
+
+# 2. App loads + security headers present (loopback only).
+curl -s -D - -o /dev/null http://127.0.0.1:5173/ | \
+  grep -iE 'content-security-policy|x-content-type-options|x-frame-options'
+#  → all three headers present.
+
+# 3. SPA route falls back to index.html (no 404 for client-side routes).
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5173/history   # → 200
+
+# 4. The token is NOT in the served bundle (INV-1).
+docker compose exec frontend sh -c \
+  "grep -r DKMV_PLATFORM_TOKEN /usr/share/nginx/html || echo 'absent (good)'"
+#  → absent (good)
+
+# 5. /api proxies to the backend WITH the injected Bearer + preserved Host.
+#    A list endpoint should return JSON (not a 403 Host rejection, not a 401).
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5173/api/v1/runs   # → 200
+
+# 6. SSE streams un-buffered (events arrive incrementally, connection held open).
+curl -N -s http://127.0.0.1:5173/api/v1/runs/<run-id>/events | head -3
+#  → `event:`/`data:` frames arrive immediately (not buffered into one chunk).
+```
+
+If step 5 returns `403`, the loopback Host is being rewritten (check
+`proxy_set_header Host $http_host`); if it returns `401`, the token is not being
+injected (check `DKMV_PLATFORM_TOKEN` is set + matches the backend's).
 
 ## 8. Backup & restore (§6.5, AC-14)
 
