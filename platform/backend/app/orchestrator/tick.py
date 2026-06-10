@@ -540,7 +540,7 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
     from app.orchestrator.dispatch import BoundedDispatcher, build_policy_from_settings
     from app.orchestrator.retry_deps import RETRY_SCHEDULER_ATTR, build_retry_scheduler
     from app.runs.service import DEFAULT_MEMORY
-    from app.sse.run_stream import attach_run_stream
+    from app.sse.run_stream import LifecycleDeps, attach_run_stream
 
     state = app.state
     repository: Repository = state.repository
@@ -567,6 +567,11 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
         stream_tasks = set()
         state.run_stream_tasks = stream_tasks
 
+    # G5 — board completion for tick-dispatched runs (success → review + PR link,
+    # failure → demote off in-progress) via the write-queue (INV-11). Built from the
+    # same lifespan singletons the tick already resolved.
+    lifecycle = LifecycleDeps(github_client=github_client, write_queue=write_queue, cache=cache)
+
     def _attach_stream(run_id: str, handle: Any) -> None:
         attach_run_stream(
             run_id=run_id,
@@ -574,6 +579,7 @@ def build_tick_deps(app: Any, repo: str) -> TickDeps:
             registry=registry,
             repository=repository,
             tasks=stream_tasks,
+            lifecycle=lifecycle,
         )
 
     # The lifespan-published local project root (slice 4.2 / DKMV_PROJECT_ROOT) so a

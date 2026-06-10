@@ -169,6 +169,51 @@ async def test_pump_redacts_secret_before_persist(repository: Repository) -> Non
     assert leaked not in backlog[0]["payload_json"]
 
 
+@pytest.mark.asyncio
+async def test_pump_persists_engine_run_id_early(repository: Repository) -> None:
+    """G3: the engine id is written to the DB on the FIRST stamped frame, NOT at close.
+
+    Closing the orphan-recovery window — the reaper's only container handle is
+    ``runs.engine_run_id``. Here the pump processes the first engine-stamped event
+    (its ``run_id`` is the engine ``YYMMDD-HHMM`` id, different from the platform
+    UUID) and we assert the run row carries ``engine_run_id`` **before** the run is
+    ever closed/completed.
+    """
+    loop = asyncio.get_running_loop()
+    run_id = await _seed_run(repository)
+    hub = RunStreamHub(run_id, loop)
+    pump = EventPump(repository=repository, hub=hub)
+    pump_task = asyncio.ensure_future(pump.run())
+
+    engine_id = "260610-1230-analyze"
+    # An engine-stamped frame: its run_id is the engine id (≠ the platform UUID).
+    hub.queue.put_nowait(
+        _event(engine_id, seq=1, event_type="task_started", task_index=0, task_name="analyze")
+    )
+    # Drain the frame WITHOUT closing the run (mid-run, no completion yet).
+    for _ in range(50):
+        row = await repository.get_run(run_id)
+        assert row is not None
+        if row["engine_run_id"]:
+            break
+        await asyncio.sleep(0.01)
+
+    # The engine id was persisted to the run row mid-run (before any close).
+    assert not hub.closed.is_set()
+    row = await repository.get_run(run_id)
+    assert row is not None
+    assert row["engine_run_id"] == engine_id
+
+    # The early write fires exactly once: more frames don't re-issue it (idempotent).
+    hub.queue.put_nowait(_event(engine_id, seq=2, event_type="assistant", task_index=0))
+    await asyncio.sleep(0.05)
+    hub.mark_closed()
+    await asyncio.wait_for(pump_task, timeout=2.0)
+    row = await repository.get_run(run_id)
+    assert row is not None
+    assert row["engine_run_id"] == engine_id
+
+
 def test_event_to_record_normalizes_task_index() -> None:
     """The engine's -1 'no task' sentinel maps to NULL task_index (INV-7 prep)."""
     rec = event_to_record(_event("r1", seq=1, event_type="stream", task_index=-1))

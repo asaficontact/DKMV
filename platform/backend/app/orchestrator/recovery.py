@@ -113,8 +113,26 @@ class DockerOrphanReaper:
     async def reap(self, run_row: dict[str, Any]) -> bool:
         engine_run_id = run_row.get("engine_run_id")
         if not engine_run_id:
-            # No engine run id yet (the run never reached start()) → no container to
-            # kill. The row is still marked interrupted by the caller (INV-10).
+            # G3 RESIDUAL WINDOW (documented, bounded): ``engine_run_id`` is now
+            # persisted by the pump on the FIRST stamped engine frame
+            # (``EventPump._persist_engine_run_id_early``), not at completion — so a
+            # mid-run crash leaves it ``NULL`` ONLY for the tiny window between
+            # ``EmbeddedRuntime.start`` and that first frame (before any container is
+            # even running, or just as it boots). In that window there is no engine
+            # id → no resolvable container name → nothing this reaper can ``docker
+            # kill``; the caller (``recover_orphans``) still marks the run
+            # ``interrupted`` so it is never stranded non-terminal (INV-10), and it
+            # is surfaced in the boot log.
+            #
+            # CLOSING THE RESIDUAL WINDOW is a future §11 engine hardening: a
+            # platform-known marker on the container (e.g. the engine labelling each
+            # container with the platform run_id, or a filesystem-scan reconcile)
+            # would let the platform sweep + kill an orphan with no DB id. The engine
+            # does NOT label containers with our run_id today and the engine is
+            # LOCKED (INV-13), so a label sweep is unavailable without that engine
+            # change — recorded in SHIP_GAPS (G3) as the recommended §11 ask. Until
+            # then the window is intentionally accepted (no container spends before
+            # its first frame, so the budget exposure is negligible).
             return False
         container_name = await asyncio.to_thread(self._resolve_container_name, str(engine_run_id))
         if not container_name:

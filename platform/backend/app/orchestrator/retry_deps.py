@@ -66,7 +66,7 @@ def build_retry_scheduler(app: Starlette) -> RetryScheduler:
         from app.api.deps import project_root_from_state
         from app.runs.launch import LaunchRequest, duplicate_dispatch, launch_run
         from app.runs.service import DEFAULT_MEMORY
-        from app.sse.run_stream import attach_run_stream
+        from app.sse.run_stream import LifecycleDeps, attach_run_stream
 
         write_queue: WriteQueue = state.github_write_queue
         run_service: RunService = state.run_service
@@ -85,6 +85,12 @@ def build_retry_scheduler(app: Starlette) -> RetryScheduler:
             stream_tasks = set()
             state.run_stream_tasks = stream_tasks
 
+        lifecycle = (
+            LifecycleDeps(github_client=github_client, write_queue=write_queue, cache=cache)
+            if github_client is not None
+            else None
+        )
+
         def _attach_stream(run_id: str, handle: Any) -> None:
             attach_run_stream(
                 run_id=run_id,
@@ -92,6 +98,7 @@ def build_retry_scheduler(app: Starlette) -> RetryScheduler:
                 registry=registry,
                 repository=repository,
                 tasks=stream_tasks,
+                lifecycle=lifecycle,
             )
 
         issue_num = row.get("issue_num")

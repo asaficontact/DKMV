@@ -160,6 +160,10 @@ class EventPump:
         #: Per-task last-known stage name, so a ``task_completed`` that omits the
         #: name can still address the right ``run_stages`` row.
         self._stage_names: dict[int, str] = {}
+        #: G3 — set once the engine id has been **persisted** to the DB so the
+        #: early-persist write fires exactly once (the hub only captures it once,
+        #: but guard the write too so a re-drain can never re-issue it).
+        self._engine_run_id_persisted = False
 
     async def run(self) -> None:
         """Drain-persist-fan-out until the run is closed and the queue is empty.
@@ -259,6 +263,15 @@ class EventPump:
         platform_run_id = self._hub.run_id
         for event in batch:
             self._hub.note_engine_run_id(event.run_id)
+        # G3 (orphan-recovery window): persist ``runs.engine_run_id`` the MOMENT the
+        # engine id is first captured off the stream — NOT only at completion. The
+        # id is the ONLY handle boot recovery's reaper has to ``docker kill`` an
+        # orphaned, money-spending container after a mid-run crash. Writing it at
+        # completion left it ``NULL`` for the whole run, so a SIGKILL/OOM/power-loss
+        # mid-run left a live container the reaper returned ``False`` on. We now
+        # shrink that window to "before the first stamped engine frame" (the residual
+        # window documented in ``recovery.py``). Idempotent: fires once per run.
+        await self._persist_engine_run_id_early()
         records = [event_to_record(e, run_id=platform_run_id) for e in batch]
         ids = await self._repository.append_events(records)
         # Project run_stages from lifecycle frames (mutable stepper read model).
@@ -272,6 +285,28 @@ class EventPump:
                 body=event_to_body(event),
             )
             self._hub.publish(frame)
+
+    async def _persist_engine_run_id_early(self) -> None:
+        """Persist ``runs.engine_run_id`` on the FIRST stamped engine frame (G3).
+
+        The hub captures the engine ``YYMMDD-HHMM`` id off the first event whose
+        ``run_id`` differs from the platform UUID (:meth:`RunStreamHub.note_engine_run_id`).
+        As soon as it is known we write it to the run row through the single writer
+        (INV-6), so boot recovery's reaper can ``docker kill`` the orphan after a
+        mid-run crash (the id is the only container handle). Fires **exactly once**
+        per run (guarded by :attr:`_engine_run_id_persisted`) and is best-effort —
+        a write failure here must never wedge the pump (the completion supervisor
+        still back-fills the id as a backstop). NOT a re-attach (INV-10): this only
+        records the id; it never adopts the container.
+        """
+        if self._engine_run_id_persisted:
+            return
+        engine_id = self._hub.engine_run_id
+        if not engine_id:
+            return
+        self._engine_run_id_persisted = True
+        with contextlib.suppress(Exception):
+            await self._repository.update_run_fields(self._hub.run_id, engine_run_id=engine_id)
 
     async def _project_stage(self, event: RuntimeEvent) -> None:
         """Update the ``run_stages`` read model from a lifecycle frame.

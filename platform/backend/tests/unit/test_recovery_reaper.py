@@ -107,6 +107,109 @@ async def test_reaper_docker_kill_oserror(monkeypatch: pytest.MonkeyPatch) -> No
     assert await reaper.reap({"id": "r-1", "engine_run_id": "e1"}) is False
 
 
+async def test_g3_boot_scan_with_early_persisted_id_kills_orphan(
+    repo: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G3 (non-vacuous): a non-terminal run WITH an early-persisted engine_run_id is killed.
+
+    The G3 fix persists ``engine_run_id`` on the first stamped engine frame
+    (mid-run, not at completion). This drives the REAL ``DockerOrphanReaper``
+    through ``recover_orphans`` over a real DB row that carries the early-persisted
+    id, and asserts a single ``docker kill`` of the resolved container is issued and
+    the run is marked ``interrupted`` — so the kill path is exercised, not pre-seeded
+    into a fake that skips it.
+    """
+    await repo.claim_run(
+        idempotency_key="1::wf::main",
+        repo=_REPO,
+        issue_num=1,
+        workflow_id="wf",
+        agent="claude",
+        branch="main",
+        run_id="r-1",
+    )
+    # The early-persist write the pump now performs mid-run (G3).
+    await repo.update_run_fields("r-1", status="running", engine_run_id="260610-1230-plan")
+
+    calls: list[list[str]] = []
+
+    def _fake_run(argv: list[str], **_: Any) -> Any:
+        calls.append(argv)
+
+        class _P:
+            returncode = 0
+
+        return _P()
+
+    monkeypatch.setattr(recovery_mod.shutil, "which", lambda _: "/usr/bin/docker")
+    monkeypatch.setattr(recovery_mod.subprocess, "run", _fake_run)
+    reaper = DockerOrphanReaper(_RunService(_Runtime(name="dkmv-r1")))  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed run service
+
+    result = await recover_orphans(
+        RecoveryDeps(
+            repository=repo,
+            reaper=reaper,
+            repo=_REPO,
+            offer_retry=False,
+            jitter_s=0.0,
+            concurrency=asyncio.Semaphore(1),
+            rng=random.Random(1),
+        )
+    )
+
+    assert calls == [["docker", "kill", "dkmv-r1"]]  # the orphan was actually killed
+    assert result.reaped == ("r-1",)
+    assert result.interrupted == ("r-1",)
+    row = await repo.get_run("r-1")
+    assert row is not None and row["status"] == "interrupted"
+
+
+async def test_g3_boot_scan_null_engine_id_interrupts_but_cannot_kill(
+    repo: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G3 residual window: a NULL engine_run_id orphan is interrupted but NOT killed.
+
+    The crash-before-first-frame residual window (documented in ``recovery.py``):
+    with no engine id there is no resolvable container to ``docker kill`` (the
+    reaper returns ``False``), but the run must still be reliably marked
+    ``interrupted`` — never left stuck non-terminal — and surfaced. Drives the REAL
+    reaper so the gap is explicit, not hidden behind a pre-seeded id.
+    """
+    await repo.claim_run(
+        idempotency_key="2::wf::main",
+        repo=_REPO,
+        issue_num=2,
+        workflow_id="wf",
+        agent="claude",
+        branch="main",
+        run_id="r-2",
+    )
+    await repo.update_run_fields("r-2", status="running")  # NULL engine_run_id
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(recovery_mod.shutil, "which", lambda _: "/usr/bin/docker")
+    monkeypatch.setattr(recovery_mod.subprocess, "run", lambda argv, **_: calls.append(argv))
+    reaper = DockerOrphanReaper(_RunService(_Runtime(name="dkmv-r2")))  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed run service
+
+    result = await recover_orphans(
+        RecoveryDeps(
+            repository=repo,
+            reaper=reaper,
+            repo=_REPO,
+            offer_retry=False,
+            jitter_s=0.0,
+            concurrency=asyncio.Semaphore(1),
+            rng=random.Random(1),
+        )
+    )
+
+    assert calls == []  # nothing to kill (residual window — no container handle)
+    assert result.reaped == ()  # not reaped
+    assert result.interrupted == ("r-2",)  # but still reliably interrupted
+    row = await repo.get_run("r-2")
+    assert row is not None and row["status"] == "interrupted"
+
+
 class _FakeReaper:
     async def reap(self, run_row: dict[str, Any]) -> bool:
         return True
