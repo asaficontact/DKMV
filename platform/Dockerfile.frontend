@@ -1,8 +1,10 @@
 # DKMV Platform frontend image (React 18 + Vite + TypeScript).
 #
-# Phase 0 ships only the Vite *scaffold* (app boots, router stub, design tokens
-# ported) — no Screens 01-07. This image runs the Vite dev server; a production
-# static build (multi-stage + nginx) lands when real screens do.
+# This image runs the Vite DEV server (it proxies `/api` → the backend and injects
+# the local control-plane token — see vite.config.ts). A hardened production static
+# build (multi-stage + a static file server behind the loopback bind) is a post-v1
+# deployment hardening item; v1 ships the dev server, which is sufficient for the
+# loopback, single-operator control plane.
 #
 # Build context is the repo root (matches docker-compose.yml `context: ..`):
 #   docker build -f platform/Dockerfile.frontend -t dkmv-platform-frontend .

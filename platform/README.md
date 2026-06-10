@@ -153,9 +153,14 @@ default for engine-launched sandbox containers.
 The backend binds **`127.0.0.1`** and requires a **local auth token**
 (`DKMV_PLATFORM_TOKEN`) on every API/SSE request; it validates `Host`/`Origin`
 headers (anti-DNS-rebinding) and applies CSRF protection on state-changing
-POSTs. The SSE auth token rides an HttpOnly `SameSite=Strict` cookie and never
-appears in a URL. Loopback alone is not sufficient. (The middleware lands in the
-`0.2-runservice` slice.)
+POSTs. The SSE auth token rides an HttpOnly `SameSite=Strict` cookie (set on the
+first authenticated `POST /runs`) and never appears in a URL. Loopback alone is
+not sufficient. The middleware is `app/security/access_control.py`; a request
+without the token gets `401`, a foreign `Host`/`Origin` gets `403`. The browser
+app reads the token from a runtime-injected global (`window.__DKMV_TOKEN__`); in
+`npm run dev` the Vite proxy injects it server-side from `DKMV_PLATFORM_TOKEN` so
+it never ships in the bundle — see [`docs/setup.md`](docs/setup.md#local-dev) and
+the root `PLATFORM_E2E_TESTING.md`.
 
 ## Configuration (PRD §8.8 env surface)
 
@@ -218,20 +223,48 @@ Run the security baseline: `cd backend && pytest -q -k security_baseline`.
 
 ## Running
 
+> **A full step-by-step end-to-end testing walkthrough** (browser flow + curl +
+> the automated suites + troubleshooting) is in the repo-root
+> [`PLATFORM_E2E_TESTING.md`](../PLATFORM_E2E_TESTING.md). The summary:
+
 ### Local (backend)
+
+The runtime uses raw `aiosqlite` (no ORM `create_all`), so a **fresh DB needs the
+schema created with Alembic first** — then start the server:
 
 ```bash
 cd platform/backend
 source .venv/bin/activate
-uvicorn app.main:app --host 127.0.0.1 --port 8787
+export DKMV_PLATFORM_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+alembic upgrade head                                   # create the schema (once, per fresh DB)
+uvicorn app.main:app --host 127.0.0.1 --port 8787      # serve the API
 curl -fsS -H "Authorization: Bearer $DKMV_PLATFORM_TOKEN" \
-  http://127.0.0.1:8787/api/v1/preflight
+  http://127.0.0.1:8787/api/v1/preflight               # readiness checks (ready:false until configured)
 ```
+
+### Local (frontend)
+
+In a second terminal, point the Vite dev proxy at the backend with the **same**
+token, then start the dev server:
+
+```bash
+cd platform/frontend
+npm ci
+printf 'DKMV_PLATFORM_TOKEN=%s\nDKMV_BACKEND_ORIGIN=http://127.0.0.1:8787\n' "$DKMV_PLATFORM_TOKEN" > .env
+npm run dev      # → http://127.0.0.1:5173 (proxies /api → the backend, injecting the token)
+```
+
+Open `http://127.0.0.1:5173` and follow the Connect → Board → Run flow.
 
 ### Docker Compose (backend + frontend)
 
+`docker compose up` runs the migration on start, the brokered Docker socket, the
+backend, and the frontend. Set the token (and the digest-pinned `DKMV_IMAGE`) in
+`platform/.env` first:
+
 ```bash
 cd platform
+cp .env.example .env     # then fill in DKMV_PLATFORM_TOKEN, ANTHROPIC_API_KEY, DKMV_IMAGE (digest), …
 docker compose up
 # backend on http://127.0.0.1:8787, frontend on http://127.0.0.1:5173
 ```
@@ -289,14 +322,14 @@ deploy details are in [`docs/setup.md`](docs/setup.md).
 ## Quality gates
 
 ```bash
-# Backend
+# Backend — lint, format, type, test (≥80% coverage). 645 tests + the §13 e2e suite.
 cd platform/backend
 ruff check . && ruff format --check . && mypy app && pytest -q --cov --cov-fail-under=80
 
-# Frontend (scaffold only in Phase 0)
+# Frontend — type-check + the vitest suite (118 tests incl. the a11y axe + contrast checks).
 cd platform/frontend
 npm ci
-npx tsc --noEmit
+npx tsc --noEmit && npx vitest run
 ```
 
 ## Layout

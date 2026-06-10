@@ -5,7 +5,7 @@
 # plane reaches the root-equivalent Docker socket and launches money-spending
 # runs, so it MUST NOT be openly reachable (NFR-SEC-2, INV-1). Loopback alone is
 # not sufficient: the backend additionally requires the local auth token +
-# Host/Origin validation + CSRF (middleware lands in slice 0.2).
+# Host/Origin validation + CSRF (app/security/access_control.py).
 #
 # The backend reaches Docker through a BROKERED, method-allowlisted socket proxy
 # (tecnativa/docker-socket-proxy) — NEVER a raw `-v /var/run/docker.sock` mount
@@ -129,6 +129,14 @@ services:
     ports:
       # Host loopback only.
       - "127.0.0.1:5173:5173"
+    environment:
+      # The Vite dev server proxies `/api` → the backend (vite.config.ts). Inside
+      # compose the backend is reachable as the `backend` service, and the proxy
+      # injects this local control-plane token (INV-1) on every proxied request so
+      # it never ships in the browser bundle. Keep this in sync with the backend's
+      # DKMV_PLATFORM_TOKEN.
+      DKMV_BACKEND_ORIGIN: "http://backend:8787"
+      DKMV_PLATFORM_TOKEN: "${DKMV_PLATFORM_TOKEN:-}"
     depends_on:
       - backend
     networks:

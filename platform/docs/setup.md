@@ -128,19 +128,61 @@ than the Claude default (`CODEX_DEFAULT_TIMEOUT_MINUTES=20` <
 for a Codex agent with `400 unsupported_for_agent`; Codex cost renders "—" and is
 excluded from spend.
 
-## 6. Deploy: `docker compose up`
+## 6. Run the schema migration (binding — fresh DB)
+
+The runtime uses raw `aiosqlite` (no SQLAlchemy ORM `create_all`), so a **fresh
+database needs the schema created with Alembic** before the first request — the
+app does not auto-create it. `docker compose up` runs this automatically on start
+(the backend image's entrypoint runs `alembic upgrade head` before `uvicorn`); for
+a **local** backend run it once yourself:
+
+```bash
+cd platform/backend && source .venv/bin/activate
+alembic upgrade head        # creates the 9 tables; idempotent (no-op when at head)
+```
+
+<a name="local-dev"></a>
+## 6a. Local dev (two terminals)
+
+The fastest loop for exercising the UI + flows without Docker (an actual agent
+*run* still needs Docker + the sandbox image — see the root
+`PLATFORM_E2E_TESTING.md`):
+
+```bash
+# Terminal 1 — backend
+cd platform/backend && source .venv/bin/activate
+export DKMV_PLATFORM_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+alembic upgrade head
+uvicorn app.main:app --host 127.0.0.1 --port 8787      # add --reload for hot reload
+
+# Terminal 2 — frontend (Vite dev proxy → backend, same token)
+cd platform/frontend && npm ci
+printf 'DKMV_PLATFORM_TOKEN=%s\nDKMV_BACKEND_ORIGIN=http://127.0.0.1:8787\n' "$DKMV_PLATFORM_TOKEN" > .env
+npm run dev                                            # → http://127.0.0.1:5173
+```
+
+The frontend talks to the backend over a same-origin `/api/v1` base; `vite.config.ts`
+proxies `/api` → `DKMV_BACKEND_ORIGIN` and injects `DKMV_PLATFORM_TOKEN` as the
+`Authorization: Bearer` header **server-side**, so the token never ships in the
+browser bundle (INV-1). The SSE stream then authenticates via the HttpOnly cookie
+the backend sets on `POST /runs`.
+
+## 7. Deploy: `docker compose up`
 
 ```bash
 cd platform
+cp .env.example .env     # fill in DKMV_PLATFORM_TOKEN, ANTHROPIC_API_KEY/CODEX_API_KEY, DKMV_IMAGE (digest), …
 docker compose up
 # backend on http://127.0.0.1:8787 (loopback only), frontend on http://127.0.0.1:5173
 ```
 
-Both services publish to the host loopback only (`127.0.0.1`). The backend
-additionally requires the local token + Host/Origin validation + CSRF (INV-1);
-loopback alone is not sufficient.
+`docker compose up` brings up the brokered Docker socket proxy, runs the schema
+migration, starts the backend, and starts the frontend (its Vite proxy targets the
+`backend` service and injects `DKMV_PLATFORM_TOKEN`). Both services publish to the
+host loopback only (`127.0.0.1`). The backend additionally requires the local token
++ Host/Origin validation + CSRF (INV-1); loopback alone is not sufficient.
 
-## 7. Backup & restore (§6.5, AC-14)
+## 8. Backup & restore (§6.5, AC-14)
 
 The single SQLite file is the source of truth for spend + audit. The backup is a
 consistent `VACUUM INTO` snapshot; the helper is `app/db/backup.py`.
@@ -171,7 +213,7 @@ cd platform && docker compose up
 The round-trip (snapshot → restore → row counts + the Codex-excluded spend rollup
 MATCH) is covered by `backend/tests/test_backup.py`.
 
-## 8. Verify the install
+## 9. Verify the install
 
 ```bash
 cd platform/backend && source .venv/bin/activate

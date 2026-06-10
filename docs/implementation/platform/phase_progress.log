@@ -2,3 +2,97 @@
 # Format: <ISO8601> <EVENT> [<branch/phase> [<detail>]]
 # Events: DISPATCH | IMPL-COMPLETE | EVAL-APPROVED | PR-OPENED | PHASE-N-COMPLETE | session_end
 2026-06-08T15:17:02Z session_end
+2026-06-08T16:11:07Z session_end
+2026-06-08T16:46:24Z DISPATCH phase-0-impl-0.1-scaffold
+2026-06-08T17:39:56Z EVAL-APPROVED phase-0-impl-0.1-scaffold
+2026-06-08T18:36:41Z MERGED phase-0-impl-0.1-scaffold c2e53c2 (PR#3 squash)
+2026-06-08T18:36:41Z DISPATCH phase-0-impl-0.2-runservice
+2026-06-08T18:36:41Z DISPATCH phase-0-impl-0.3-persistence
+2026-06-08T19:35:52Z EVAL-APPROVED phase-0-impl-0.3-persistence
+2026-06-08T19:37:22Z MERGED phase-0-impl-0.3-persistence 374069e (PR#4 squash)
+2026-06-08T19:50:12Z EVAL-APPROVED phase-0-impl-0.2-runservice
+2026-06-08T19:51:30Z MERGED phase-0-impl-0.2-runservice c631cc2 (PR#5 squash)
+2026-06-08T19:51:30Z DISPATCH phase-0-impl-0.4-executor
+2026-06-08T21:18:19Z EVAL-APPROVED phase-0-impl-0.4-executor
+2026-06-08T21:19:33Z MERGED phase-0-impl-0.4-executor 7ecf4b6 (PR#6 squash)
+2026-06-08T21:19:33Z DISPATCH phase-0-impl-0.5-secrets-egress
+2026-06-08T21:53:11Z EVAL-APPROVED phase-0-impl-0.5-secrets-egress
+2026-06-08T21:54:40Z MERGED phase-0-impl-0.5-secrets-egress 570b8f2 (PR#7 squash)
+2026-06-08T21:54:40Z PHASE-0-COMPLETE all 5 slices merged (PR#3,4,5,6,7)
+2026-06-08T21:56:12Z DISPATCH phase-1-impl-1.1-github-client
+2026-06-08T21:56:12Z DISPATCH phase-1-impl-1.4-connect-shell
+2026-06-08T22:22:19Z EVAL-APPROVED phase-1-impl-1.1-github-client
+2026-06-08T22:23:27Z MERGED phase-1-impl-1.1-github-client 3a36a8d (PR#8 squash)
+2026-06-08T22:27:10Z EVAL-APPROVED phase-1-impl-1.4-connect-shell
+2026-06-08T22:28:41Z MERGED phase-1-impl-1.4-connect-shell abef5d0 (PR#9 squash)
+2026-06-08T22:28:41Z DISPATCH phase-1-impl-1.2-issue-sync
+2026-06-08T23:28:52Z EVAL-APPROVED phase-1-impl-1.2-issue-sync (perf MAJOR-2 app-lifespan deferred to Phase 2)
+2026-06-08T23:30:04Z MERGED phase-1-impl-1.2-issue-sync fea001d (PR#10 squash)
+2026-06-08T23:30:04Z DISPATCH phase-1-impl-1.3-label-statemachine
+2026-06-08T23:56:04Z EVAL-APPROVED phase-1-impl-1.3-label-statemachine
+2026-06-08T23:57:13Z MERGED phase-1-impl-1.3-label-statemachine 27456e0 (PR#11 squash)
+2026-06-08T23:57:13Z DISPATCH phase-1-impl-1.5-board
+2026-06-09T00:29:28Z EVAL-APPROVED phase-1-impl-1.5-board
+2026-06-09T00:30:54Z MERGED phase-1-impl-1.5-board 0b27b38 (PR#12 squash)
+2026-06-09T00:30:54Z PHASE-1-COMPLETE all 5 slices merged (PR#8,9,10,11,12)
+2026-06-09T00:32:00Z session_end
+2026-06-09T00:45:42Z DISPATCH phase-2-impl-2.0-app-lifespan (foundation: app-lifespan composition)
+2026-06-09T01:21:40Z EVAL-APPROVED phase-2-impl-2.0-app-lifespan
+2026-06-09T01:22:52Z MERGED phase-2-impl-2.0-app-lifespan 43ca3b0 (PR#13 squash)
+2026-06-09T01:23:17Z DISPATCH phase-2-impl-2.1-launch-api
+2026-06-09T01:23:17Z DISPATCH phase-4-impl-4.1-workflows-api (cross-phase pull for 2.2)
+2026-06-09T02:03:51Z EVAL-APPROVED phase-2-impl-2.1-launch-api
+2026-06-09T02:04:48Z MERGED phase-2-impl-2.1-launch-api 747fa48 (PR#14 squash)
+2026-06-09T02:09:25Z EVAL-APPROVED phase-4-impl-4.1-workflows-api
+2026-06-09T02:11:10Z EVAL-APPROVED phase-4-impl-4.1-workflows-api (pre-push engine flake retried clean)
+2026-06-09T02:12:15Z MERGED phase-4-impl-4.1-workflows-api 87bfb1c (PR#15 squash)
+2026-06-09T02:12:15Z DISPATCH phase-2-impl-2.2-launch-ui
+2026-06-09T02:12:15Z DISPATCH phase-2-impl-2.3-streaming-core
+2026-06-09T02:48:31Z EVAL-APPROVED phase-2-impl-2.2-launch-ui
+2026-06-09T03:17:07Z MERGED phase-2-impl-2.2-launch-ui 61a6e03 (PR#16 squash)
+2026-06-09T03:18:15Z EVAL-APPROVED phase-2-impl-2.3-streaming-core
+2026-06-09T03:19:28Z MERGED phase-2-impl-2.3-streaming-core c75e5b2 (PR#17 squash)
+2026-06-09T03:19:28Z DISPATCH phase-2-impl-2.4-meters-liveui
+2026-06-09T03:19:28Z DISPATCH phase-2-impl-2.5-hitl
+2026-06-09T04:02:08Z EVAL-APPROVED phase-2-impl-2.4-meters-liveui
+2026-06-09T04:03:04Z MERGED phase-2-impl-2.4-meters-liveui ae2609a (PR#18 squash)
+2026-06-09T04:08:02Z EVAL-APPROVED phase-2-impl-2.5-hitl
+2026-06-09T04:09:08Z MERGED phase-2-impl-2.5-hitl fc4fd06 (PR#19 squash)
+2026-06-09T04:09:08Z DISPATCH phase-2-impl-2.6-integration (PauseCard mount + deps.py + exec redaction)
+2026-06-09T04:22:45Z EVAL-APPROVED phase-2-impl-2.6-integration
+2026-06-09T04:23:45Z PHASE-2-COMPLETE all slices merged (PR#13-20: 2.0,2.1,4.1,2.2,2.3,2.4,2.5,2.6)
+2026-06-09T04:24:59Z DISPATCH phase-3-impl-3.1-history-api
+2026-06-09T04:56:23Z EVAL-APPROVED phase-3-impl-3.1-history-api
+2026-06-09T04:57:27Z MERGED phase-3-impl-3.1-history-api fbe3e98 (PR#21 squash)
+2026-06-09T04:57:27Z DISPATCH phase-3-impl-3.2-history-ui
+2026-06-09T04:57:27Z DISPATCH phase-3-impl-3.3-orchestrator-tick
+2026-06-09T05:23:35Z EVAL-APPROVED phase-3-impl-3.2-history-ui
+2026-06-09T05:23:35Z EVAL-APPROVED phase-3-impl-3.3-orchestrator-tick
+2026-06-09T05:25:00Z MERGED phase-3-impl-3.2-history-ui 30a84a9 (PR#22 squash)
+2026-06-09T05:25:00Z MERGED phase-3-impl-3.3-orchestrator-tick d57fe7d (PR#23 squash)
+2026-06-09T05:25:00Z DISPATCH phase-3-impl-3.4-retry
+2026-06-09T06:15:51Z EVAL-APPROVED phase-3-impl-3.4-retry
+2026-06-09T06:17:01Z MERGED phase-3-impl-3.4-retry 057f19d (PR#24 squash)
+2026-06-09T06:17:01Z DISPATCH phase-3-impl-3.5-recovery
+2026-06-09T14:54:47Z EVAL-APPROVED phase-3-impl-3.5-recovery (3.4 date-flake fixed)
+2026-06-09T14:56:11Z MERGED phase-3-impl-3.5-recovery 459b39f (PR#25 squash)
+2026-06-09T14:56:11Z DISPATCH phase-3-impl-3.6-polish (FR-06-4 columns + useNavigate + find_open_pr ABC)
+2026-06-09T15:08:23Z EVAL-APPROVED phase-3-impl-3.6-polish
+2026-06-09T15:09:22Z PHASE-3-COMPLETE all slices merged (PR#21-26: 3.1,3.2,3.3,3.4,3.5,3.6-polish)
+2026-06-09T15:10:35Z DISPATCH phase-4-impl-4.2-workflows-ui
+2026-06-09T16:00:04Z EVAL-APPROVED phase-4-impl-4.2-workflows-ui
+2026-06-09T16:01:12Z PHASE-4-COMPLETE 4.2 merged (PR#27); 4.1 shipped in Phase 2
+2026-06-09T16:02:00Z DISPATCH phase-5-impl-5.1-concurrency
+2026-06-09T18:22:42Z EVAL-APPROVED phase-5-impl-5.1-concurrency (578 passed, no deadlock)
+2026-06-09T18:23:56Z MERGED phase-5-impl-5.1-concurrency 7da79c2 (PR#28 squash)
+2026-06-09T18:23:56Z DISPATCH phase-5-impl-5.2-cost-governance
+2026-06-09T18:23:56Z DISPATCH phase-5-impl-5.3-a11y-obs
+2026-06-09T21:26:51Z EVAL-APPROVED phase-5-impl-5.2-cost-governance (590 passed)
+2026-06-09T21:28:09Z MERGED phase-5-impl-5.2-cost-governance e8bb52d (PR#29 squash)
+2026-06-09T22:32:09Z EVAL-APPROVED phase-5-impl-5.3-a11y-obs (613 passed; FIX-2 honest token_grant)
+2026-06-09T22:33:32Z MERGED phase-5-impl-5.3-a11y-obs 871c11b (PR#30 squash)
+2026-06-09T22:33:32Z DISPATCH phase-5-impl-5.4-release
+2026-06-10T00:28:35Z MERGED phase-5-impl-5.4-release f5149ff (PR#31 squash)
+2026-06-10T00:28:35Z PHASE-5-COMPLETE all slices merged (PR#28-31: 5.1,5.2,5.3,5.4)
+2026-06-10T00:28:35Z ===== DKMV PLATFORM v1 BUILD COMPLETE (M0-M5, PR#3-31) =====
+2026-06-10T00:32:34Z session_end
