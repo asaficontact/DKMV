@@ -319,6 +319,26 @@ The prior live DB is preserved as `<live>.pre-restore`, so the restore is
 reversible. The round-trip is covered by `backend/tests/test_backup.py` (snapshot →
 restore → row counts + the Codex-excluded spend rollup MATCH).
 
+## Scope & known limitations (v1 — honest)
+
+v1 is a **single-operator, single-repo, loopback** control plane. The documented
+residuals (full detail + the compensating controls in
+[`docs/acceptance_matrix.md`](docs/acceptance_matrix.md#known-limitations-v1--honest)):
+
+- **One connected repo** — the orchestrator polls + dispatches for exactly one
+  project; multi-repo is post-v1.
+- **Sandbox isolation** is pinned per-run (gVisor `--runtime` + the `dkmv-egress`
+  network + `--dns`) and **fail-closes** if gVisor isn't registered, but the
+  **over-the-wire** egress block needs live Docker+gVisor validation — see
+  [`docs/egress.md`](docs/egress.md).
+- **PR-push approval gate** fires for workflow-authored pauses; the agent pushes
+  in-container, so an arbitrary in-container push isn't intercepted (the egress
+  allowlist is the compensating control; a pre-push hook is an engine §11 ask).
+- **GitHub credential** is a fine-grained, repo-scoped operator PAT, **file-mounted**
+  (not env); short-lived per-run GitHub-App tokens are post-v1 (ADR-P004).
+- **Observability:** `GET /api/v1/health/orchestrator` surfaces loop health (detects a
+  wedged loop) and `GET /api/v1/audit` the audit trail; both are authenticated.
+
 ## Acceptance matrix (v1 ship sign-off — §13)
 
 The PRD §13 end-to-end acceptance suite lives in `backend/tests/e2e/` (one module

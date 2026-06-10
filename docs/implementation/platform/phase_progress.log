@@ -96,3 +96,16 @@
 2026-06-10T00:28:35Z PHASE-5-COMPLETE all slices merged (PR#28-31: 5.1,5.2,5.3,5.4)
 2026-06-10T00:28:35Z ===== DKMV PLATFORM v1 BUILD COMPLETE (M0-M5, PR#3-31) =====
 2026-06-10T00:32:34Z session_end
+2026-06-10T02:05:02Z session_end
+2026-06-10T17:00:33Z DISPATCH fix-g1-g2-isolation (gVisor+egress passthrough + cred file-mount)
+2026-06-10T18:48:52Z MERGED fix-g1-g2-isolation 92ce34d (PR#32)
+2026-06-10T18:48:52Z DISPATCH fix-g3-g5-lifecycle
+2026-06-10T18:48:52Z DISPATCH fix-g11-retry
+2026-06-10T20:40:44Z MERGED fix-g3-g5-lifecycle e1f8d16 (PR#33) + fix-g11-retry 7a733ec (PR#34)
+2026-06-10T20:40:44Z DISPATCH fix-g6-settings + fix-g7-runactions
+2026-06-10T21:01:13Z MERGED fix-g6-settings 2c483b0 (PR#35) + fix-g7-runactions dd9a680 (PR#36)
+2026-06-10T21:01:13Z DISPATCH fix-g9-g12-g13-dblayer
+2026-06-10T22:35:24Z MERGED fix-g9-g12-g13-dblayer 2d26978 (PR#37)
+2026-06-10T22:35:24Z DISPATCH fix-g8-g10-operability
+2026-06-10T22:59:42Z MERGED fix-g8-g10-operability e5fb830 (PR#38)
+2026-06-10T22:59:42Z DISPATCH fix-g14-frontend-build
