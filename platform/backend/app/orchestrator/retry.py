@@ -38,6 +38,7 @@ through the in-process launch boundary, never the CLI.
 
 from __future__ import annotations
 
+import enum
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -143,6 +144,49 @@ class RetryEntry:
 RedispatchFn = Callable[[dict[str, Any], str | None], Awaitable[str | None]]
 
 
+class PrDetection(enum.Enum):
+    """Tri-state outcome of the existing-PR detection (INV-5 / R-15 — fail CLOSED).
+
+    The duplicate-PR guard MUST distinguish three outcomes, not two — a fail-OPEN
+    two-state guard (G11) re-dispatches when the GitHub read *raises* with a NULL
+    ``pr_num`` and can open a SECOND PR (the claim-lock only prevents a second
+    ``runs`` row, not a second PR from the re-run):
+
+    * :data:`PRESENT` — an open PR exists (``runs.pr_num`` set, or GitHub confirmed
+      one for the head branch) → **resume/skip, never duplicate**.
+    * :data:`ABSENT` — the read **succeeded** and returned nothing **and**
+      ``pr_num`` is NULL → genuinely no PR → **safe to re-dispatch**.
+    * :data:`UNKNOWN` — ``pr_num`` is NULL **and** the GitHub read **raised**
+      (rate-limit / transient 5xx) → a PR *may* exist but we cannot tell →
+      **defer; do NOT re-dispatch this tick** (re-evaluate next tick when GitHub
+      may be reachable). Fail CLOSED toward "don't duplicate".
+    """
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    UNKNOWN = "unknown"
+
+
+class RedispatchOutcome(enum.Enum):
+    """Tri-state outcome of an idempotent re-dispatch (drives backoff consumption).
+
+    :func:`RetryScheduler.fire_due_retries` consumes the backoff window (clears
+    ``due_at``) **only on a definitive resolution** — never on a transient failure
+    (G11): a two-state ``bool`` cleared ``due_at`` even when the re-dispatch failed
+    transiently, stranding the run with a dueless retry state that never re-fires.
+
+    * :data:`LAUNCHED` — a fresh re-dispatch was launched (definitive) → consume.
+    * :data:`SKIPPED` — an **intentional** resolution that needs no new dispatch
+      (an existing PR → resume/skip, or the claim-lock reused the row) → consume.
+    * :data:`DEFER` — a **transient** condition (PR detection UNKNOWN, or the
+      re-dispatch raised) → **leave ``due_at`` set** so the tick re-fires next cadence.
+    """
+
+    LAUNCHED = "launched"
+    SKIPPED = "skipped"
+    DEFER = "defer"
+
+
 @dataclass(slots=True)
 class RetryScheduler:
     """Schedules + fires idempotent retries with capped backoff (§8.2 — 3.4).
@@ -226,9 +270,17 @@ class RetryScheduler:
         for each non-parked one whose ``due_at`` is at-or-before a fresh ``now()``
         (:func:`app.orchestrator.deadlines.is_due` — a re-evaluation that fires
         correctly after a suspend gap, never a slept timer), perform the
-        **idempotent** re-dispatch (:meth:`redispatch_run`) and clear its ``due_at``.
-        A run with no due backoff (or parked) is skipped. Returns the run_ids
-        re-dispatched this tick.
+        **idempotent** re-dispatch (:meth:`redispatch_run`).
+
+        Backoff consumption is **outcome-aware** (G11): ``due_at`` is cleared **only
+        on a definitive resolution** — a fresh launch (:data:`RedispatchOutcome.LAUNCHED`)
+        or an intentional PR-skip / claim-lock reuse (:data:`RedispatchOutcome.SKIPPED`).
+        On a **transient** outcome (:data:`RedispatchOutcome.DEFER` — PR detection
+        UNKNOWN, or the re-dispatch raised) the deadline is **left set** (and the
+        backoff bumped) so the next tick re-fires it rather than stranding the run
+        with a dueless, never-firing retry state. A run with no due backoff (or
+        parked) is skipped. Returns the run_ids actually re-dispatched (LAUNCHED)
+        this tick.
         """
         fired: list[str] = []
         for state in await self._read_all_states():
@@ -236,47 +288,77 @@ class RetryScheduler:
                 continue
             if not is_due(state.due_at, now=self.now):
                 continue
-            dispatched = await self.redispatch_run(state.run_id)
-            # Clear the fired deadline regardless of whether a NEW dispatch happened
-            # (a resume/skip on an existing PR also consumes the backoff window) so
-            # the tick does not re-fire the same due_at every cadence.
+            outcome = await self.redispatch_run(state.run_id)
+            if outcome is RedispatchOutcome.DEFER:
+                # TRANSIENT (G11): the re-dispatch could not definitively resolve
+                # (PR detection failed / launch raised). Do NOT consume the backoff
+                # window — leave ``due_at`` set so the tick re-fires next cadence,
+                # bumped by one capped backoff step to avoid a hot re-fire loop.
+                delay = compute_backoff(state.attempt)
+                state.due_at = due_at_from_now(delay, now=self.now)
+                await self._write_state(state)
+                _log.info(
+                    "orchestrator.retry run=%s re-dispatch deferred (transient); "
+                    "due_at re-armed +%.0fs — will re-fire",
+                    state.run_id,
+                    delay,
+                )
+                continue
+            # Definitive resolution (LAUNCHED or an intentional SKIPPED) — consume
+            # the backoff window so the tick does not re-fire the same due_at.
             state.due_at = None
             await self._write_state(state)
-            if dispatched:
+            if outcome is RedispatchOutcome.LAUNCHED:
                 fired.append(state.run_id)
         return fired
 
     # ── idempotent re-dispatch (AC-15, INV-5 / R-15 — binding) ────────────────
 
-    async def redispatch_run(self, run_id: str) -> bool:
+    async def redispatch_run(self, run_id: str) -> RedispatchOutcome:
         """Re-dispatch a run idempotently — detect existing branch/PR first (AC-15).
 
         The binding INV-5 / R-15 path. Before re-launching:
 
         1. Read the run row (it carries ``pr_num`` / ``branch`` / ``workflow_id``).
-        2. **Detect an existing PR/branch** (:meth:`_has_existing_pr`): if the
-           issue already has an **open PR** (``runs.pr_num`` set, or the GitHub
-           detection seam finds one for the deterministic branch), the retry
-           **resumes/skips and creates NO duplicate PR** — it does not re-dispatch a
-           fresh run that would re-open the PR. The §13 / AT-Recovery resilience bar.
-        3. Otherwise re-dispatch **through the existing ``launch_run`` boundary**
-           (ADR-P001) with ``start_task=<last completed stage>`` so the engine
-           reconstructs prior stage outputs from the pushed branch — reusing the
-           **same ``runs`` row** (same ``idempotency_key`` = issue+workflow+branch),
-           never a second claim.
+        2. **Detect an existing PR/branch** (:meth:`_detect_existing_pr`), tri-state
+           (G11 — fail CLOSED):
 
-        Returns ``True`` iff a fresh re-dispatch was launched; ``False`` when the
-        retry resumed/skipped on an existing PR (no duplicate) or the run row was
-        gone. Never raises into the tick (a re-dispatch failure is logged + skipped).
+           * :data:`PrDetection.PRESENT` — the issue already has an **open PR**
+             (``runs.pr_num`` set, or the GitHub seam confirmed one). The retry
+             **resumes/skips and creates NO duplicate PR** (an intentional
+             resolution → :data:`RedispatchOutcome.SKIPPED`). The §13 / AT-Recovery bar.
+           * :data:`PrDetection.UNKNOWN` — ``pr_num`` is NULL **and** the GitHub
+             read **raised** (rate-limit / transient 5xx). A PR *may* exist; we
+             cannot tell → **defer** (:data:`RedispatchOutcome.DEFER`): do NOT
+             re-dispatch this tick (which could open a SECOND PR — the claim-lock
+             only stops a second ``runs`` row, not a second PR). Re-evaluate next tick.
+           * :data:`PrDetection.ABSENT` — the read succeeded and confirmed no PR →
+             re-dispatch.
+        3. Re-dispatch **through the existing ``launch_run`` boundary** (ADR-P001)
+           with ``start_task=<last completed stage>`` so the engine reconstructs
+           prior stage outputs from the pushed branch — reusing the **same ``runs``
+           row** (same ``idempotency_key`` = issue+workflow+branch), never a second claim.
+
+        Returns a tri-state :class:`RedispatchOutcome`:
+        :data:`~RedispatchOutcome.LAUNCHED` (a fresh dispatch happened),
+        :data:`~RedispatchOutcome.SKIPPED` (an intentional resolution — existing PR
+        resume/skip, claim-lock reuse, or the run row was gone), or
+        :data:`~RedispatchOutcome.DEFER` (a transient condition — PR detection
+        UNKNOWN, or the re-dispatch raised — leave the backoff armed). Never raises
+        into the tick.
         """
         row = await self.repository.get_run(run_id)
         if row is None:
             _log.warning("orchestrator.retry redispatch run=%s gone; skipping", run_id)
-            return False
+            # A missing run row is a definitive resolution (nothing to dispatch) —
+            # consume the backoff so the tick does not re-fire a ghost.
+            return RedispatchOutcome.SKIPPED
 
-        if await self._has_existing_pr(row):
+        detection = await self._detect_existing_pr(row)
+        if detection is PrDetection.PRESENT:
             # Idempotent (INV-5 / R-15): the issue already has an open PR. A blind
-            # retry would re-open it — instead resume/skip. No duplicate PR.
+            # retry would re-open it — instead resume/skip. No duplicate PR. This is
+            # an INTENTIONAL resolution → consume the backoff window.
             _log.info(
                 "orchestrator.retry run=%s issue=%s has an open PR (pr_num=%s); "
                 "resuming/skipping — NO duplicate PR",
@@ -284,57 +366,80 @@ class RetryScheduler:
                 row.get("issue_num"),
                 row.get("pr_num"),
             )
-            return False
+            return RedispatchOutcome.SKIPPED
+        if detection is PrDetection.UNKNOWN:
+            # Fail CLOSED (G11): pr_num is NULL and the GitHub read RAISED, so a PR
+            # may already exist. Re-dispatching now risks a SECOND PR (the claim-lock
+            # only guards a second runs row). DEFER — do not re-dispatch this tick;
+            # the tick leaves due_at armed to re-evaluate when GitHub is reachable.
+            _log.warning(
+                "orchestrator.retry run=%s issue=%s PR detection UNKNOWN "
+                "(pr_num NULL + GitHub read failed); deferring — NOT re-dispatching "
+                "to avoid a duplicate PR",
+                run_id,
+                row.get("issue_num"),
+            )
+            return RedispatchOutcome.DEFER
 
+        # PrDetection.ABSENT — confirmed no PR → safe to re-dispatch.
         start_task = await self._last_completed_stage(run_id)
         try:
             dispatched_id = await self.redispatch(row, start_task)
         except Exception:  # noqa: BLE001 - a re-dispatch failure must not kill the tick
+            # TRANSIENT (G11): the launch raised. Do NOT consume the backoff — DEFER
+            # so the tick re-fires rather than stranding the run with a dueless state.
             _log.exception("orchestrator.retry redispatch run=%s failed; will re-evaluate", run_id)
-            return False
+            return RedispatchOutcome.DEFER
         if dispatched_id is None:
             # The claim-lock reused the existing row (INV-5) — no second dispatch.
+            # This is an INTENTIONAL (definitive) resolution → consume the backoff.
             _log.debug("orchestrator.retry redispatch run=%s reused existing row", run_id)
-            return False
-        return True
+            return RedispatchOutcome.SKIPPED
+        return RedispatchOutcome.LAUNCHED
 
-    async def _has_existing_pr(self, row: dict[str, Any]) -> bool:
-        """Detect an existing open PR for the run's issue (INV-5 / R-15 — binding).
+    async def _detect_existing_pr(self, row: dict[str, Any]) -> PrDetection:
+        """Detect an existing open PR for the run's issue, tri-state (INV-5 / R-15).
 
-        First the cheap DB signal: ``runs.pr_num`` set means the run already pushed
-        a PR (a retry must not re-open it). Then, if a GitHub detection seam is wired
-        and the run carries the deterministic ``branch`` name, ask GitHub whether an
-        open PR exists for that head branch (so a PR the DB row hasn't back-filled
-        yet is still detected). A missing seam / a transient GitHub error degrades to
-        "no PR detected via GitHub" — the DB ``pr_num`` signal still guards the
-        common case, and the launch claim-lock (INV-5) is the backstop against a
-        genuine second dispatch.
+        Fail CLOSED (G11). First the cheap DB signal: ``runs.pr_num`` set means the
+        run already pushed a PR (:data:`PrDetection.PRESENT` — a retry must not
+        re-open it). When ``pr_num`` is NULL, and a GitHub detection seam is wired
+        with the run's deterministic ``branch``, ask GitHub whether an open PR exists
+        for that head branch (closing the "PR exists but ``runs.pr_num`` not yet
+        back-filled" window — e.g. a crash before back-fill):
+
+        * the read **succeeds** → :data:`PrDetection.PRESENT` (PR found) or
+          :data:`PrDetection.ABSENT` (none);
+        * the read **raises** (rate-limit / transient 5xx) → :data:`PrDetection.UNKNOWN`
+          — we cannot tell, so the caller **defers** rather than risk a duplicate PR.
+
+        When no seam / branch / repo is wired (a bare test, or no GitHub client),
+        the ``pr_num``-NULL case is treated as :data:`PrDetection.ABSENT`: there is
+        no read to fail, the DB signal is the only authority, and the launch
+        claim-lock (INV-5) backstops a genuine second ``runs`` row.
         """
         if row.get("pr_num") is not None:
-            return True
+            return PrDetection.PRESENT
         client = self.github_client
         branch = row.get("branch")
         repo = row.get("repo")
         if client is None or not branch or not repo:
-            return False
+            return PrDetection.ABSENT
         # Typed idempotency seam (INV-5 / R-15): ask GitHub whether an open PR
-        # already exists for the run's deterministic head branch, closing the
-        # "PR exists but runs.pr_num not yet back-filled" window. This is a typed
-        # method on the GitHubClient ABC (returns the PR number or None) — no more
-        # getattr duck-typing. A detection error is NOT a duplicate-PR risk by
-        # itself: degrade to "not detected via GitHub" and rely on the launch
-        # claim-lock backstop, never on a second dispatch.
+        # already exists for the run's deterministic head branch. A detection that
+        # RAISES with a NULL pr_num is UNKNOWN (fail CLOSED) — NOT "absent" — so the
+        # caller defers rather than risking a second PR from a blind re-dispatch.
         try:
             pr_number = await client.find_open_pr_for_branch(str(repo), str(branch))
-        except Exception:  # noqa: BLE001 - a detection error is not a duplicate-PR risk by itself
+        except Exception:  # noqa: BLE001 - a transient read error → UNKNOWN, defer (fail closed)
             _log.warning(
-                "orchestrator.retry PR detection failed for %s@%s; relying on DB pr_num",
+                "orchestrator.retry PR detection failed for %s@%s (pr_num NULL); "
+                "UNKNOWN — deferring to avoid a duplicate PR",
                 repo,
                 branch,
                 exc_info=True,
             )
-            return False
-        return pr_number is not None
+            return PrDetection.UNKNOWN
+        return PrDetection.PRESENT if pr_number is not None else PrDetection.ABSENT
 
     async def _last_completed_stage(self, run_id: str) -> str | None:
         """The last **completed** stage name, for an optional ``start_task=`` retry.
@@ -497,7 +602,9 @@ __all__ = [
     "BACKOFF_BASE_S",
     "BACKOFF_CAP_S",
     "MAX_ATTEMPTS",
+    "PrDetection",
     "RedispatchFn",
+    "RedispatchOutcome",
     "RetryEntry",
     "RetryScheduler",
     "RetryState",
