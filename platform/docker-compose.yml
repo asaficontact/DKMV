@@ -196,11 +196,17 @@ services:
       # Host loopback only.
       - "127.0.0.1:5173:5173"
     environment:
-      # The Vite dev server proxies `/api` → the backend (vite.config.ts). Inside
-      # compose the backend is reachable as the `backend` service, and the proxy
-      # injects this local control-plane token (INV-1) on every proxied request so
-      # it never ships in the browser bundle. Keep this in sync with the backend's
-      # DKMV_PLATFORM_TOKEN.
+      # PRODUCTION static build (G14): Dockerfile.frontend is now a multi-stage
+      # `vite build` → nginx:alpine image that SERVES the static bundle and
+      # reverse-proxies `/api` → the backend. nginx mirrors the verified Vite dev
+      # proxy: it PRESERVES the loopback Host (the backend's INV-1 access control
+      # rejects a `backend:8787` Host) and INJECTS this local control-plane token
+      # as `Authorization: Bearer` server-side, so the token NEVER ships in the
+      # static browser bundle. Inside compose the backend is reachable as the
+      # `backend` service; nginx strips the scheme to derive its upstream. Keep
+      # DKMV_PLATFORM_TOKEN in sync with the backend's. (`npm run dev` — the Vite
+      # dev server in vite.config.ts — remains the LOCAL DEV path; see
+      # platform/docs/setup.md §6a.)
       DKMV_BACKEND_ORIGIN: "http://backend:8787"
       DKMV_PLATFORM_TOKEN: "${DKMV_PLATFORM_TOKEN:-}"
     depends_on:

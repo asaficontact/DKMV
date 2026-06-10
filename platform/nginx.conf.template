@@ -1,0 +1,132 @@
+# DKMV Platform — PRODUCTION static frontend (nginx:alpine).
+#
+# This is the HARDENED production serving path (G14). It serves the static Vite
+# build (`vite build` → /usr/share/nginx/html) and reverse-proxies `/api` → the
+# backend, MIRRORING the verified Vite dev proxy in `frontend/vite.config.ts`:
+#
+#   * the loopback `Host` header is PRESERVED (NOT rewritten to the backend
+#     service name) because the backend's access-control middleware (INV-1)
+#     requires a loopback Host (127.0.0.1/::1/localhost); rewriting it to
+#     `backend:8787` would 403. This is the nginx equivalent of the dev proxy's
+#     `changeOrigin: false`.
+#   * the local control-plane token is INJECTED server-side as
+#     `Authorization: Bearer <DKMV_PLATFORM_TOKEN>` on proxied `/api` requests, so
+#     the token NEVER ships in the static browser bundle (INV-1). The dev proxy
+#     does the same in `configure(proxy)`.
+#
+# This file is an envsubst TEMPLATE: `docker-entrypoint.d` in the nginx:alpine
+# image renders `*.template` files with the container env at start, substituting
+# only the two whitelisted vars below (DKMV_BACKEND_ORIGIN, DKMV_PLATFORM_TOKEN).
+# The nginx `$`-prefixed runtime variables are escaped (see the entrypoint) so
+# they survive envsubst untouched.
+
+# ── Loopback Host preservation (mirror vite changeOrigin:false) ──────────────
+# The proxied upstream request keeps the browser's loopback Host (the value the
+# user hit, e.g. 127.0.0.1:5173), NOT the upstream `backend:8787` authority that
+# `proxy_pass` would otherwise force. The backend's INV-1 Host gate accepts a
+# loopback Host and rejects a service-name Host, so we MUST forward the original.
+# `$http_host` is the inbound Host header verbatim.
+
+# ── Token injection without leaking it into logs ─────────────────────────────
+# A map lets us inject the configured Bearer token ONLY when the incoming request
+# carries no Authorization header (mirror the dev proxy's `if (!getHeader(...))`).
+# The configured token lives ONLY in the proxy hop, never in the served bundle.
+map $http_authorization $dkmv_auth {
+    # Incoming Authorization present → pass it through unchanged.
+    default $http_authorization;
+    # Absent → inject the local control-plane token.
+    ""      "Bearer ${DKMV_PLATFORM_TOKEN}";
+}
+
+# Upstream backend origin (default http://backend:8787 in compose). Used by
+# proxy_pass below. envsubst fills ${DKMV_BACKEND_ORIGIN}.
+upstream dkmv_backend {
+    server ${DKMV_BACKEND_UPSTREAM};
+}
+
+server {
+    listen       5173;
+    listen       [::]:5173;
+    server_name  _;
+
+    # Never advertise the server version (smaller attack surface / less leakage).
+    server_tokens off;
+
+    # SPA document root — the static Vite build copied in by the Dockerfile.
+    root   /usr/share/nginx/html;
+    index  index.html;
+
+    # ── Security headers (INV-1 hardening / G14.4) ───────────────────────────
+    # These are applied to EVERY response (add_header with `always`). The CSP is
+    # restrictive: only same-origin assets + same-origin /api (XHR/fetch + SSE).
+    #   * default-src 'self'            — only our own origin by default.
+    #   * style-src 'self' 'unsafe-inline' — Vite/React may emit a few inline
+    #     style attributes; styles are otherwise our own bundle. (No remote CSS.)
+    #   * connect-src 'self'           — fetch + EventSource go to same-origin /api.
+    #   * img-src 'self' data:         — bundled images + data: URIs (inline svg).
+    #   * object-src 'none'; frame-ancestors 'none'; base-uri 'self' — lock down.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    # The control plane is same-origin only; no cross-origin embedding of API or app.
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+
+    # No directory listing (default off in nginx, set explicitly for intent).
+    autoindex off;
+
+    # gzip on for text assets (JS/CSS/JSON/SVG). Precompressed where present.
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml application/wasm;
+
+    # ── Reverse proxy /api → backend (mirror the dev proxy) ──────────────────
+    location /api/ {
+        proxy_pass http://dkmv_backend;
+
+        # PRESERVE the loopback Host (changeOrigin:false equivalent). Do NOT use
+        # the upstream authority — the backend rejects a non-loopback Host (INV-1).
+        proxy_set_header Host $http_host;
+
+        # Inject (or pass through) the control-plane token server-side (INV-1).
+        # The token is in $dkmv_auth (the map above); it never reaches the bundle.
+        proxy_set_header Authorization $dkmv_auth;
+
+        # Forwarded-for hygiene (loopback chain).
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Cookies (the SSE HttpOnly cookie auth path, INV-2) flow through
+        # untouched: nginx forwards Set-Cookie/Cookie by default and we do not
+        # rewrite the cookie domain (same-origin from the browser's view).
+
+        # ── SSE: GET /api/v1/runs/{id}/events must stream un-buffered ─────────
+        # Disable response buffering so events flush immediately; long read
+        # timeout so a quiet stream is not torn down. The backend also sets
+        # `X-Accel-Buffering: no` (app/sse/endpoint.py), which nginx honors.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        # SSE is HTTP/1.1 with a persistent connection; clear the keep-alive
+        # `Connection` rewrite so the stream is not prematurely closed.
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # ── SPA fallback ─────────────────────────────────────────────────────────
+    # Client-side routes (e.g. /runs/:id, /history) have no file on disk; serve
+    # index.html for any non-asset, non-/api path (try_files fallback).
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Long-cache the content-hashed build assets (Vite emits hashed filenames).
+    location /assets/ {
+        try_files $uri =404;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}

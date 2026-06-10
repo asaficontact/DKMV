@@ -269,6 +269,14 @@ docker compose up
 # backend on http://127.0.0.1:8787, frontend on http://127.0.0.1:5173
 ```
 
+The compose **frontend** is a **hardened production static build** (G14):
+`Dockerfile.frontend` is a multi-stage `vite build` → `nginx:alpine` image that
+serves the minified bundle and reverse-proxies `/api` → the backend — it mirrors
+the dev proxy (preserves the loopback `Host`, injects `DKMV_PLATFORM_TOKEN`
+server-side so it never ships in the bundle, streams SSE un-buffered) and adds a
+restrictive CSP + security headers + SPA fallback. `npm run dev` (above) remains the
+**local-dev** path. Details + the operator runbook: [`docs/setup.md` §7a](docs/setup.md#prod-frontend).
+
 ## Backup & restore (binding — §6.5, AC-14)
 
 The single SQLite file is the **source of truth for spend + audit**, so back it up
