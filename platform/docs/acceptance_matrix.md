@@ -31,8 +31,8 @@ host with Docker + runsc to run the live halves.
 | **AT-Workflows** | `test_at_api_flows.py` | **LIVE (in-process)** | `GET /workflows` surfaces the read-only built-in pipelines; no create/update route (ADR-P010). |
 | **AT-Concurrency** | `test_at_concurrency.py` | **LIVE (in-process)** | Only N=`MAX_CONCURRENT_RUNS` run at once, the rest queue + drain; a run over `HOST_MEMORY_BUDGET` / `DAILY_SPEND_CAP` is admission-**denied + re-queued** (not dropped); Codex $0 spend never trips the cap (INV-8). |
 | **AT-CodexCost** | `test_at_api_flows.py` | **LIVE (in-process)** | A Codex run's cost renders **null ("—"), not `$0.00`**, is **excluded from spend**, and its **tokens still count** (FR-06-1a / INV-8). |
-| **AT-Isolation** | `test_at_isolation.py` | **LIVE (in-process) + Docker-gated** | In-process (always): `SANDBOX_RUNTIME=runsc` resolves + the executor emits `--runtime=runsc` + egress-confinement args; the egress policy **denies** a non-allowlisted host + audits it; the repo-scoped token **refuses** a foreign-repo push (INV-3/4). Docker-gated (self-skips): runsc registered with the daemon; egress-deny observed over the wire. |
-| **AT-PromptInjection** | `test_at_prompt_injection.py` | **LIVE (in-process)** | A run with an **injected issue body** still pauses for human approval before the PR push (the NFR-SEC-5 gate fires via the F9 pause primitive); the push is unreachable until the decision resolves (AC-16). |
+| **AT-Isolation** | `test_at_isolation.py` | **LIVE (in-process) + Docker-gated** | In-process (always): the launch path **pins `--runtime=runsc` + `--network=dkmv-egress` + `--dns`** on every run via the engine §11.3 passthrough (G1), and **fail-closes** (`503 sandbox_isolation_unavailable`, blocked before the claim-lock) when `SANDBOX_RUNTIME=runsc` but gVisor isn't registered (`ALLOW_WEAKER_ISOLATION` opt-in); the GitHub credential is **file-mounted** at `/run/secrets/github_token`, not an env var (G2); the egress policy **denies** a non-allowlisted host + audits it; the repo-scoped token **refuses** a foreign-repo push (INV-3/4). Docker-gated (self-skips → operator-validated live, see `docs/egress.md`): runsc actually isolating; the `dkmv-egress internal:true` network + Squid allowlist denying a non-allowlisted host **over the wire**. |
+| **AT-PromptInjection** | `test_at_prompt_injection.py` | **LIVE (in-process)** + ⚠ **known limitation** | The platform PR-push approval gate (`require_pr_push_approval`) is correct + fail-closed and fires for a **workflow-authored pre-push pause**. **Limitation (honest):** the agent performs the `git push` **inside the sandbox container**, so the platform has **no chokepoint to intercept an arbitrary in-container push** — a workflow that does not author a pre-push pause is not gated. The real compensating control is the **egress allowlist** (G1: a hijacked agent can only reach `*.github.com`, can't exfiltrate) + the file-mounted, repo-scoped token (G2). A true workflow-independent pre-push gate is an **engine pre-push-hook §11 ask** (recorded in SHIP_GAPS G4). The e2e test exercises the pause primitive + the fail-closed gate logic, **not** an interception of a real in-container push. |
 | **AT-Security** (cross-cutting) | `test_at_isolation.py` | **LIVE (in-process)** | No secret reaches the append-only `events` table or the audit log — redact-before-persist covers shapes + the platform's own values (INV-4). |
 
 ## Docker-gated assertions (self-skip when the prerequisite is absent)
@@ -53,10 +53,38 @@ absent — they are never faked and never silently passed.
   restore → row counts + the Codex-excluded spend rollup MATCH (AC-14).
 - The sandbox image is **digest-pinned** (not `:latest`) in `docker-compose.yml`
   and an **SBOM scan** step (`scripts/sbom-scan.sh`) is wired into the build (AC-13).
-- The security INVs hold: gVisor runsc + the default-on egress allowlist in config
-  (INV-3); redact-before-persist over events/logs/audit (INV-4); the PR-push gate
-  fires on injected input (NFR-SEC-5); no `SKIP LOCKED`/`FOR UPDATE`; no inbound
-  webhook receiver (App/webhooks deferred, ADR-P004).
+- The security INVs hold: gVisor runsc **pinned per-run + fail-closed** (INV-3, G1)
+  with the egress allowlist enforced via the `dkmv-egress internal:true` network +
+  Squid proxy; the GitHub credential **file-mounted** not env-injected (INV-4, G2);
+  redact-before-persist over events/logs/audit (INV-4); no `SKIP LOCKED`/`FOR UPDATE`;
+  no inbound webhook receiver (App/webhooks deferred, ADR-P004).
 
-**v1 ship gate: GREEN** (subject to the gates above passing in CI + the human merge
-review).
+## Known limitations (v1 — honest)
+
+These are documented residuals, not silent gaps (tracked in
+`docs/implementation/platform/SHIP_GAPS.md`):
+
+- **PR-push gate is workflow-authored-pause only (NFR-SEC-5, G4).** The agent pushes
+  in-container; the platform has no chokepoint to gate an arbitrary in-container push.
+  The egress allowlist + file-mounted repo-scoped token are the compensating controls;
+  a workflow-independent pre-push gate is an engine §11 ask.
+- **Egress + gVisor enforcement is operator-validated live (G1).** The per-run
+  `--runtime`/`--network`/`--dns` are pinned and the platform fail-closes if gVisor
+  isn't registered, but the **over-the-wire** egress block + the real `docker info`
+  daemon probe require a live Docker+gVisor host — `docs/egress.md` is the runbook.
+- **Per-run token minting deferred (ADR-P004).** v1 uses a fine-grained operator PAT
+  (file-mounted, repo-scoped by the operator); short-lived per-run GitHub-App
+  installation tokens are post-v1.
+- **Residual orphan window (G3).** `engine_run_id` is persisted at the first engine
+  frame, so a crash *before* the first frame leaves a tiny unkillable window (the run
+  is still marked `interrupted`); closing it fully needs the engine to label the
+  container (a §11 ask).
+- **Single connected repo (G15).** The orchestrator polls + dispatches for exactly
+  one connected project; multi-repo orchestration is post-v1.
+- **Frontend production build (G14).** A hardened multi-stage nginx static build ships
+  as the production `Dockerfile.frontend`; the static-serve + `/api` proxy chain is
+  operator-validated live (mirrors the verified dev proxy).
+
+**v1 ship gate: GREEN for the documented scope** (subject to the gates passing in CI,
+the human merge review, and the operator live-validation of the Docker+gVisor egress
+chain per `docs/egress.md`).
