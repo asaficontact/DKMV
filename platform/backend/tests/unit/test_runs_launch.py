@@ -187,6 +187,35 @@ def test_claude_same_budget_body_accepted_201(tmp_path: Path) -> None:
     assert runtime.start_calls[0]["max_budget_usd"] == 10.0
 
 
+# ── G1: fail-closed isolation gate blocks dispatch when gVisor is missing ─────
+
+
+def test_launch_blocked_when_gvisor_unavailable(tmp_path: Path, monkeypatch: Any) -> None:
+    """SANDBOX_RUNTIME=runsc but runsc not registered + no opt-in → 503, no run row."""
+    monkeypatch.setattr("app.executor.runtime_policy.runtime_available", lambda *a, **k: False)
+    client, runtime, _gh = _client(tmp_path / "t.db")
+    resp = client.post("/api/v1/runs", json=_body(), headers=auth_headers())
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "sandbox_isolation_unavailable"
+    # Fail-closed BEFORE the claim-lock: the engine was never started.
+    assert runtime.start_calls == []
+
+
+def test_launch_proceeds_with_weaker_isolation_optin(tmp_path: Path, monkeypatch: Any) -> None:
+    """ALLOW_WEAKER_ISOLATION opt-in → dispatch proceeds even when runsc is missing."""
+    monkeypatch.setattr("app.executor.runtime_policy.runtime_available", lambda *a, **k: False)
+    url = _migrate(tmp_path / "t.db")
+    runtime = FakeRuntime()
+    client = build_client(
+        settings=make_settings(DATABASE_URL=url, ALLOW_WEAKER_ISOLATION=True),
+        runtime=runtime,
+    )
+    set_github_client(client.app, FakeClient())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck client
+    resp = client.post("/api/v1/runs", json=_body(), headers=auth_headers())
+    assert resp.status_code == 201
+    assert len(runtime.start_calls) == 1
+
+
 # ── AC-4: §8.10 validation table ─────────────────────────────────────────────
 
 

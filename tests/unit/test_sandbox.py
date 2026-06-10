@@ -231,12 +231,16 @@ class TestSandboxManagerHelpers:
     async def test_setup_git_auth_runs_setup_git_only(
         self, sandbox_manager: SandboxManager, session: SandboxSession
     ) -> None:
-        """Auth uses gh auth setup-git (not gh auth login) since GITHUB_TOKEN env var
-        is already set via Docker -e flag."""
+        """Auth runs `gh auth setup-git` (never `gh auth login`) in every branch:
+        the env-var path (GITHUB_TOKEN already set via Docker -e) and the opt-in
+        file-mount path (/run/secrets/github_token)."""
         await sandbox_manager.setup_git_auth(session)
         action = session.deployment.runtime.run_in_session.call_args[0][0]
-        assert action.command == "gh auth setup-git"
+        assert "gh auth setup-git" in action.command
         assert "login" not in action.command
+        # File-mount fallback is wired so the token can arrive without an env var.
+        assert "/run/secrets/github_token" in action.command
+        assert 'if [ -n "$GITHUB_TOKEN" ]' in action.command
 
 
 class TestStreamClaude:

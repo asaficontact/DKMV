@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shlex
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -86,10 +87,10 @@ class ComponentRunner:
         timeout_minutes: int,
         agents_needed: set[str] | None = None,
         docker_socket: bool = False,
-    ) -> tuple[SandboxConfig, Path | None]:
+    ) -> tuple[SandboxConfig, list[Path]]:
         """Build sandbox config and return (config, temp_credentials_file).
 
-        The caller must delete the temp file (if not None) after the
+        The caller must delete every returned temp file after the
         container stops.
         """
         from dkmv.adapters import get_adapter
@@ -99,7 +100,18 @@ class ComponentRunner:
 
         env_vars: dict[str, str] = {}
         docker_args: list[str] = ["--shm-size=2g"]
-        temp_creds_file: Path | None = None
+        # Temp files the caller must unlink after the container stops. A list so
+        # the OAuth creds file and the GitHub-token file-mount (opt-in) coexist.
+        temp_files: list[Path] = []
+
+        # Opt-in sandbox isolation passthrough (PRD §11.3). Default-off: when
+        # these are unset the docker_args are unchanged (zero behavior change).
+        if config.sandbox_runtime:
+            docker_args.append(f"--runtime={config.sandbox_runtime}")
+        if config.egress_network:
+            docker_args.append(f"--network={config.egress_network}")
+        if config.sandbox_dns:
+            docker_args.append(f"--dns={config.sandbox_dns}")
 
         # Collect credentials for all needed agents
         for agent_name in agents_needed:
@@ -108,7 +120,7 @@ class ComponentRunner:
             env_vars.update(auth_env)
             docker_args.extend(extra_args)
             if creds_file is not None:
-                temp_creds_file = creds_file
+                temp_files.append(creds_file)
 
         # Mount host Docker socket if requested (DooD)
         if docker_socket or config.docker_socket:
@@ -127,9 +139,22 @@ class ComponentRunner:
                     "Docker socket not found at %s — --docker flag has no effect", sock_path
                 )
 
-        # GitHub token always included (agent-agnostic)
+        # GitHub token (agent-agnostic). Opt-in file-mount (PRD §11.3, INV-4):
+        # when github_token_file_mount is set, write the PAT to a 0400 temp file
+        # and bind-mount it read-only at /run/secrets/github_token instead of
+        # exposing it via `docker inspect` as an env var. Default-off keeps the
+        # exact prior env-var behavior (no regression).
         if config.github_token:
-            env_vars["GITHUB_TOKEN"] = config.github_token
+            if config.github_token_file_mount:
+                tf = tempfile.NamedTemporaryFile(mode="w", prefix="dkmv-ghtoken-", delete=False)
+                tf.write(config.github_token)
+                tf.close()
+                tok_file = Path(tf.name)
+                os.chmod(tok_file, 0o400)
+                docker_args.extend(["-v", f"{tok_file}:/run/secrets/github_token:ro"])
+                temp_files.append(tok_file)
+            else:
+                env_vars["GITHUB_TOKEN"] = config.github_token
 
         sandbox_config = SandboxConfig(
             image=config.image_name,
@@ -138,7 +163,7 @@ class ComponentRunner:
             memory_limit=config.memory_limit,
             timeout_minutes=timeout_minutes,
         )
-        return sandbox_config, temp_creds_file
+        return sandbox_config, temp_files
 
     async def _setup_workspace(
         self,
@@ -570,7 +595,7 @@ class ComponentRunner:
         error_message = ""
         task_results: list[TaskResult] = []
         run_id = ""
-        temp_creds_file: Path | None = None
+        temp_files: list[Path] = []
         cancelled = False
 
         try:
@@ -636,7 +661,7 @@ class ComponentRunner:
             if cli_overrides.memory is not None:
                 config.memory_limit = cli_overrides.memory
 
-            sandbox_config, temp_creds_file = self._build_sandbox_config(
+            sandbox_config, temp_files = self._build_sandbox_config(
                 config, timeout, agents_needed, docker_socket=docker_socket
             )
             session = await self._sandbox.start(sandbox_config, component_dir.name)
@@ -954,8 +979,8 @@ class ComponentRunner:
         finally:
             if session is not None:
                 await self._sandbox.stop(session, keep_alive=keep_alive)
-            if temp_creds_file is not None:
-                temp_creds_file.unlink(missing_ok=True)
+            for _tf in temp_files:
+                _tf.unlink(missing_ok=True)
 
         total_cost = sum(r.total_cost_usd for r in task_results)
         duration = time.monotonic() - start_time

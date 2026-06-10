@@ -98,4 +98,8 @@ class TestSandboxIntegration:
         assert result.exit_code == 0
 
         call_args = mock_remote_runtime.run_in_session.call_args[0][0]
-        assert call_args.command == "gh auth setup-git"
+        # setup_git_auth now supports both the env-var path (token in $GITHUB_TOKEN)
+        # and the file-mount path (token at /run/secrets/github_token, the G2 hardening):
+        # it runs `gh auth setup-git` in either case.
+        assert "gh auth setup-git" in call_args.command
+        assert "/run/secrets/github_token" in call_args.command

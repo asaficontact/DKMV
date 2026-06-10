@@ -152,6 +152,20 @@ def auth_headers() -> dict[str, str]:
 
 
 @pytest.fixture(autouse=True)
+def _gvisor_available_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default the whole unit suite to a gVisor-equipped host (G1 determinism).
+
+    The G1 fail-closed gate (``RunService.enforce_sandbox_isolation`` /
+    ``isolation_status``) probes ``docker info`` for the ``runsc`` runtime. On a
+    docker-less CI box that would make EVERY launch/preflight fail-closed (503 /
+    blocker), so the default test posture here is "runsc registered" — the secure,
+    properly-provisioned host. Tests that exercise the *blocker* path override this
+    with their own ``monkeypatch.setattr(... runtime_available, lambda *a, **k: False)``.
+    """
+    monkeypatch.setattr("app.executor.runtime_policy.runtime_available", lambda *a, **k: True)
+
+
+@pytest.fixture(autouse=True)
 def _close_entered_clients() -> Iterator[None]:
     """Run lifespan shutdown for every client :func:`build_client` entered.
 

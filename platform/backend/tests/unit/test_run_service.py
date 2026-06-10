@@ -38,6 +38,78 @@ def test_build_runtime_config_maps_settings(tmp_path: Path) -> None:
     assert cfg.output_dir == tmp_path / "outputs"
 
 
+def test_build_runtime_config_threads_isolation_passthrough(tmp_path: Path) -> None:
+    """G1/G2: SANDBOX_RUNTIME / EGRESS_NETWORK / SANDBOX_DNS / SECRET_FILE_MOUNT
+    reach the engine RuntimeConfig so EVERY run is pinned to gVisor + the egress
+    network + file-mounted creds (not relying on the daemon default)."""
+    settings = make_settings(
+        OUTPUT_DIR=tmp_path / "outputs",
+        SANDBOX_RUNTIME="runsc",
+        EGRESS_NETWORK="dkmv-egress",
+        SANDBOX_DNS="172.20.0.2",
+        SECRET_FILE_MOUNT=True,
+    )
+    cfg = build_runtime_config(settings)
+    assert cfg.sandbox_runtime == "runsc"
+    assert cfg.egress_network == "dkmv-egress"
+    assert cfg.sandbox_dns == "172.20.0.2"
+    assert cfg.github_token_file_mount is True
+
+
+def test_build_runtime_config_empty_network_is_none(tmp_path: Path) -> None:
+    """An empty EGRESS_NETWORK disables the --network passthrough (None, not '')."""
+    settings = make_settings(OUTPUT_DIR=tmp_path / "outputs", EGRESS_NETWORK="")
+    cfg = build_runtime_config(settings)
+    assert cfg.egress_network is None
+
+
+def test_enforce_sandbox_isolation_fails_closed_when_runsc_missing(tmp_path: Path) -> None:
+    """G1: runsc required but unavailable + no opt-in → 503 sandbox_isolation_unavailable."""
+    from app.api.errors import ApiError
+
+    settings = make_settings(
+        OUTPUT_DIR=tmp_path / "outputs",
+        SANDBOX_RUNTIME="runsc",
+        ALLOW_WEAKER_ISOLATION=False,
+    )
+    service = RunService(settings, runtime=_Fake())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed fake
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.executor.runtime_policy.runtime_available", lambda *a, **k: False)
+        with pytest.raises(ApiError) as exc:
+            service.enforce_sandbox_isolation()
+    assert exc.value.status_code == 503
+    assert exc.value.code == "sandbox_isolation_unavailable"
+
+
+def test_enforce_sandbox_isolation_passes_when_runsc_available(tmp_path: Path) -> None:
+    """G1: runsc available → no error (the secure default path)."""
+    settings = make_settings(OUTPUT_DIR=tmp_path / "outputs", SANDBOX_RUNTIME="runsc")
+    service = RunService(settings, runtime=_Fake())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed fake
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.executor.runtime_policy.runtime_available", lambda *a, **k: True)
+        service.enforce_sandbox_isolation()  # no raise
+
+
+def test_enforce_sandbox_isolation_opt_in_proceeds(tmp_path: Path) -> None:
+    """G1: runsc unavailable but ALLOW_WEAKER_ISOLATION → proceeds (no raise)."""
+    settings = make_settings(
+        OUTPUT_DIR=tmp_path / "outputs",
+        SANDBOX_RUNTIME="runsc",
+        ALLOW_WEAKER_ISOLATION=True,
+    )
+    service = RunService(settings, runtime=_Fake())  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed fake
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.executor.runtime_policy.runtime_available", lambda *a, **k: False)
+        service.enforce_sandbox_isolation()  # no raise
+
+
+class _Fake:
+    """Minimal duck-typed runtime so RunService skips real EmbeddedRuntime build."""
+
+    def get_capabilities(self) -> str:
+        return "delegated"
+
+
 def test_run_service_constructs_engine_with_platform_output_dir(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     service = RunService(settings)

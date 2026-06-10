@@ -120,6 +120,10 @@ def _mock_config() -> MagicMock:
     cfg.memory_limit = "8g"
     cfg.default_agent = "claude"
     cfg.docker_socket = False
+    cfg.sandbox_runtime = None
+    cfg.egress_network = None
+    cfg.sandbox_dns = None
+    cfg.github_token_file_mount = False
     return cfg
 
 
@@ -2647,14 +2651,14 @@ class TestBuildSandboxConfigGithubToken:
             assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
             assert "ANTHROPIC_API_KEY" not in result.env_vars
             assert "-v" in result.docker_args
-            assert temp_file is not None
-            assert temp_file.read_text() == creds_json
+            assert temp_file  # list with the bind-mounted creds file
+            assert temp_file[0].read_text() == creds_json
             mount_arg = result.docker_args[result.docker_args.index("-v") + 1]
             assert mount_arg.endswith(":/home/dkmv/.claude/.credentials.json:ro")
-            assert mount_arg.startswith(str(temp_file))
+            assert mount_arg.startswith(str(temp_file[0]))
         finally:
-            if temp_file:
-                temp_file.unlink(missing_ok=True)
+            for _tf in temp_file:
+                _tf.unlink(missing_ok=True)
 
     def test_build_sandbox_config_oauth_linux_creds_file(self, tmp_path: Path) -> None:
         """auth_method=oauth + no Keychain + Linux creds file → bind-mount only, NO env var."""
@@ -2674,7 +2678,7 @@ class TestBuildSandboxConfigGithubToken:
             patch("dkmv.adapters.claude.Path.home", return_value=tmp_path),
         ):
             result, temp_file = runner._build_sandbox_config(config, 30)
-        assert temp_file is None
+        assert temp_file == []
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
         assert "-v" in result.docker_args
         mount_arg = result.docker_args[result.docker_args.index("-v") + 1]
@@ -2695,7 +2699,7 @@ class TestBuildSandboxConfigGithubToken:
             patch("dkmv.adapters.claude.Path.home", return_value=Path("/nonexistent")),
         ):
             result, temp_file = runner._build_sandbox_config(config, 30)
-        assert temp_file is None
+        assert temp_file == []
         assert result.env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-test"
         assert "ANTHROPIC_API_KEY" not in result.env_vars
         assert result.docker_args == ["--shm-size=2g"]
@@ -2710,7 +2714,7 @@ class TestBuildSandboxConfigGithubToken:
             MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
         )
         result, temp_file = runner._build_sandbox_config(config, 30)
-        assert temp_file is None
+        assert temp_file == []
         assert result.env_vars["ANTHROPIC_API_KEY"] == "sk-ant-api-key"
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in result.env_vars
 
@@ -2795,6 +2799,77 @@ class TestBuildSandboxConfigDockerSocket:
         result, _ = runner._build_sandbox_config(config, 30, docker_socket=True)
         assert "-v" not in result.docker_args
         assert "--group-add=999" not in " ".join(result.docker_args)
+
+
+class TestBuildSandboxConfigIsolation:
+    """PRD §11.3 opt-in isolation passthrough + file-mount creds (G1/G2)."""
+
+    def _runner(self) -> ComponentRunner:
+        return ComponentRunner(
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(), Console(quiet=True)
+        )
+
+    def test_isolation_args_absent_by_default(self) -> None:
+        """Default-off: no --runtime/--network/--dns when the fields are unset."""
+        config = _mock_config()
+        result, temp_files = self._runner()._build_sandbox_config(config, 30)
+        joined = " ".join(result.docker_args)
+        assert "--runtime=" not in joined
+        assert "--network=" not in joined
+        assert "--dns=" not in joined
+        assert temp_files == []
+
+    def test_isolation_args_appended_when_set(self) -> None:
+        """Set fields → the exact gVisor/egress/dns docker args are appended."""
+        config = _mock_config()
+        config.sandbox_runtime = "runsc"
+        config.egress_network = "dkmv-egress"
+        config.sandbox_dns = "172.20.0.2"
+        result, _ = self._runner()._build_sandbox_config(config, 30)
+        assert "--runtime=runsc" in result.docker_args
+        assert "--network=dkmv-egress" in result.docker_args
+        assert "--dns=172.20.0.2" in result.docker_args
+
+    def test_github_token_env_var_when_file_mount_off(self) -> None:
+        """Default-off file-mount → token stays an env var (no regression)."""
+        config = _mock_config()
+        config.github_token = "ghp_secret"
+        config.github_token_file_mount = False
+        result, temp_files = self._runner()._build_sandbox_config(config, 30)
+        assert result.env_vars["GITHUB_TOKEN"] == "ghp_secret"
+        assert "/run/secrets/github_token" not in " ".join(result.docker_args)
+        assert temp_files == []
+
+    def test_github_token_file_mount_when_on(self) -> None:
+        """Opt-in file-mount → token mounted at /run/secrets/github_token, no env var."""
+        config = _mock_config()
+        config.github_token = "ghp_secret"
+        config.github_token_file_mount = True
+        result, temp_files = self._runner()._build_sandbox_config(config, 30)
+        try:
+            assert "GITHUB_TOKEN" not in result.env_vars
+            assert "-v" in result.docker_args
+            mount = result.docker_args[result.docker_args.index("-v") + 1]
+            assert mount.endswith(":/run/secrets/github_token:ro")
+            assert temp_files  # the temp file the caller must unlink
+            tok_file = temp_files[-1]
+            assert tok_file.read_text() == "ghp_secret"
+            # 0400 — owner read-only.
+            assert oct(tok_file.stat().st_mode & 0o777) == "0o400"
+            assert mount.startswith(str(tok_file))
+        finally:
+            for _tf in temp_files:
+                _tf.unlink(missing_ok=True)
+
+    def test_file_mount_off_with_no_token_is_noop(self) -> None:
+        """No token + file-mount on → nothing mounted, no temp file leaked."""
+        config = _mock_config()
+        config.github_token = ""
+        config.github_token_file_mount = True
+        result, temp_files = self._runner()._build_sandbox_config(config, 30)
+        assert "GITHUB_TOKEN" not in result.env_vars
+        assert "/run/secrets/github_token" not in " ".join(result.docker_args)
+        assert temp_files == []
 
 
 class TestSetupWorkspaceGitAuth:

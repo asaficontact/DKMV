@@ -64,6 +64,30 @@ services:
     # `docker-broker` network.
     restart: unless-stopped
 
+  # ── Egress filtering proxy (deny-all-by-default allowlist) ─────────────────
+  # The network-level enforcement of the egress allowlist (G1 / INV-3 /
+  # NFR-SEC-1). Sandbox containers (engine-launched) join the `dkmv-egress`
+  # network, which is `internal: true` — it has NO default route to the
+  # internet. The ONLY host with both feet (an internet-routable interface AND a
+  # foot on `dkmv-egress`) is this proxy, which CONNECT-tunnels HTTPS only to the
+  # allowlisted hosts (.github.com, .githubusercontent.com, api.anthropic.com,
+  # api.openai.com) and denies everything else. Because the enforcement is the
+  # internal network (not proxy *env vars* the agent could unset), an injected
+  # agent cannot reach a non-allowlisted host even if it ignores HTTP(S)_PROXY.
+  #
+  # squid.conf is the allowlist; EGRESS_ALLOWLIST documents the same set for the
+  # platform preflight. Keep the two in sync (the runbook notes this).
+  egress-proxy:
+    image: ubuntu/squid:6.6-24.04_edge
+    volumes:
+      - ./egress/squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      # Both feet: `egress-internet` reaches the internet; `dkmv-egress` is the
+      # sandbox-facing internal leg.
+      - egress-internet
+      - dkmv-egress
+    restart: unless-stopped
+
   backend:
     build:
       # Build context is the repo root so the image can editable-install the
@@ -103,14 +127,38 @@ services:
       # The backend reaches Docker ONLY through the brokered proxy — it has NO
       # docker.sock mount of its own. `DOCKER_HOST` points at the proxy.
       DOCKER_HOST: "tcp://docker-proxy:2375"
-      # Daemon default-runtime hint for sandbox launches (gVisor). Setting the
-      # Docker daemon `default-runtime: runsc` on the host is the operator-side
-      # way to make runsc the default for engine-launched containers until the
-      # per-container `--runtime` flag lands as a §11.3 engine ask.
+      # Daemon default-runtime hint for sandbox launches (gVisor). The §11.3
+      # passthrough now ALSO pins `--runtime=runsc` on every engine-launched
+      # sandbox (build_runtime_config), so the platform no longer relies solely on
+      # this daemon default. The platform additionally fail-closes (G1) when
+      # SANDBOX_RUNTIME=runsc but gVisor is not registered with the daemon.
       DOCKER_DEFAULT_RUNTIME: "${SANDBOX_RUNTIME:-runsc}"
+      # Operator opt-in (OQ-6) to proceed when runsc is selected but unavailable.
+      # Default false = fail-closed (G1): dispatch is blocked rather than silently
+      # downgraded to runc.
+      ALLOW_WEAKER_ISOLATION: "${ALLOW_WEAKER_ISOLATION:-false}"
       MAX_CONCURRENT_RUNS: "${MAX_CONCURRENT_RUNS:-3}"
       DAILY_SPEND_CAP: "${DAILY_SPEND_CAP:-}"
       EGRESS_ALLOWLIST: "${EGRESS_ALLOWLIST:-api.github.com,github.com,api.anthropic.com,api.openai.com}"
+      # ── Egress network enforcement (G1, §11.3 passthrough) ──────────────────
+      # The internal Docker network the engine joins each sandbox to (--network).
+      # `dkmv-egress` has NO internet route; the only way out is the egress-proxy.
+      EGRESS_NETWORK: "${EGRESS_NETWORK:-dkmv-egress}"
+      # DNS for the sandbox. On the custom internal network gVisor's embedded DNS
+      # (127.0.0.11) breaks, so point at the egress-proxy (it resolves+filters).
+      # The operator sets this to the egress-proxy's resolvable address/IP on
+      # `dkmv-egress`; empty = no --dns (rely on daemon default — only valid off a
+      # gVisor custom network). See platform/docs/egress.md.
+      SANDBOX_DNS: "${SANDBOX_DNS:-}"
+      # ── Secret hygiene (G2 / INV-4) ─────────────────────────────────────────
+      # Deliver the GitHub PAT as a read-only file mount at /run/secrets/github_token
+      # instead of an env var visible in `docker inspect`. Default true.
+      SECRET_FILE_MOUNT: "${SECRET_FILE_MOUNT:-true}"
+      # ── Encryption-at-rest key for the SecretStore (G8) ─────────────────────
+      # Persists across restarts so the encrypted PAT survives `compose down/up`.
+      # When unset the backend generates an EPHEMERAL key + logs a loud WARN (the
+      # stored secret would not decrypt after a restart).
+      DKMV_SECRET_KEY: "${DKMV_SECRET_KEY:-}"
     volumes:
       # Platform-owned DB + artifacts volume (OQ-4). NOT the docker socket — the
       # backend never mounts /var/run/docker.sock (it goes through docker-proxy).
@@ -151,6 +199,20 @@ networks:
   # never reachable except from the backend.
   docker-broker:
     internal: true
+  # ── Egress enforcement networks (G1 / INV-3) ────────────────────────────────
+  # `dkmv-egress` is the sandbox-facing network. `internal: true` is THE
+  # enforcement: it has NO route off-host, so a sandbox joined to it can reach
+  # ONLY peers on the same network — namely the egress-proxy — and nothing else.
+  # The engine joins each sandbox via --network=dkmv-egress (the §11.3
+  # passthrough). A fixed `name` so the engine's --network value matches the
+  # compose-created network regardless of the project-name prefix.
+  dkmv-egress:
+    name: dkmv-egress
+    internal: true
+  # The proxy's internet-facing leg (NOT internal). Only the egress-proxy is
+  # attached here; sandboxes never are, so they cannot use it to reach the
+  # internet directly.
+  egress-internet:
 
 volumes:
   backend-data:

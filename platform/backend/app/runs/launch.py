@@ -456,6 +456,16 @@ async def launch_run(
         timeout_minutes=req.timeout_minutes,
     )
 
+    # ── G1 fail-closed isolation gate (INV-3) ──────────────────────────────────
+    # The single chokepoint for EVERY launch (route + orchestrator/retry redispatch
+    # both reach here): if SANDBOX_RUNTIME=runsc but gVisor is not registered with
+    # the daemon and the operator hasn't opted into the weaker fallback, refuse to
+    # dispatch (503 sandbox_isolation_unavailable) BEFORE claiming the run row — a run
+    # must never start under bare runc when gVisor was required. Placed after the
+    # cheap §8.10 validation so a malformed body still gets its 400, but before the
+    # claim-lock so a blocked run never claims a row it cannot start.
+    run_service.enforce_sandbox_isolation()
+
     # ── claim-lock (INV-5): INSERT … ON CONFLICT DO NOTHING under BEGIN IMMEDIATE ─
     # memory_limit is the resolved value the engine is started with (req.memory or
     # the configured default).

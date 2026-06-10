@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+import app.executor.runtime_policy as _rp_module
 import pytest
 from app.executor import (
     GVISOR_RUNTIME,
@@ -35,6 +36,12 @@ from app.executor import (
 from app.runtime import RunService
 
 from tests.conftest import make_settings
+
+# The genuine ``runtime_available`` impl, captured before the conftest autouse
+# ``_gvisor_available_by_default`` shadows it → True for the rest of the suite.
+# The probe tests below exercise the REAL function (its shutil/subprocess paths),
+# so they restore this genuine impl over the autouse lambda.
+_GENUINE_RUNTIME_AVAILABLE = _rp_module.runtime_available
 
 # ── Order-independent log capture ────────────────────────────────────────────
 #
@@ -200,9 +207,10 @@ def test_runtime_docker_args_emit_runtime_flag() -> None:
     assert runtime_docker_args("runsc") == ["--runtime=runsc"]
 
 
-def test_runtime_available_runc_is_always_true() -> None:
+def test_runtime_available_runc_is_always_true(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.executor.runtime_policy as rp
 
+    monkeypatch.setattr(rp, "runtime_available", _GENUINE_RUNTIME_AVAILABLE)
     # runc is Docker's built-in default; treated as always available.
     assert rp.runtime_available("runc") is True
 
@@ -212,6 +220,7 @@ def test_runtime_available_false_when_docker_cli_absent(
 ) -> None:
     import app.executor.runtime_policy as rp
 
+    monkeypatch.setattr(rp, "runtime_available", _GENUINE_RUNTIME_AVAILABLE)
     monkeypatch.setattr(rp.shutil, "which", lambda _name: None)
     assert rp.runtime_available("runsc") is False
 
@@ -223,6 +232,7 @@ def test_runtime_available_parses_docker_info_runtimes(
 
     import app.executor.runtime_policy as rp
 
+    monkeypatch.setattr(rp, "runtime_available", _GENUINE_RUNTIME_AVAILABLE)
     monkeypatch.setattr(rp.shutil, "which", lambda _name: "/usr/bin/docker")
 
     class _Proc:
@@ -281,6 +291,46 @@ def test_runsc_unavailable_with_optin_falls_back_to_runc(
     assert resolved == "runc"
     assert any(RUNSC_UNAVAILABLE_WARNING in m for m in logs.messages)
     assert any(WEAKER_ISOLATION_WARNING in m for m in logs.messages)
+
+
+# ── isolation_status — the non-raising gate the preflight + launch consume (G1) ──
+
+
+def test_isolation_status_runsc_available_ok() -> None:
+    from app.executor.runtime_policy import isolation_status
+
+    ok, detail = isolation_status("runsc", runtime_available_fn=lambda _r: True)
+    assert ok is True
+    assert "gVisor" in detail
+
+
+def test_isolation_status_runsc_unavailable_blocks() -> None:
+    from app.executor.runtime_policy import isolation_status
+
+    ok, detail = isolation_status(
+        "runsc", allow_weaker_isolation=False, runtime_available_fn=lambda _r: False
+    )
+    assert ok is False
+    assert "blocked" in detail.lower()
+
+
+def test_isolation_status_runsc_unavailable_optin_proceeds() -> None:
+    from app.executor.runtime_policy import isolation_status
+
+    ok, detail = isolation_status(
+        "runsc", allow_weaker_isolation=True, runtime_available_fn=lambda _r: False
+    )
+    assert ok is True
+    assert "weaker isolation" in detail.lower()
+
+
+def test_isolation_status_non_runsc_is_optin_ok() -> None:
+    from app.executor.runtime_policy import isolation_status
+
+    # Choosing a non-runsc runtime is itself the documented opt-in → ok, with warn.
+    ok, detail = isolation_status("runc", runtime_available_fn=lambda _r: False)
+    assert ok is True
+    assert "weaker-isolation opt-in" in detail
 
 
 # ── LocalDockerExecutor behavior ─────────────────────────────────────────────
