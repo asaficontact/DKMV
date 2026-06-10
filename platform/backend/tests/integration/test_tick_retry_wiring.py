@@ -91,6 +91,22 @@ class _RecordingRedispatch:
         return "redispatched"
 
 
+class _NoOpenPrClient:
+    """A PR-detection seam that CONFIRMS no open PR (the read succeeds, returns None).
+
+    The live lifespan composes a real :class:`PatGitHubClient`, but this hermetic
+    test has no reachable GitHub — calling its ``find_open_pr_for_branch`` would
+    RAISE, which (post-G11, fail-closed) yields ``PrDetection.UNKNOWN`` → the retry
+    DEFERS rather than re-dispatching. These tests seed a run that has **no** open PR
+    (the retryable-failure case), so we swap in a detector that *confirms* absence —
+    the read succeeds and returns ``None`` — exercising the real LAUNCH path the test
+    asserts (the tick→scheduler→redispatch wiring), not the duplicate-PR guard.
+    """
+
+    async def find_open_pr_for_branch(self, repo: str, branch: str) -> int | None:
+        return None  # confirmed-absent: a definitive, successful read
+
+
 def _settings(url: str) -> Settings:
     return Settings(  # type: ignore[call-arg]  # DKMVP-ESCAPE: pydantic-settings injected kwargs
         _env_file=None,
@@ -214,6 +230,9 @@ async def test_live_tick_fires_due_backoff_through_redispatch() -> None:
         # (still the LIVE singleton; only its launch boundary is the recorder).
         recorder = _RecordingRedispatch()
         scheduler.redispatch = recorder
+        # Confirmed-absent PR (no reachable GitHub in this hermetic test) so the
+        # post-G11 fail-closed guard sees ABSENT (not UNKNOWN) and the run LAUNCHES.
+        scheduler.github_client = _NoOpenPrClient()  # type: ignore[assignment]  # DKMVP-ESCAPE: duck-typed detection seam
 
         # Persist an ALREADY-due backoff (due_at in the past) so the real-clock tick
         # fires it — a UTC-persisted deadline, re-evaluated, not slept on.
@@ -251,6 +270,9 @@ async def test_manual_retry_then_tick_drains_the_same_scheduler() -> None:
         # Record re-dispatches on the LIVE singleton the endpoint also resolves.
         recorder = _RecordingRedispatch()
         scheduler.redispatch = recorder
+        # Confirmed-absent PR (no reachable GitHub here) so the fail-closed G11 guard
+        # sees ABSENT (not UNKNOWN) and the manual retry LAUNCHES through the tick.
+        scheduler.github_client = _NoOpenPrClient()  # type: ignore[assignment]  # DKMVP-ESCAPE: duck-typed detection seam
 
         # The manual retry endpoint enqueues an IMMEDIATE (due-now) retry onto the
         # process-wide scheduler the tick fires from (same singleton). Issued over

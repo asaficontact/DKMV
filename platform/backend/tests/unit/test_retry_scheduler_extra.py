@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from app.db.repository import Repository
-from app.orchestrator.retry import MAX_ATTEMPTS, RetryScheduler
+from app.orchestrator.retry import MAX_ATTEMPTS, RedispatchOutcome, RetryScheduler
 from app.orchestrator.retry_deps import build_retry_scheduler, get_retry_scheduler
 
 pytestmark = pytest.mark.asyncio
@@ -96,18 +96,24 @@ async def test_clear_removes_state(repo: Repository) -> None:
 
 async def test_redispatch_run_gone_is_noop(repo: Repository) -> None:
     sched = RetryScheduler(repository=repo, redispatch=_Redispatch(), now=_clock())
-    assert await sched.redispatch_run("nonexistent") is False
+    # A missing run row is a definitive resolution (nothing to dispatch) → SKIPPED.
+    assert await sched.redispatch_run("nonexistent") is RedispatchOutcome.SKIPPED
 
 
-async def test_redispatch_reused_row_returns_false(repo: Repository) -> None:
-    """A claim-lock reuse (redispatch returns None) is reported as 'no new dispatch'."""
+async def test_redispatch_reused_row_returns_skipped(repo: Repository) -> None:
+    """A claim-lock reuse (redispatch returns None) is a definitive 'no new dispatch'."""
     run_id = await _seed_run(repo, issue_num=74)
     sched = RetryScheduler(repository=repo, redispatch=_Redispatch(return_value=None), now=_clock())
-    assert await sched.redispatch_run(run_id) is False
+    assert await sched.redispatch_run(run_id) is RedispatchOutcome.SKIPPED
 
 
-async def test_pr_detection_error_degrades_to_no_pr(repo: Repository) -> None:
-    """A GitHub detection error is not itself a duplicate-PR risk → re-dispatch proceeds."""
+async def test_pr_detection_error_with_null_pr_num_defers(repo: Repository) -> None:
+    """G11 (fail CLOSED): a GitHub detection error + NULL pr_num → DEFER, no re-dispatch.
+
+    The detection cannot tell whether a PR exists, so re-dispatching could open a
+    SECOND PR. The guard fails closed (UNKNOWN → DEFER) — the launch is NOT issued
+    and the tick re-evaluates next cadence (when GitHub may be reachable).
+    """
     run_id = await _seed_run(repo, issue_num=75)  # no DB pr_num
 
     class _RaisingClient:
@@ -121,10 +127,8 @@ async def test_pr_detection_error_degrades_to_no_pr(repo: Repository) -> None:
         github_client=_RaisingClient(),  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed seam
         now=_clock(),
     )
-    # The detection error degrades to "no PR via GitHub"; the DB pr_num is also None,
-    # so the re-dispatch proceeds (the claim-lock is the backstop against a real dup).
-    assert await sched.redispatch_run(run_id) is True
-    assert redispatch.calls == [(run_id, None)]
+    assert await sched.redispatch_run(run_id) is RedispatchOutcome.DEFER
+    assert redispatch.calls == []  # NOT re-dispatched — no duplicate-PR risk taken
 
 
 async def test_build_and_get_scheduler_caches_on_app_state(repo: Repository) -> None:

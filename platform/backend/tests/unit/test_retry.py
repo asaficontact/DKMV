@@ -26,6 +26,7 @@ from app.db.repository import Repository
 from app.orchestrator.retry import (
     BACKOFF_CAP_S,
     MAX_ATTEMPTS,
+    RedispatchOutcome,
     RetryScheduler,
     compute_backoff,
 )
@@ -156,7 +157,7 @@ async def test_retry_with_open_pr_creates_no_duplicate(repo: Repository) -> None
     dispatched = await sched.redispatch_run(run_id)
 
     # The open PR (runs.pr_num=77) is detected → resume/skip, NO duplicate dispatch.
-    assert dispatched is False
+    assert dispatched is RedispatchOutcome.SKIPPED
     assert redispatch.calls == []  # the §13 resilience bar: no duplicate PR
 
 
@@ -169,7 +170,7 @@ async def test_retry_reuses_same_run_row(repo: Repository) -> None:
 
     dispatched = await sched.redispatch_run(run_id)
 
-    assert dispatched is True
+    assert dispatched is RedispatchOutcome.LAUNCHED
     # The redispatch was handed the SAME run row id (the launch reuses it via the
     # idempotency_key — issue+workflow+branch).
     assert redispatch.calls == [(run_id, None)]
@@ -192,8 +193,136 @@ async def test_github_pr_detection_seam_blocks_duplicate(repo: Repository) -> No
         now=_clock(),
     )
 
-    assert await sched.redispatch_run(run_id) is False
+    assert await sched.redispatch_run(run_id) is RedispatchOutcome.SKIPPED
     assert redispatch.calls == []  # detected via GitHub → no duplicate
+
+
+# ── G11 BUG 1: duplicate-PR guard fails CLOSED on a detection error ────────────
+
+
+@pytest.mark.asyncio
+async def test_pr_detection_error_with_null_pr_num_defers_no_duplicate(repo: Repository) -> None:
+    """G11 BUG 1: pr_num NULL + ``find_open_pr_for_branch`` RAISES → DEFER, NO re-dispatch.
+
+    A crash before ``pr_num`` back-fill leaves ``pr_num`` NULL; if the GitHub read
+    then fails (rate-limit / transient 5xx) the guard must fail CLOSED — a PR *may*
+    exist, so re-dispatching now could open a SECOND PR (the claim-lock only stops a
+    second ``runs`` row, not a second PR). The retry defers instead of launching.
+    """
+    run_id = await _seed_run(repo, issue_num=46, status="failed")  # pr_num is NULL
+
+    class _RaisingClient:
+        async def find_open_pr_for_branch(self, repo_name: str, branch: str) -> Any:
+            raise RuntimeError("github 503 / rate-limited")
+
+    redispatch = _RecordingRedispatch()
+    sched = RetryScheduler(
+        repository=repo,
+        redispatch=redispatch,
+        github_client=_RaisingClient(),  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed seam
+        now=_clock(),
+    )
+
+    outcome = await sched.redispatch_run(run_id)
+
+    # UNKNOWN → DEFER (fail closed): NO launch, so NO second PR can be opened.
+    assert outcome is RedispatchOutcome.DEFER
+    assert redispatch.calls == []  # the PR-opening redispatch was NEVER issued
+
+
+@pytest.mark.asyncio
+async def test_pr_genuinely_absent_redispatches_normally(repo: Repository) -> None:
+    """G11 BUG 1 (no over-block): read SUCCEEDS + returns None + pr_num NULL → re-dispatch.
+
+    The fail-closed guard must not over-block: a genuinely-absent PR (the GitHub
+    read returned ``None``) still re-dispatches normally.
+    """
+    run_id = await _seed_run(repo, issue_num=47, status="failed")  # pr_num is NULL
+
+    class _NoPrClient:
+        async def find_open_pr_for_branch(self, repo_name: str, branch: str) -> int | None:
+            return None  # the read SUCCEEDED: no open PR for this branch
+
+    redispatch = _RecordingRedispatch()
+    sched = RetryScheduler(
+        repository=repo,
+        redispatch=redispatch,
+        github_client=_NoPrClient(),  # type: ignore[arg-type]  # DKMVP-ESCAPE: duck-typed seam
+        now=_clock(),
+    )
+
+    outcome = await sched.redispatch_run(run_id)
+
+    assert outcome is RedispatchOutcome.LAUNCHED
+    assert redispatch.calls == [(run_id, None)]  # confirmed-absent → re-dispatch proceeds
+
+
+# ── G11 BUG 2: fire_due_retries consumes the backoff only on a definitive outcome ─
+
+
+@pytest.mark.asyncio
+async def test_transient_redispatch_failure_keeps_due_at_and_refires(repo: Repository) -> None:
+    """G11 BUG 2: a TRANSIENTLY-failed re-dispatch leaves ``due_at`` set → re-fires.
+
+    The redispatch callable raises (a transient launch failure). ``fire_due_retries``
+    must NOT clear ``due_at`` (which would strand the run with a dueless, never-firing
+    retry state needing a manual *Retry now*) — it re-arms the deadline so the next
+    tick re-fires, and once the transient condition clears, the run launches.
+    """
+    run_id = await _seed_run(repo, issue_num=48, status="failed")  # pr_num NULL, no client
+
+    class _FlakyRedispatch:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __call__(self, row: dict[str, Any], start_task: str | None) -> str | None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient launch failure")
+            return "redispatched"
+
+    redispatch = _FlakyRedispatch()
+    sched = RetryScheduler(repository=repo, redispatch=redispatch, now=_clock(0))
+    await sched.schedule(run_id, issue_num=48, error="transient")  # due in 10s
+
+    # Tick 1 (due): the re-dispatch raises → DEFER → NOTHING fired, due_at re-armed.
+    sched.now = _clock(11)
+    assert await sched.fire_due_retries() == []
+    state = await sched._read_state(run_id)
+    assert state is not None
+    assert state.due_at is not None  # NOT cleared — the run is not stranded
+    assert redispatch.calls == 1
+
+    # Tick 2 (past the re-armed due_at): the transient condition cleared → launches.
+    sched.now = _clock(200)
+    assert await sched.fire_due_retries() == [run_id]
+    assert redispatch.calls == 2
+    state = await sched._read_state(run_id)
+    assert state is not None
+    assert state.due_at is None  # NOW consumed — a definitive launch happened
+
+
+@pytest.mark.asyncio
+async def test_intentional_pr_skip_clears_due_at(repo: Repository) -> None:
+    """G11 BUG 2: an INTENTIONAL PR-skip (no dup needed) consumes the backoff window.
+
+    The issue already has an open PR (``runs.pr_num`` set) → SKIPPED (a definitive
+    resolution). ``fire_due_retries`` clears ``due_at`` so the tick does not re-fire
+    the same deadline every cadence (only TRANSIENT outcomes keep it armed).
+    """
+    run_id = await _seed_run(repo, issue_num=49, pr_num=88, status="failed")
+    redispatch = _RecordingRedispatch()
+    sched = RetryScheduler(repository=repo, redispatch=redispatch, now=_clock(0))
+    await sched.schedule(run_id, issue_num=49, error="transient")  # due in 10s
+
+    sched.now = _clock(11)
+    fired = await sched.fire_due_retries()
+
+    assert fired == []  # an intentional skip is not a "fired" (launched) dispatch
+    assert redispatch.calls == []  # no duplicate PR
+    state = await sched._read_state(run_id)
+    assert state is not None
+    assert state.due_at is None  # consumed — no re-fire of the same deadline
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

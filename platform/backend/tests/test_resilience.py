@@ -34,7 +34,7 @@ import pytest
 from app.db.repository import Repository
 from app.github.client import GitHubClient
 from app.orchestrator.recovery import RecoveryDeps, recover_orphans
-from app.orchestrator.retry import RetryScheduler
+from app.orchestrator.retry import RedispatchOutcome, RetryScheduler
 
 pytestmark = pytest.mark.asyncio
 
@@ -213,7 +213,7 @@ async def test_idempotent_retry_no_duplicate_pr(repo: Repository) -> None:
 
     dispatched = await scheduler.redispatch_run("r-pr")
 
-    assert dispatched is False  # resumed/skipped — no re-dispatch
+    assert dispatched is RedispatchOutcome.SKIPPED  # resumed/skipped — no re-dispatch
     assert redispatched == []  # the redispatch that opens a PR was NOT issued → no dup PR
 
 
@@ -235,7 +235,7 @@ async def test_idempotent_retry_branch_detection_no_duplicate_pr(repo: Repositor
 
     dispatched = await scheduler.redispatch_run("r-pr")
 
-    assert dispatched is False
+    assert dispatched is RedispatchOutcome.SKIPPED
     assert redispatched == []
     assert client.find_calls == [(_REPO, "issue-1")]  # the branch detector was consulted
 
@@ -284,7 +284,7 @@ async def test_typed_find_open_pr_blocks_duplicate_without_db_pr_num(repo: Repos
 
     dispatched = await scheduler.redispatch_run("r-pr")
 
-    assert dispatched is False  # detected via the typed seam → skip, no duplicate PR
+    assert dispatched is RedispatchOutcome.SKIPPED  # detected via the typed seam → skip
     assert redispatched == []  # the PR-opening redispatch was NEVER issued
     assert client.find_calls == [(_REPO, "issue-1")]  # the typed detector was consulted
 
