@@ -41,13 +41,63 @@ from typing import Any
 import aiosqlite
 
 from app.db.connection import connect
+from app.db.spend_sql import (
+    AGENT_NOT_CODEX_SQL,
+    COST_EXCLUDED_AGENT,
+    TERMINAL_RUN_STATUSES,
+    last_per_task_cte,
+    per_run_spend_sql,
+    total_spend_sql,
+)
 from app.db.writer import Writer
 from app.secrets.redaction import Redactor
 
-#: Agent name whose runs are excluded from spend (FR-06-1a; INV-7). Codex
-#: reports $0 cost and supports no budget cap — its tokens count, its cost does
-#: not contribute to the materialized spend projection.
-COST_EXCLUDED_AGENT = "codex"
+# Re-exported from app.db.spend_sql (the ONE canonical definition — G13) so the
+# many existing importers of ``COST_EXCLUDED_AGENT`` from this module keep working
+# while the constant + the segment-sum SQL live in one place.
+__all__ = ["COST_EXCLUDED_AGENT", "Repository"]
+
+#: The persisted ``issues.agent_state`` value that marks a dispatch candidate
+#: (G12). The board-sync derivation writes the bare ``agent:*`` suffix into the
+#: indexed ``agent_state`` column; ``"queued"`` is the value the per-tick candidate
+#: read predicates on (``WHERE repo=? AND agent_state='queued'``) so the tick reads
+#: only the queued issues via ``ix_issues_repo_agent_state``, not the whole board.
+QUEUED_AGENT_STATE = "queued"
+
+#: Multi-label precedence for deriving ``agent_state`` from an issue's ``agent:*``
+#: labels (§8.1): ``in-progress > paused > review > queued``. Inlined here (the db
+#: layer) so the single-row :meth:`Repository.upsert_issue` can derive the indexed
+#: column from ``labels`` without importing the github layer; it MUST stay in sync
+#: with :data:`app.github.sync._LABEL_PRECEDENCE` (the board-derivation precedence),
+#: which :func:`app.github.sync.derive_agent_state` uses for the batch sync path. A
+#: state-machine test asserts the two agree.
+_AGENT_STATE_PRECEDENCE: tuple[tuple[str, str], ...] = (
+    ("agent:in-progress", "in-progress"),
+    ("agent:paused", "paused"),
+    ("agent:review", "review"),
+    ("agent:queued", "queued"),
+)
+
+#: Sentinel for "``agent_state`` not explicitly supplied — derive it from labels".
+#: Distinguishes an explicit ``None`` (force Backlog) from the common single-row
+#: ``upsert_issue(labels=…)`` caller that wants the derived value for free.
+_DERIVE_AGENT_STATE: str = "\x00derive"
+
+
+def _agent_state_from_labels(labels: Sequence[str] | None) -> str | None:
+    """Precedence-resolve an issue's ``agent:*`` labels to the ``agent_state`` suffix.
+
+    Returns the bare suffix (``"queued"`` / ``"in-progress"`` / ``"paused"`` /
+    ``"review"``) or ``None`` for Backlog. Mirrors
+    :func:`app.github.sync.derive_agent_state` (same precedence) so the single-row
+    upsert path and the batch sync path persist the identical indexed value (G12).
+    """
+    present = set(labels or ())
+    for label, suffix in _AGENT_STATE_PRECEDENCE:
+        if label in present:
+            return suffix
+    return None
+
 
 #: Size of the long-lived WAL read-connection pool (PERF). Reads borrow a warm
 #: connection instead of opening a fresh worker thread + re-running the four
@@ -135,6 +185,14 @@ class IssueRow:
     workflow_id: str | None = None
     agent: str | None = None
     pr_num: int | None = None
+    #: The derived ``agent:*`` state suffix (``queued`` / ``in-progress`` /
+    #: ``paused`` / ``review``), or ``None`` for Backlog (G12). Persisted into the
+    #: indexed ``issues.agent_state`` column so the per-tick candidate read is an
+    #: index-backed ``WHERE agent_state='queued'`` instead of a full-board JSON
+    #: parse. Left at the :data:`_DERIVE_AGENT_STATE` sentinel default it is derived
+    #: from ``labels`` at upsert time (matching the single-row path); the sync path
+    #: sets it explicitly via :func:`app.github.sync.derive_agent_state`.
+    agent_state: str | None = _DERIVE_AGENT_STATE
 
 
 class Repository:
@@ -646,6 +704,15 @@ class Repository:
         ``num_turns`` for the same segment without a second read. Rows are ordered
         by ``task_index`` so the caller iterates segments in stage order. A pure
         WAL read through the repository seam (NFR-PORT-1).
+
+        G13 note: this is the **one twin** of the canonical segment-sum SQL
+        (:mod:`app.db.spend_sql`). It keeps a per-run, ``GROUP BY task_index``,
+        payload-returning shape (the meter needs the rows, not a sum) rather than
+        composing :func:`app.db.spend_sql.last_per_task_cte` (which projects only
+        ``cost_usd``), but encodes the **identical** per-``(run_id, task_index)``
+        last-cumulative dedup — so the Python meter
+        (:func:`app.runs.meters.compute_run_meters`) and the SQL spend projections
+        never diverge into two definitions of "cost".
         """
         async with self._read_conn() as conn:
             rows = await conn.execute_fetchall(
@@ -687,124 +754,69 @@ class Repository:
         if not ids:
             return {}
         placeholders = ", ".join("?" for _ in ids)
+        # The inner GROUP BY keys on (run_id, task_index) so the last-cumulative
+        # dedup is per-task; the outer GROUP BY run_id sums those per-task
+        # cumulatives into the run's segment-sum. Codex is excluded by the run's
+        # agent column (matching total_spend / _spend_today). The CTE + the
+        # per-run SELECT come from the ONE canonical segment-sum definition
+        # (app.db.spend_sql — G13) so this can never drift from the other spend
+        # projections.
+        sql = per_run_spend_sql(run_filter=f"AND run_id IN ({placeholders})")
         async with self._read_conn() as conn:
             rows = list(
                 await conn.execute_fetchall(
-                    # The inner GROUP BY keys on (run_id, task_index) so the
-                    # last-cumulative dedup is per-task; the outer GROUP BY run_id
-                    # sums those per-task cumulatives into the run's segment-sum.
-                    # Codex is excluded by the run's agent column (matching
-                    # total_spend / _spend_today).
-                    f"""
-                    WITH last_per_task AS (
-                        SELECT e.run_id AS run_id,
-                               e.cost_usd AS cost_usd
-                        FROM events e
-                        JOIN (
-                            SELECT run_id, task_index, MAX(id) AS max_id
-                            FROM events
-                            WHERE cost_usd IS NOT NULL AND run_id IN ({placeholders})
-                            GROUP BY run_id, task_index
-                        ) m
-                          ON e.run_id = m.run_id
-                         AND e.id = m.max_id
-                    )
-                    SELECT lpt.run_id AS run_id,
-                           COALESCE(SUM(lpt.cost_usd), 0.0) AS spend
-                    FROM last_per_task lpt
-                    JOIN runs r ON r.id = lpt.run_id
-                    WHERE COALESCE(LOWER(r.agent), '') != ?
-                    GROUP BY lpt.run_id
-                    """,  # noqa: S608 — placeholders only; ids bound below
+                    sql,  # noqa: S608 — placeholders only; ids bound below
                     (*ids, COST_EXCLUDED_AGENT),
                 )
             )
             return {str(r["run_id"]): float(r["spend"] or 0.0) for r in rows}
 
     async def total_spend(self) -> float:
-        """Sum of :meth:`run_spend` across all runs (Codex excluded).
+        """Codex-excluded total spend, via the ``run_totals`` fast-path (G9).
 
-        Uses the materialized ``task_index`` column so the projection stays a
-        per-``(run_id, task_index)`` last-cumulative dedup — never a flat sum of
-        every event's cost over the whole events table.
+        Two-part sum so the events table is **not** segment-summed across every run
+        on every poll (G9 — the unbounded-events ceiling):
+
+        * **Terminal runs** (``status`` in :data:`TERMINAL_RUN_STATUSES`) read their
+          cost from the ``run_totals`` completion snapshot — a single indexed row
+          per run — never re-scanning their (prunable) events.
+        * **Active runs** (non-terminal) are the only ones segment-summed live, via
+          the canonical ``last_per_task`` CTE (per ``(run_id, task_index)``
+          last-cumulative ``cost_usd``, INV-7), since their snapshot isn't written
+          until completion.
+
+        Codex is excluded from BOTH halves (INV-8 / FR-06-1a). The result EQUALS the
+        full-events segment-sum for any mix of terminal + active runs (asserted by a
+        fast-path-vs-full-scan equality test): a terminal run's snapshot carries the
+        exact segment-sum total written at completion, so reading it instead of its
+        events is numerically identical, just bounded.
         """
         async with self._read_conn() as conn:
-            # Exclude Codex runs by agent on the run row; for the rest, the spend
-            # is the per-(run_id, task_index) last-cumulative cost summed.
-            rows = list(
-                await conn.execute_fetchall(
-                    """
-                    WITH last_per_task AS (
-                        SELECT e.run_id AS run_id,
-                               e.cost_usd AS cost_usd
-                        FROM events e
-                        JOIN (
-                            SELECT run_id, task_index, MAX(id) AS max_id
-                            FROM events
-                            WHERE cost_usd IS NOT NULL
-                            GROUP BY run_id, task_index
-                        ) m
-                          ON e.run_id = m.run_id
-                         AND e.id = m.max_id
-                    )
-                    SELECT COALESCE(SUM(lpt.cost_usd), 0.0) AS total
-                    FROM last_per_task lpt
-                    JOIN runs r ON r.id = lpt.run_id
-                    WHERE COALESCE(LOWER(r.agent), '') != ?
-                    """,
-                    (COST_EXCLUDED_AGENT,),
-                )
-            )
-            return float(rows[0]["total"] or 0.0)
+            return await _total_spend_fast_path(conn)
 
     async def daily_spend_series(self) -> list[dict[str, Any]]:
-        """Daily Codex-excluded segment-sum spend ``[{date, usd}]`` oldest-first.
+        """Daily Codex-excluded spend ``[{date, usd}]`` oldest-first, fast-path (G9).
 
-        The ``GET /stats`` ``spend_series`` (FR-06-1a / §8.9): each run's
-        segment-sum spend bucketed by the **date** half of its UTC ``started_at``
-        (``YYYY-MM-DD``). Reuses the **same** canonical ``last_per_task`` CTE shape
-        as :meth:`total_spend` / :meth:`run_spends` — one per-``(run_id,
-        task_index)`` last-cumulative-``cost_usd`` definition (INV-7), never a
-        naive ``SUM`` over events, never keep-latest. **Codex runs are excluded**
-        by the run's ``agent`` column so a $0-cost Codex run never adds a phantom
-        bar; the per-run cumulatives are summed per task, then bucketed by day. A
-        pure WAL read through the repository seam (NFR-PORT-1) so the one
-        segment-sum definition lives here, not forked into the history layer.
+        The ``GET /stats`` ``spend_series`` (FR-06-1a / §8.9): each run's spend
+        bucketed by the **date** half of its UTC ``started_at`` (``YYYY-MM-DD``).
+        Like :meth:`total_spend`, this reads the ``run_totals`` snapshot for
+        **terminal** runs (one indexed row each — no events re-scan) and only
+        segment-sums **active** runs via the canonical ``last_per_task`` CTE
+        (INV-7) — so the unbounded ``events`` table is not scanned across every
+        completed run on every poll (G9). Both halves bucket by the run's
+        ``started_at`` date and **exclude Codex** (a $0-cost Codex run never adds a
+        phantom bar — INV-8 / FR-06-1a). The two date→usd maps are merged so a day
+        carrying both terminal and active spend sums correctly, and the result
+        EQUALS the full-events segment-sum series for any state. A pure WAL read
+        through the repository seam (NFR-PORT-1).
         """
         async with self._read_conn() as conn:
-            rows = await conn.execute_fetchall(
-                """
-                WITH last_per_task AS (
-                    SELECT e.run_id AS run_id,
-                           e.cost_usd AS cost_usd
-                    FROM events e
-                    JOIN (
-                        SELECT run_id, task_index, MAX(id) AS max_id
-                        FROM events
-                        WHERE cost_usd IS NOT NULL
-                        GROUP BY run_id, task_index
-                    ) m
-                      ON e.run_id = m.run_id
-                     AND e.id = m.max_id
-                ),
-                per_run AS (
-                    SELECT lpt.run_id AS run_id, SUM(lpt.cost_usd) AS spend
-                    FROM last_per_task lpt
-                    JOIN runs r ON r.id = lpt.run_id
-                    WHERE COALESCE(LOWER(r.agent), '') != ?
-                      AND r.started_at IS NOT NULL
-                    GROUP BY lpt.run_id
-                )
-                SELECT substr(r.started_at, 1, 10) AS day,
-                       COALESCE(SUM(pr.spend), 0.0) AS usd
-                FROM per_run pr
-                JOIN runs r ON r.id = pr.run_id
-                GROUP BY day
-                ORDER BY day
-                """,
-                (COST_EXCLUDED_AGENT,),
-            )
-            return [{"date": str(r["day"]), "usd": float(r["usd"] or 0.0)} for r in rows]
+            buckets: dict[str, float] = {}
+            # Terminal runs: bucket the run_totals snapshot cost by started_at date.
+            await _bucket_terminal_daily(conn, buckets)
+            # Active runs: bucket the live segment-sum by started_at date.
+            await _bucket_active_daily(conn, buckets)
+        return [{"date": day, "usd": buckets[day]} for day in sorted(buckets)]
 
     async def board_aggregate(self, repo: str, *, since_iso: str) -> BoardAggregate:
         """The board aggregate-strip + chip counters for a repo (FR-02-4, AC-17).
@@ -875,6 +887,70 @@ class Repository:
             )
 
         await self._writer.submit(_job)
+
+    async def prune_events_for_terminal_runs(self, *, older_than_iso: str) -> int:
+        """Delete events for TERMINAL, snapshotted runs finished before a horizon (G9).
+
+        The events-retention prune (G9): the ``events`` table was designed for
+        retention-pruning (``id`` is ``AUTOINCREMENT`` so it is never reused) but the
+        prune was never built, so the table grows unbounded. This deletes the events
+        of runs that are **safe to prune** — all THREE must hold:
+
+        * the run is **terminal** (``status`` in :data:`TERMINAL_RUN_STATUSES`);
+        * a ``run_totals`` snapshot **exists** for it (so its spend/audit total
+          survives the prune via the fast-path — :meth:`total_spend`);
+        * it **finished** (``finished_at``) strictly before ``older_than_iso``.
+
+        An **active** run's events are NEVER touched (it is not terminal), and a
+        run with **no snapshot** is NEVER pruned (its spend would be lost). The
+        DELETE is routed through the **single serialized writer** (INV-6) under the
+        writer's ``BEGIN IMMEDIATE``. ``finished_at`` is a UTC ISO-8601 string so the
+        lexicographic ``<`` is a correct chronological comparison. Returns the number
+        of event rows deleted (0 when nothing is due). The spend total is unchanged
+        after the prune because the fast-path reads ``run_totals`` for these runs.
+        """
+        statuses = sorted(TERMINAL_RUN_STATUSES)
+        placeholders = ", ".join("?" for _ in statuses)
+
+        async def _job(conn: aiosqlite.Connection) -> int:
+            cursor = await conn.execute(
+                # Delete only events whose run is terminal + snapshotted + finished
+                # before the horizon. The subquery picks the prunable run ids; an
+                # active run or a snapshot-less run is excluded by construction.
+                "DELETE FROM events WHERE run_id IN ("  # noqa: S608 — placeholders only
+                "    SELECT r.id FROM runs r "
+                f"    WHERE r.status IN ({placeholders}) "
+                "      AND r.finished_at IS NOT NULL "
+                "      AND r.finished_at < ? "
+                "      AND EXISTS (SELECT 1 FROM run_totals rt WHERE rt.run_id = r.id)"
+                ")",
+                (*statuses, older_than_iso),
+            )
+            return int(cursor.rowcount or 0)
+
+        return await self._writer.submit(_job)
+
+    async def read_candidate_issues(self, repo: str) -> list[dict[str, Any]]:
+        """Read this repo's ``agent:queued`` issues via the indexed ``agent_state`` (G12).
+
+        The per-tick dispatch-candidate read (§8.2). Instead of reading the ENTIRE
+        board and JSON-parsing ``labels_json`` to filter for ``agent:queued`` in
+        Python every tick (the G12 full-board scan), this is an **index-backed**
+        ``WHERE repo=? AND agent_state='queued'`` over the persisted, derived
+        ``agent_state`` column (written at board-sync time alongside ``labels_json``
+        — :func:`app.github.sync.sync_issues`). Backed by
+        ``ix_issues_repo_agent_state`` so only the queued rows are read, not the
+        whole board. Returns the same row shape as :meth:`read_issues` so the tick's
+        candidate builder is unchanged apart from the narrower input. A pure WAL read
+        through the repository seam (NFR-PORT-1).
+        """
+        async with self._read_conn() as conn:
+            rows = await conn.execute_fetchall(
+                "SELECT repo, num, title, state, labels_json, workflow_id, agent, pr_num "
+                "FROM issues WHERE repo = ? AND agent_state = ? ORDER BY num DESC",
+                (repo, QUEUED_AGENT_STATE),
+            )
+            return [dict(r) for r in rows]
 
     async def get_run_totals(self, run_id: str) -> dict[str, Any] | None:
         """Read a ``run_totals`` snapshot row."""
@@ -1032,11 +1108,16 @@ class Repository:
         workflow_id: str | None = None,
         agent: str | None = None,
         pr_num: int | None = None,
+        agent_state: str | None = _DERIVE_AGENT_STATE,
     ) -> None:
         """Insert or update a single ``issues`` cache row (PK ``(repo, num)``).
 
         Retained for single-issue callers; the sync import path batches a whole
         page through :meth:`upsert_issues` (one writer transaction) instead.
+        ``agent_state`` is the derived ``agent:*`` suffix the indexed G12 candidate
+        read predicates on; left at the sentinel default it is **derived from
+        ``labels``** (so a caller that passes only labels gets the correct indexed
+        state for free), while an explicit ``None`` forces Backlog.
         """
         params = _issue_upsert_params(
             repo=repo,
@@ -1047,6 +1128,7 @@ class Repository:
             workflow_id=workflow_id,
             agent=agent,
             pr_num=pr_num,
+            agent_state=agent_state,
         )
 
         async def _job(conn: aiosqlite.Connection) -> None:
@@ -1083,6 +1165,7 @@ class Repository:
                 workflow_id=row.workflow_id,
                 agent=row.agent,
                 pr_num=row.pr_num,
+                agent_state=row.agent_state,
             )
             for row in rows
         ]
@@ -1194,9 +1277,9 @@ class Repository:
 _ISSUE_UPSERT_SQL = """
 INSERT INTO issues (
     repo, num, title, state, labels_json,
-    workflow_id, agent, pr_num, updated_at
+    workflow_id, agent, pr_num, agent_state, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(repo, num) DO UPDATE SET
     title = excluded.title,
     state = excluded.state,
@@ -1204,6 +1287,7 @@ ON CONFLICT(repo, num) DO UPDATE SET
     workflow_id = excluded.workflow_id,
     agent = excluded.agent,
     pr_num = excluded.pr_num,
+    agent_state = excluded.agent_state,
     updated_at = excluded.updated_at
 """
 
@@ -1218,13 +1302,20 @@ def _issue_upsert_params(
     workflow_id: str | None,
     agent: str | None,
     pr_num: int | None,
+    agent_state: str | None,
 ) -> tuple[Any, ...]:
     """Bind-params for one :data:`_ISSUE_UPSERT_SQL` row (column order of the INSERT).
 
     Encodes ``labels`` to JSON and stamps ``updated_at`` here so both the single
     and batch paths produce the same row, and so this CPU work happens **outside**
-    the writer's ``BEGIN IMMEDIATE`` lock for the batch path (PERF).
+    the writer's ``BEGIN IMMEDIATE`` lock for the batch path (PERF). ``agent_state``
+    is the derived ``agent:*`` suffix the indexed G12 candidate read predicates on;
+    at the :data:`_DERIVE_AGENT_STATE` sentinel it is derived from ``labels``, else
+    the explicit value (incl. ``None`` = Backlog) is used.
     """
+    resolved_agent_state = (
+        _agent_state_from_labels(labels) if agent_state == _DERIVE_AGENT_STATE else agent_state
+    )
     return (
         repo,
         num,
@@ -1234,6 +1325,7 @@ def _issue_upsert_params(
         workflow_id,
         agent,
         pr_num,
+        resolved_agent_state,
         _utc_now_iso(),
     )
 
@@ -1267,28 +1359,23 @@ async def _spend_today(conn: aiosqlite.Connection, repo: str, since_iso: str) ->
     **Codex excluded** (FR-06-1a / INV-8). The Codex exclusion is by the run's
     ``agent`` column, matching :meth:`Repository.total_spend`.
     """
-    rows = await conn.execute_fetchall(
-        """
-        WITH last_per_task AS (
-            SELECT e.run_id AS run_id, e.cost_usd AS cost_usd
-            FROM events e
-            JOIN (
-                SELECT run_id, task_index, MAX(id) AS max_id
-                FROM events
-                WHERE cost_usd IS NOT NULL
-                GROUP BY run_id, task_index
-            ) m ON e.run_id = m.run_id AND e.id = m.max_id
-        )
-        SELECT COALESCE(SUM(lpt.cost_usd), 0.0) AS total
-        FROM last_per_task lpt
-        JOIN runs r ON r.id = lpt.run_id
-        WHERE r.repo = ?
-          AND r.started_at IS NOT NULL
-          AND r.started_at >= ?
-          AND COALESCE(LOWER(r.agent), '') != ?
-        """,
-        (repo, since_iso, COST_EXCLUDED_AGENT),
+    # The CTE body + the Codex-exclusion predicate come from the ONE canonical
+    # segment-sum definition (app.db.spend_sql — G13); the repo/started_at window
+    # is the only thing this site adds. ``_spend_today`` intentionally stays a live
+    # segment-sum over events (not the run_totals fast-path): it is a per-repo
+    # today-window read driving admission (AC-3), so it must reflect an in-flight
+    # run's cost immediately, before any completion snapshot exists.
+    sql = (
+        f"{last_per_task_cte()}\n"
+        "SELECT COALESCE(SUM(lpt.cost_usd), 0.0) AS total\n"
+        "FROM last_per_task lpt\n"
+        "JOIN runs r ON r.id = lpt.run_id\n"
+        "WHERE r.repo = ?\n"
+        "  AND r.started_at IS NOT NULL\n"
+        "  AND r.started_at >= ?\n"
+        f"  AND {AGENT_NOT_CODEX_SQL}"
     )
+    rows = await conn.execute_fetchall(sql, (repo, since_iso, COST_EXCLUDED_AGENT))
     return float(next(iter(rows))["total"] or 0.0) if rows else 0.0
 
 
@@ -1311,24 +1398,152 @@ async def _tokens_today(conn: aiosqlite.Connection, repo: str, since_iso: str) -
 
 
 async def _project_run_spend(conn: aiosqlite.Connection, run_id: str) -> float:
-    """Σ over distinct ``task_index`` of the last-cumulative ``cost_usd``.
+    """Σ over distinct ``task_index`` of the last-cumulative ``cost_usd`` for one run.
 
-    The dedup key is ``task_index`` (materialized on the event row); for each we
-    take the event with the highest ``id`` that carries a non-NULL ``cost_usd``
-    — its cumulative total for that task — and sum across tasks.
+    The dedup key is ``(run_id, task_index)`` (materialized on the event row); for
+    each we take the event with the highest ``id`` that carries a non-NULL
+    ``cost_usd`` — its cumulative total for that task — and sum across tasks.
+    Composes the ONE canonical ``last_per_task`` CTE (app.db.spend_sql — G13)
+    scoped to a single run, so the per-run projection cannot drift from the
+    total/daily/bulk spend definitions.
     """
-    rows = await conn.execute_fetchall(
-        """
-        SELECT e.cost_usd AS cost_usd
-        FROM events e
-        JOIN (
-            SELECT task_index, MAX(id) AS max_id
-            FROM events
-            WHERE run_id = ? AND cost_usd IS NOT NULL
-            GROUP BY task_index
-        ) m ON e.id = m.max_id
-        WHERE e.run_id = ?
-        """,
-        (run_id, run_id),
+    sql = (
+        f"{last_per_task_cte(run_filter='AND run_id = ?')}\n"
+        "SELECT COALESCE(SUM(lpt.cost_usd), 0.0) AS total\n"
+        "FROM last_per_task lpt"
     )
-    return float(sum((r["cost_usd"] or 0.0) for r in rows))
+    rows = await conn.execute_fetchall(sql, (run_id,))
+    return float(next(iter(rows))["total"] or 0.0) if rows else 0.0
+
+
+# === G9 — events-retention fast-path spend (run_totals for terminal runs) =====
+#
+# The whole-DB spend projections (total_spend / daily_spend_series) must NOT
+# segment-sum the unbounded events table across every completed run on every poll
+# (G9 — the long-term ceiling). Instead:
+#
+#   total = Σ(run_totals.cost_usd  for TERMINAL runs WITH a snapshot)   # fast-path
+#         + Σ(segment-sum of events for ACTIVE runs OR terminal-without-snapshot)
+#
+# both Codex-excluded. A terminal run's snapshot carries the EXACT segment-sum
+# total written at completion, so reading it instead of its events is numerically
+# identical — the result EQUALS the full-events segment-sum for any state (a
+# fast-path-vs-full-scan equality test asserts this over a mixed fixture). A
+# terminal run that has NOT yet been snapshotted (the brief window before the
+# completion supervisor writes run_totals) falls back to the live segment-sum, so
+# the total is never under-counted. After a retention prune the events are gone but
+# the snapshot remains, so the same total survives the prune (also asserted).
+
+
+#: SQL predicate (against ``runs`` alias ``r``) selecting a TERMINAL run that has a
+#: ``run_totals`` snapshot — the fast-path set whose cost is read from the snapshot,
+#: not re-scanned from events. The ``status`` placeholders are bound from
+#: :data:`TERMINAL_RUN_STATUSES`; the ``EXISTS`` guards a terminal-but-unsnapshotted
+#: run out of the fast-path so it falls through to the live segment-sum instead.
+def _terminal_snapshotted_predicate() -> tuple[str, list[Any]]:
+    statuses = sorted(TERMINAL_RUN_STATUSES)
+    placeholders = ", ".join("?" for _ in statuses)
+    pred = (
+        f"r.status IN ({placeholders}) "
+        "AND EXISTS (SELECT 1 FROM run_totals rt WHERE rt.run_id = r.id)"
+    )
+    return pred, list(statuses)
+
+
+async def _total_spend_fast_path(conn: aiosqlite.Connection) -> float:
+    """Codex-excluded total spend via the run_totals fast-path (G9).
+
+    ``Σ(run_totals.cost_usd)`` over terminal+snapshotted Codex-excluded runs, plus
+    the live segment-sum over the remaining (active / not-yet-snapshotted) runs.
+    EQUALS the full-events segment-sum for any state.
+    """
+    term_pred, term_params = _terminal_snapshotted_predicate()
+    # Part A — terminal snapshot sum (fast-path; one indexed row per run).
+    snap_rows = await conn.execute_fetchall(
+        "SELECT COALESCE(SUM(rt.cost_usd), 0.0) AS total "  # noqa: S608 — placeholders only
+        "FROM run_totals rt JOIN runs r ON r.id = rt.run_id "
+        f"WHERE {term_pred} AND {AGENT_NOT_CODEX_SQL}",
+        (*term_params, COST_EXCLUDED_AGENT),
+    )
+    snapshot_total = float(next(iter(snap_rows))["total"] or 0.0) if snap_rows else 0.0
+    # Part B — live segment-sum over the runs NOT in the fast-path set.
+    active_total = await _active_segment_sum_total(conn, term_pred, term_params)
+    return snapshot_total + active_total
+
+
+async def _active_segment_sum_total(
+    conn: aiosqlite.Connection, term_pred: str, term_params: list[Any]
+) -> float:
+    """Live segment-sum over runs OUTSIDE the terminal+snapshotted fast-path set.
+
+    The canonical ``last_per_task`` CTE summed over Codex-excluded runs that are NOT
+    ``(terminal AND snapshotted)`` — i.e. active runs and any terminal run whose
+    snapshot is not yet written. ``term_params`` binds the terminal-status set
+    referenced inside the negated predicate.
+    """
+    sql = (
+        f"{total_spend_sql()}\n"
+        f"  AND NOT ({term_pred})"  # exclude the fast-path set (read from snapshot)
+    )
+    rows = await conn.execute_fetchall(
+        sql,  # noqa: S608 — placeholders only; values bound below
+        (COST_EXCLUDED_AGENT, *term_params),
+    )
+    return float(next(iter(rows))["total"] or 0.0) if rows else 0.0
+
+
+async def _bucket_terminal_daily(conn: aiosqlite.Connection, buckets: dict[str, float]) -> None:
+    """Add terminal+snapshotted runs' snapshot cost into ``buckets`` keyed by day (G9).
+
+    Buckets ``run_totals.cost_usd`` by the run's ``started_at`` date (``YYYY-MM-DD``,
+    matching the active-run bucketing) over Codex-excluded terminal+snapshotted runs
+    — no events scan. Mutates ``buckets`` in place so it merges with the active-run
+    daily series in :meth:`Repository.daily_spend_series`.
+    """
+    term_pred, term_params = _terminal_snapshotted_predicate()
+    rows = await conn.execute_fetchall(
+        "SELECT substr(r.started_at, 1, 10) AS day, "  # noqa: S608 — placeholders only
+        "COALESCE(SUM(rt.cost_usd), 0.0) AS usd "
+        "FROM run_totals rt JOIN runs r ON r.id = rt.run_id "
+        f"WHERE {term_pred} AND {AGENT_NOT_CODEX_SQL} AND r.started_at IS NOT NULL "
+        "GROUP BY day",
+        (*term_params, COST_EXCLUDED_AGENT),
+    )
+    for row in rows:
+        day = str(row["day"])
+        buckets[day] = buckets.get(day, 0.0) + float(row["usd"] or 0.0)
+
+
+async def _bucket_active_daily(conn: aiosqlite.Connection, buckets: dict[str, float]) -> None:
+    """Add the live segment-sum of non-fast-path runs into ``buckets`` by day (G9).
+
+    The canonical ``last_per_task`` segment-sum bucketed by ``started_at`` date over
+    Codex-excluded runs that are NOT ``(terminal AND snapshotted)`` — the active /
+    not-yet-snapshotted runs. Mutates ``buckets`` in place; merges with the terminal
+    daily series so a day with both contributes the sum.
+    """
+    term_pred, term_params = _terminal_snapshotted_predicate()
+    sql = (
+        f"{last_per_task_cte()},\n"
+        "per_run AS (\n"
+        "    SELECT lpt.run_id AS run_id, SUM(lpt.cost_usd) AS spend\n"
+        "    FROM last_per_task lpt\n"
+        "    JOIN runs r ON r.id = lpt.run_id\n"
+        f"    WHERE {AGENT_NOT_CODEX_SQL}\n"
+        "      AND r.started_at IS NOT NULL\n"
+        f"      AND NOT ({term_pred})\n"
+        "    GROUP BY lpt.run_id\n"
+        ")\n"
+        "SELECT substr(r.started_at, 1, 10) AS day,\n"
+        "       COALESCE(SUM(pr.spend), 0.0) AS usd\n"
+        "FROM per_run pr\n"
+        "JOIN runs r ON r.id = pr.run_id\n"
+        "GROUP BY day"
+    )
+    rows = await conn.execute_fetchall(
+        sql,  # noqa: S608 — placeholders only; values bound below
+        (COST_EXCLUDED_AGENT, *term_params),
+    )
+    for row in rows:
+        day = str(row["day"])
+        buckets[day] = buckets.get(day, 0.0) + float(row["usd"] or 0.0)

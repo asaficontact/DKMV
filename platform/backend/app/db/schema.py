@@ -83,7 +83,18 @@ issues = Table(
     Column("pr_num", Integer, nullable=True),
     Column("updated_at", Text, nullable=True),
     Column("sync_cursor", Text, nullable=True),
+    # Derived ``agent:*`` state suffix (queued / in-progress / paused / review) or
+    # NULL for Backlog (G12). Written at board-sync time alongside labels_json so
+    # the per-tick dispatch candidate read is an index-backed
+    # ``WHERE repo=? AND agent_state='queued'`` instead of reading the whole board
+    # and JSON-parsing labels in Python every tick. Added in migration b1c2d3e4f5a6.
+    Column("agent_state", Text, nullable=True),
     PrimaryKeyConstraint("repo", "num", name="pk_issues"),
+    # G12: index-backs the per-tick queued-candidate read
+    # (Repository.read_candidate_issues → WHERE repo=? AND agent_state='queued')
+    # so the tick reads only queued issues, not the full board (added in migration
+    # b1c2d3e4f5a6).
+    Index("ix_issues_repo_agent_state", "repo", "agent_state"),
 )
 
 # --- runs ---------------------------------------------------------------------

@@ -213,6 +213,22 @@ class Settings(BaseSettings):
         description="Seconds a HITL pause may wait before auto-timeout.",
     )
 
+    # --- Events retention (G9 — bound the append-only events table) ---
+    EVENTS_RETENTION_DAYS: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Retention horizon (days) for the append-only ``events`` table (G9). "
+            "When > 0, the orchestrator tick prunes events of TERMINAL runs that "
+            "have a ``run_totals`` completion snapshot AND finished more than this "
+            "many days ago — spend/history survive the prune via the run_totals "
+            "fast-path. An active run's events and a snapshot-less run's events are "
+            "NEVER pruned. Default 0 = DISABLED (conservative: events grow unbounded "
+            "but nothing is ever deleted until an operator opts in, e.g. 90). The "
+            "DELETE is routed through the single serialized writer (INV-6)."
+        ),
+    )
+
     # --- Egress allowlist (INV-3) ---
     EGRESS_ALLOWLIST: str = Field(
         default="api.github.com,github.com,api.anthropic.com,api.openai.com",
