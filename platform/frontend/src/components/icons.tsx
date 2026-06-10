@@ -205,3 +205,9 @@ export const RetryIcon = (p: IcoProps) => (
     <path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4" />
   </svg>
 );
+/** A terminal/console glyph — the one-shot "run a command in the container" action. */
+export const TerminalIcon = (p: IcoProps) => (
+  <svg {...base(p)} aria-hidden>
+    <path d="M4 17l6-5-6-5M12 19h8" />
+  </svg>
+);

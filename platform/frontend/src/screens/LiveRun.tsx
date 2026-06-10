@@ -27,13 +27,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import "./live-run.css";
-import { type RunDetailResponse, answerRun, getRun, stopRun } from "../api/runs";
+import {
+  type RunDetailResponse,
+  answerRun,
+  execInContainer,
+  getRun,
+  retryRun,
+  stopRun,
+} from "../api/runs";
 import { type RuntimeEvent, subscribeRunEvents } from "../api/sse";
 import AppLayout from "../chrome/AppLayout";
 import EventFeed from "../components/EventFeed";
 import { BranchIcon, StopIcon } from "../components/icons";
 import MetersRow from "../components/MetersRow";
 import PauseCard from "../components/PauseCard";
+import RunActionsMenu from "../components/RunActionsMenu";
 import RunRail from "../components/RunRail";
 import StageTracker from "../components/StageTracker";
 import StateBadge from "../components/StateBadge";
@@ -179,6 +187,8 @@ export default function LiveRun({ runId, repoSlug, onGoBoard }: LiveRunProps) {
           <div className="live-run-main">
             <RunHeader
               run={run}
+              live={live}
+              prUrl={prGitHubUrl(effectiveRepo, run)}
               stopping={stopping}
               onStop={() => void onStop()}
             />
@@ -246,13 +256,18 @@ export default function LiveRun({ runId, repoSlug, onGoBoard }: LiveRunProps) {
   );
 }
 
-/** The run header: status badge + id + issue title + workflow/agent/branch + Stop. */
+/** The run header: status badge + id + issue title + workflow/agent/branch + the
+ * `⋯` run-actions menu (FR-04-1, G7) + Stop. */
 function RunHeader({
   run,
+  live,
+  prUrl,
   stopping,
   onStop,
 }: {
   run: RunDetailResponse;
+  live: boolean;
+  prUrl: string | undefined;
   stopping: boolean;
   onStop: () => void;
 }) {
@@ -278,16 +293,30 @@ function RunHeader({
           </span>
         </div>
       </div>
-      {stoppable && (
-        <button
-          type="button"
-          className="btn btn-danger live-run-stop"
-          onClick={onStop}
-          disabled={stopping}
-        >
-          <StopIcon size={15} /> {stopping ? "Stopping…" : "Stop"}
-        </button>
-      )}
+      <div className="live-run-actions">
+        {/* FR-04-1 `⋯` menu (G7): exec / keep-alive (info) / state-dependent
+            Retry (failed) + View PR (completed). Exec + Retry are state-changing
+            POSTs through the CSRF-safe client (INV-1); no token in any URL (INV-2). */}
+        <RunActionsMenu
+          runId={run.id}
+          status={run.status}
+          live={live}
+          prNum={run.pr?.num ?? null}
+          prUrl={prUrl ?? null}
+          onExec={execInContainer}
+          onRetry={retryRun}
+        />
+        {stoppable && (
+          <button
+            type="button"
+            className="btn btn-danger live-run-stop"
+            onClick={onStop}
+            disabled={stopping}
+          >
+            <StopIcon size={15} /> {stopping ? "Stopping…" : "Stop"}
+          </button>
+        )}
+      </div>
     </header>
   );
 }
