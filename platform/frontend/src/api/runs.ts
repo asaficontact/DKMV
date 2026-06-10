@@ -281,3 +281,18 @@ export interface ExecRunResponse {
 export function execInRun(runId: string, command: string): Promise<ExecRunResponse> {
   return apiPost<ExecRunResponse>(`/runs/${encodeURIComponent(runId)}/exec`, { command });
 }
+
+/**
+ * Alias for {@link execInRun} — the name the live-run `⋯` "Run a command in the
+ * container" action (FR-04-1, G7) calls. One command in, captured (server-side
+ * **redacted**, INV-4) stdout out; a state-changing POST through the CSRF-safe
+ * {@link apiPost} (INV-1), never a token in the URL (INV-2).
+ */
+export function execInContainer(runId: string, command: string): Promise<ExecRunResponse> {
+  return execInRun(runId, command);
+}
+
+// `POST /runs/{id}/retry` (FR-06-3) is defined in `./history.ts`; re-export it
+// here so the run endpoints have one import surface (the live-run `⋯` "Retry run"
+// action — G7 — reaches it through `../api/runs`).
+export { retryRun, type RetryRunResponse } from "./history";

@@ -18,12 +18,21 @@ const mocks = vi.hoisted(() => ({
   getRun: vi.fn(),
   stopRun: vi.fn(),
   answerRun: vi.fn(),
+  execInContainer: vi.fn(),
+  retryRun: vi.fn(),
   subscribeRunEvents: vi.fn(),
 }));
 
 vi.mock("../api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/runs")>();
-  return { ...actual, getRun: mocks.getRun, stopRun: mocks.stopRun, answerRun: mocks.answerRun };
+  return {
+    ...actual,
+    getRun: mocks.getRun,
+    stopRun: mocks.stopRun,
+    answerRun: mocks.answerRun,
+    execInContainer: mocks.execInContainer,
+    retryRun: mocks.retryRun,
+  };
 });
 
 vi.mock("../api/sse", async (importOriginal) => {
@@ -170,6 +179,43 @@ describe("LiveRun", () => {
     const stop = await waitFor(() => screen.getByRole("button", { name: /Stop/ }));
     fireEvent.click(stop);
     await waitFor(() => expect(mocks.stopRun).toHaveBeenCalledWith("run-uuid"));
+  });
+
+  it("opens the ⋯ run-actions menu and execs a command (FR-04-1, G7)", async () => {
+    mocks.getRun.mockResolvedValue(detail({ status: "running" }));
+    mocks.execInContainer.mockResolvedValue({ run_id: "run-uuid", output: "workspace" });
+    mocks.subscribeRunEvents.mockReturnValue(() => {});
+    renderLiveRun();
+    const trigger = await waitFor(() => screen.getByRole("button", { name: /run actions/i }));
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByText("Run a command in the container"));
+    const input = await screen.findByLabelText(/command to run in the container/i);
+    fireEvent.change(input, { target: { value: "ls /workspace" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Run$/ }));
+    await waitFor(() => expect(mocks.execInContainer).toHaveBeenCalledWith("run-uuid", "ls /workspace"));
+  });
+
+  it("shows 'Retry run' in the menu for a failed run and posts retry (FR-04-1)", async () => {
+    mocks.getRun.mockResolvedValue(detail({ status: "failed" }));
+    mocks.retryRun.mockResolvedValue({ run_id: "run-uuid", status: "queued" });
+    mocks.subscribeRunEvents.mockReturnValue(() => {});
+    renderLiveRun();
+    const trigger = await waitFor(() => screen.getByRole("button", { name: /run actions/i }));
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Retry run/i }));
+    await waitFor(() => expect(mocks.retryRun).toHaveBeenCalledWith("run-uuid"));
+  });
+
+  it("shows 'View PR #{n}' in the menu for a completed run with the GitHub URL (FR-04-1)", async () => {
+    mocks.getRun.mockResolvedValue(
+      detail({ status: "completed", pr: { num: 88, title: "Add token rotation", checks: null } }),
+    );
+    mocks.subscribeRunEvents.mockReturnValue(() => {});
+    renderLiveRun();
+    const trigger = await waitFor(() => screen.getByRole("button", { name: /run actions/i }));
+    fireEvent.click(trigger);
+    const link = screen.getByRole("menuitem", { name: /View PR #88/i });
+    expect(link).toHaveAttribute("href", "https://github.com/asaficontact/DKMV/pull/88");
   });
 
   it("renders Codex cost as — not $0.00 (INV-8)", async () => {
