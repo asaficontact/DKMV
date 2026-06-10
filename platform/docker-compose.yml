@@ -81,7 +81,22 @@ services:
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       CODEX_API_KEY: "${CODEX_API_KEY:-}"
-      DKMV_IMAGE: "${DKMV_IMAGE:-dkmv-sandbox:latest}"
+      # Sandbox image — DIGEST-PINNED, never a mutable tag (§8.6, INV-3, ADR-P005,
+      # AC-13). The image the engine launches autonomous, attacker-influenceable
+      # agents in MUST be pinned by content digest (`dkmv-sandbox@sha256:<digest>`)
+      # so a poisoned re-push of the tag cannot silently swap the sandbox image
+      # under a run (supply-chain integrity). The release path resolves DKMV_IMAGE
+      # to the built image's digest at build time and writes it into `.env`; the
+      # SBOM scan step (platform/scripts/sbom-scan.sh) both generates+scans the
+      # SBOM AND prints the resolvable `DKMV_IMAGE=dkmv-sandbox@sha256:…` line.
+      #
+      # The default below is the placeholder digest the scan script overwrites — an
+      # EXAMPLE all-zero digest (clearly not a real layer) so this file NEVER falls
+      # back to a mutable `:latest` tag. A real `docker compose up` requires the
+      # operator to resolve + export the digest first:
+      #   eval "$(bash platform/scripts/sbom-scan.sh --print-digest-env)"
+      # (README + setup.md document the full flow).
+      DKMV_IMAGE: "${DKMV_IMAGE:-dkmv-sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000000}"
       # gVisor (runsc) is the default sandbox runtime (INV-3 / NFR-SEC-4). The
       # executor resolves this and warns/fails-closed on the OQ-6 weaker path.
       SANDBOX_RUNTIME: "${SANDBOX_RUNTIME:-runsc}"
