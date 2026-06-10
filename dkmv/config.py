@@ -35,6 +35,16 @@ class DKMVConfig(BaseSettings):
     # Docker socket mount (opt-in for DooD)
     docker_socket: bool = Field(default=False, validation_alias="DKMV_DOCKER_SOCKET")
 
+    # Opt-in sandbox isolation passthrough (PRD §11.3). Set by RuntimeConfig
+    # .to_dkmv_config(); not loaded from env. Defaults preserve current behavior
+    # (None/False = no extra docker args, env-var GitHub token).
+    sandbox_runtime: str | None = Field(default=None, validation_alias="__DKMV_SANDBOX_RUNTIME")
+    egress_network: str | None = Field(default=None, validation_alias="__DKMV_EGRESS_NETWORK")
+    sandbox_dns: str | None = Field(default=None, validation_alias="__DKMV_SANDBOX_DNS")
+    github_token_file_mount: bool = Field(
+        default=False, validation_alias="__DKMV_GITHUB_TOKEN_FILE_MOUNT"
+    )
+
     # Set by load_config() from project config; not loaded from env vars.
     # The validation_alias prevents pydantic-settings from reading AUTH_METHOD env var.
     auth_method: AuthMethod = Field(default="api_key", validation_alias="__DKMV_AUTH_METHOD")

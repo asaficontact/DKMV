@@ -137,6 +137,39 @@ class Settings(BaseSettings):
         default="runsc",
         description="Container runtime; gVisor 'runsc' by default (NFR-SEC-4).",
     )
+    ALLOW_WEAKER_ISOLATION: bool = Field(
+        default=False,
+        description=(
+            "Operator opt-in (OQ-6) to proceed when SANDBOX_RUNTIME=runsc but "
+            "gVisor is unavailable on the host. Default False = fail-closed: run "
+            "dispatch is blocked rather than silently downgraded to runc (G1)."
+        ),
+    )
+    EGRESS_NETWORK: str = Field(
+        default="dkmv-egress",
+        description=(
+            "Docker network the sandbox joins (engine --network passthrough, "
+            "PRD §11.3). Declared 'internal: true' in docker-compose so it has NO "
+            "default internet route — the network-level enforcement of the egress "
+            "allowlist (INV-3). Empty disables the passthrough (no --network arg)."
+        ),
+    )
+    SANDBOX_DNS: str | None = Field(
+        default=None,
+        description=(
+            "DNS server the sandbox uses (engine --dns passthrough). On a custom "
+            "internal network, point this at the egress proxy/resolver to sidestep "
+            "gVisor's embedded-DNS (127.0.0.11) breakage. None = no --dns arg."
+        ),
+    )
+    SECRET_FILE_MOUNT: bool = Field(
+        default=True,
+        description=(
+            "Deliver the GitHub PAT to the sandbox as a read-only file mount at "
+            "/run/secrets/github_token instead of an env var (INV-4 / G2). Default "
+            "True keeps the PAT out of `docker inspect`. False = legacy env var."
+        ),
+    )
 
     # --- Admission control / governance (Phase 3 consumes these) ---
     MAX_CONCURRENT_RUNS: int = Field(
@@ -193,6 +226,7 @@ class Settings(BaseSettings):
         "HOST_MEMORY_BUDGET",
         "DAILY_SPEND_CAP",
         "DKMV_PROJECT_ROOT",
+        "SANDBOX_DNS",
         mode="before",
     )
     @classmethod

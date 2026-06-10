@@ -171,11 +171,24 @@ class SandboxManager:
         )
 
     async def setup_git_auth(self, session: SandboxSession) -> CommandResult:
-        # GITHUB_TOKEN env var (passed via Docker -e) already authenticates gh.
-        # We only need to configure git's credential helper to use gh.
-        # Note: `gh auth login --with-token` fails when GITHUB_TOKEN env var is
-        # already set, so we skip it entirely and just run setup-git.
-        return await self.execute(session, "gh auth setup-git")
+        # Two credential delivery modes (PRD §11.3 / INV-4):
+        #  (a) GITHUB_TOKEN env var (default) — already authenticates gh; we only
+        #      configure git's credential helper. `gh auth login --with-token`
+        #      fails when GITHUB_TOKEN is set, so we just run setup-git.
+        #  (b) File-mount at /run/secrets/github_token (opt-in file-mount path) —
+        #      the env var is absent, so source the token from the file for the
+        #      duration of the auth command (never exported into the shell env /
+        #      `docker inspect`).
+        command = (
+            'if [ -n "$GITHUB_TOKEN" ]; then '
+            "gh auth setup-git; "
+            "elif [ -f /run/secrets/github_token ]; then "
+            'GITHUB_TOKEN="$(cat /run/secrets/github_token)" gh auth setup-git; '
+            "else "
+            "gh auth setup-git; "
+            "fi"
+        )
+        return await self.execute(session, command)
 
     async def stream_agent(
         self,

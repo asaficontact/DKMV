@@ -61,6 +61,18 @@ def build_runtime_config(settings: Settings) -> RuntimeConfig:
         codex_api_key=settings.CODEX_API_KEY.get_secret_value(),
         image_name=settings.DKMV_IMAGE,
         output_dir=settings.OUTPUT_DIR,
+        # --- Sandbox isolation passthrough (G1/G2, PRD §11.3) ---
+        # Pin EVERY engine-launched sandbox to the configured runtime so the run
+        # path (launch → RunService → EmbeddedRuntime) gets --runtime=runsc rather
+        # than relying on the Docker daemon default-runtime (INV-3). The egress
+        # network + DNS make the allowlist network-enforced (the 'dkmv-egress'
+        # internal network has no internet route). The GitHub PAT is delivered as
+        # a read-only file mount, not an env var visible in `docker inspect`
+        # (INV-4 / G2). All four default to no-op in the engine when unset.
+        sandbox_runtime=settings.SANDBOX_RUNTIME or None,
+        egress_network=settings.EGRESS_NETWORK or None,
+        sandbox_dns=settings.SANDBOX_DNS,
+        github_token_file_mount=settings.SECRET_FILE_MOUNT,
     )
 
 
@@ -127,6 +139,29 @@ class RunService:
         del secret_store  # v1 grant audit does not mint a per-run secret (ADR-P004).
         self._audit = audit
         self._github_configured = bool(self._settings.GITHUB_TOKEN.get_secret_value())
+
+    def enforce_sandbox_isolation(self) -> None:
+        """Fail-closed gVisor gate for the launch path (G1 / INV-3).
+
+        Raises :class:`~app.api.errors.ApiError` (``503 sandbox_isolation_unavailable``)
+        when ``SANDBOX_RUNTIME=runsc`` but the Docker daemon has no ``runsc`` runtime
+        registered and the operator has not opted into the weaker fallback
+        (``ALLOW_WEAKER_ISOLATION``). This is the single chokepoint both the
+        ``POST /runs`` route and the orchestrator/retry redispatch traverse (they all
+        go through :func:`~app.runs.launch.launch_run`), so a run can never start under
+        bare ``runc`` when gVisor was required — the dangerous-quiet downgrade G1
+        closes. A non-``runsc`` runtime or the opt-in proceed silently (warnings are
+        logged by :func:`~app.executor.runtime_policy.isolation_status`).
+        """
+        from app.api.errors import sandbox_isolation_unavailable
+        from app.executor.runtime_policy import isolation_status
+
+        ok, detail = isolation_status(
+            self._settings.SANDBOX_RUNTIME,
+            allow_weaker_isolation=self._settings.ALLOW_WEAKER_ISOLATION,
+        )
+        if not ok:
+            raise sandbox_isolation_unavailable(detail)
 
     @property
     def runtime(self) -> EmbeddedRuntime:

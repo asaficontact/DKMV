@@ -44,6 +44,12 @@ class RuntimeConfig(BaseModel):
     max_budget_usd: float | None = None
     default_agent: str = "claude"
     docker_socket: bool = False
+    # Opt-in sandbox isolation passthrough (PRD §11.3). Defaults preserve
+    # current behavior exactly (None/False = no extra docker args).
+    sandbox_runtime: str | None = None
+    egress_network: str | None = None
+    sandbox_dns: str | None = None
+    github_token_file_mount: bool = False
 
     def to_dkmv_config(self) -> DKMVConfig:
         """Build a DKMVConfig using model_construct() to bypass env/file loading."""
@@ -62,6 +68,10 @@ class RuntimeConfig(BaseModel):
             default_agent=self.default_agent,
             auth_method="api_key",
             docker_socket=self.docker_socket,
+            sandbox_runtime=self.sandbox_runtime,
+            egress_network=self.egress_network,
+            sandbox_dns=self.sandbox_dns,
+            github_token_file_mount=self.github_token_file_mount,
         )
 
 

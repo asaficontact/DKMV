@@ -97,6 +97,33 @@ class TestRuntimeConfig:
         dkmv_cfg = cfg.to_dkmv_config()
         assert dkmv_cfg.anthropic_api_key == "explicit-key"
 
+    def test_isolation_passthrough_defaults_are_noop(self) -> None:
+        """PRD §11.3 opt-in isolation fields default to no-op (no behavior change)."""
+        cfg = RuntimeConfig()
+        assert cfg.sandbox_runtime is None
+        assert cfg.egress_network is None
+        assert cfg.sandbox_dns is None
+        assert cfg.github_token_file_mount is False
+        dkmv_cfg = cfg.to_dkmv_config()
+        assert dkmv_cfg.sandbox_runtime is None
+        assert dkmv_cfg.egress_network is None
+        assert dkmv_cfg.sandbox_dns is None
+        assert dkmv_cfg.github_token_file_mount is False
+
+    def test_isolation_passthrough_threaded_into_dkmv_config(self) -> None:
+        """When set, the isolation fields reach DKMVConfig via to_dkmv_config()."""
+        cfg = RuntimeConfig(
+            sandbox_runtime="runsc",
+            egress_network="dkmv-egress",
+            sandbox_dns="172.20.0.2",
+            github_token_file_mount=True,
+        )
+        dkmv_cfg = cfg.to_dkmv_config()
+        assert dkmv_cfg.sandbox_runtime == "runsc"
+        assert dkmv_cfg.egress_network == "dkmv-egress"
+        assert dkmv_cfg.sandbox_dns == "172.20.0.2"
+        assert dkmv_cfg.github_token_file_mount is True
+
 
 class TestRetentionPolicy:
     def test_destroy(self) -> None:

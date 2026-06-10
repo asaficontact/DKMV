@@ -147,3 +147,63 @@ def runtime_docker_args(runtime: str) -> list[str]:
     ``docker_args`` the executor controls.
     """
     return [f"--runtime={runtime}"]
+
+
+def isolation_status(
+    configured: str,
+    *,
+    allow_weaker_isolation: bool = False,
+    runtime_available_fn: object = None,
+) -> tuple[bool, str]:
+    """Fail-closed gVisor availability check for the live run path (G1).
+
+    Unlike :func:`resolve_runtime` (which *raises* on the fail-closed path so the
+    executor can refuse to assemble container args), this is a non-raising probe
+    the platform's **preflight** + **launch gate** consume to decide whether a run
+    may dispatch. It answers: "is the configured sandbox runtime actually usable,
+    or must dispatch be blocked?"
+
+    Args:
+        configured: ``settings.SANDBOX_RUNTIME`` (default ``runsc``).
+        allow_weaker_isolation: ``settings.ALLOW_WEAKER_ISOLATION`` — the operator
+            opt-in (OQ-6) to proceed under weaker isolation when ``runsc`` is
+            unavailable. When ``False`` (default), unavailable ``runsc`` is a hard
+            blocker.
+        runtime_available_fn: Injectable probe (defaults to :func:`runtime_available`)
+            so tests can fake the daemon's registered-runtimes list without Docker.
+
+    Returns:
+        ``(ok, detail)`` where ``ok`` is ``False`` only when the run path would
+        otherwise silently downgrade to weaker isolation and the operator has not
+        opted in. ``detail`` is a short human string for the preflight row / error.
+
+    Behavior:
+
+    * ``runsc`` configured **and available** → ``(True, "gVisor (runsc) active")``.
+    * ``runsc`` configured but **unavailable**, no opt-in → ``(False, …)`` (the
+      fail-closed blocker; dispatch must stop).
+    * ``runsc`` configured but **unavailable**, opt-in set → ``(True, "weaker …")``
+      (proceeds under the documented OQ-6 fallback with a loud warning).
+    * a non-``runsc`` runtime configured → ``(True, "weaker-isolation opt-in …")``
+      (choosing it is itself the documented opt-in).
+    """
+    probe = runtime_available_fn if callable(runtime_available_fn) else runtime_available
+    runtime = (configured or GVISOR_RUNTIME).strip()
+
+    if runtime != GVISOR_RUNTIME:
+        logger.warning(WEAKER_ISOLATION_WARNING)
+        return True, f"weaker-isolation opt-in (runtime={runtime!r}, not gVisor)"
+
+    if probe(runtime):  # type: ignore[operator]
+        return True, "gVisor (runsc) active"
+
+    # runsc selected but unavailable.
+    logger.warning(RUNSC_UNAVAILABLE_WARNING)
+    if allow_weaker_isolation:
+        logger.warning(WEAKER_ISOLATION_WARNING)
+        return True, "runsc unavailable — proceeding under weaker isolation (opt-in)"
+    return False, (
+        "SANDBOX_RUNTIME=runsc but gVisor (runsc) is not registered with the Docker "
+        "daemon. Run dispatch is blocked (fail-closed). Install/enable gVisor, or set "
+        "ALLOW_WEAKER_ISOLATION=1 to proceed under weaker isolation."
+    )

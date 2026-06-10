@@ -9,11 +9,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from app.api.preflight import build_preflight_payload
 from dkmv.runtime import CapabilityReport
 from fastapi.testclient import TestClient
 
 from tests.conftest import FakeRuntime, auth_headers, build_client
+
+# The conftest autouse ``_gvisor_available_by_default`` patches ``runtime_available``
+# → True for the whole suite (a properly-provisioned host); the fail-closed blocker
+# is asserted explicitly in ``test_sandbox_runtime_blocker_when_runsc_missing``.
 
 
 def _ready_report() -> CapabilityReport:
@@ -103,3 +108,23 @@ def test_no_credential_value_leaked() -> None:
     subs = {c["id"]: c["sub"] for c in body["checks"]}
     assert subs["anthropic_key"] in {"present", "missing"}
     assert subs["github_token"] in {"present", "missing"}
+
+
+# ── G1: gVisor sandbox-runtime preflight row ─────────────────────────────────
+
+
+def test_sandbox_runtime_row_present_and_ok_on_gvisor_host() -> None:
+    body = _client(_ready_report()).get("/api/v1/preflight", headers=_auth()).json()
+    row = next(c for c in body["checks"] if c["id"] == "sandbox_runtime")
+    assert row["ok"] is True
+    assert "Sandbox isolation (gVisor)" not in body["blockers"]
+
+
+def test_sandbox_runtime_blocker_when_runsc_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Fail-closed (G1): runsc required but unavailable + no opt-in → hard blocker.
+    monkeypatch.setattr("app.executor.runtime_policy.runtime_available", lambda *a, **k: False)
+    body = _client(_ready_report()).get("/api/v1/preflight", headers=_auth()).json()
+    row = next(c for c in body["checks"] if c["id"] == "sandbox_runtime")
+    assert row["ok"] is False
+    assert "Sandbox isolation (gVisor)" in body["blockers"]
+    assert body["ready"] is False

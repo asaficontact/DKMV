@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Query, Request
 
+from app.executor.runtime_policy import isolation_status
 from app.github.client import GitHubAuthError, GitHubError, WritePermission
 from app.github.provider import get_github_client
 
@@ -154,6 +155,27 @@ async def preflight(
     run_service: RunService = request.app.state.run_service
     report = run_service.get_capabilities()
     payload = build_preflight_payload(report)
+
+    # ── gVisor sandbox-runtime check (G1 / INV-3, hard requirement) ────────────
+    # Fail-closed: when SANDBOX_RUNTIME=runsc but the daemon has no runsc runtime
+    # and the operator has not opted into the weaker fallback, this is a blocker so
+    # the launch path refuses to start a run under bare runc.
+    settings = request.app.state.settings
+    ok, detail = isolation_status(
+        settings.SANDBOX_RUNTIME,
+        allow_weaker_isolation=settings.ALLOW_WEAKER_ISOLATION,
+    )
+    runtime_row = {
+        "id": "sandbox_runtime",
+        "label": "Sandbox isolation (gVisor)",
+        "sub": detail,
+        "ok": ok,
+    }
+    payload["checks"].append(runtime_row)
+    if not ok:
+        payload["blockers"].append(runtime_row["label"])
+        payload["ready"] = False
+
     if repo is None:
         return payload
 

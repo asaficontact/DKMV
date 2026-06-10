@@ -166,6 +166,17 @@ def preflight_blocked(blockers: list[str]) -> ApiError:
     )
 
 
+def sandbox_isolation_unavailable(message: str) -> ApiError:
+    """503 — gVisor (runsc) is required but unavailable; dispatch blocked (G1).
+
+    Fail-closed: when ``SANDBOX_RUNTIME=runsc`` but the daemon has no ``runsc``
+    runtime registered and the operator has not opted into the weaker fallback
+    (``ALLOW_WEAKER_ISOLATION``), a run must NOT start under bare ``runc`` (which
+    shares the host kernel and is not a security boundary, INV-3 / NFR-SEC-4).
+    """
+    return ApiError(503, "sandbox_isolation_unavailable", message)
+
+
 def internal_error(message: str = "Internal server error") -> ApiError:
     """500 — uncaught/unexpected server failure (PRD §8.9)."""
     return ApiError(500, "internal_error", message)
